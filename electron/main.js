@@ -6,7 +6,8 @@ const {
   nativeImage,
   ipcMain,
   Notification,
-  globalShortcut
+  globalShortcut,
+  screen
 } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -17,6 +18,52 @@ let isQuitting = false;
 let minimizeToTrayOnClose = false;
 
 const DEV = process.argv.includes('--dev') || !app.isPackaged;
+const boundsFile = () => path.join(app.getPath('userData'), 'window-bounds.json');
+
+function loadBounds() {
+  try {
+    const raw = fs.readFileSync(boundsFile(), 'utf-8');
+    const b = JSON.parse(raw);
+    if (b && Number.isFinite(b.width) && Number.isFinite(b.height)) return b;
+  } catch (_) { /* ignore */ }
+  return null;
+}
+
+function saveBounds() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    const bounds = mainWindow.getBounds();
+    fs.writeFileSync(boundsFile(), JSON.stringify(bounds), 'utf-8');
+  } catch (_) { /* ignore */ }
+}
+
+function fitToWorkArea(preferredW, preferredH) {
+  try {
+    const { workAreaSize } = screen.getPrimaryDisplay();
+    return {
+      width: Math.min(preferredW, Math.max(440, workAreaSize.width - 40)),
+      height: Math.min(preferredH, Math.max(560, workAreaSize.height - 80))
+    };
+  } catch (_) {
+    return { width: preferredW, height: preferredH };
+  }
+}
+
+function isWithinDisplay(x, y) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+  try {
+    return screen.getAllDisplays().some((d) => {
+      return (
+        x >= d.bounds.x - 10 &&
+        x < d.bounds.x + d.bounds.width - 10 &&
+        y >= d.bounds.y - 10 &&
+        y < d.bounds.y + d.bounds.height - 10
+      );
+    });
+  } catch (_) {
+    return false;
+  }
+}
 
 function resolveIcon() {
   const icoPath = path.join(__dirname, '..', 'build', 'icon.ico');
@@ -30,45 +77,78 @@ function resolveIcon() {
       const img = nativeImage.createFromPath(pngPath);
       if (!img.isEmpty()) return img;
     }
-  } catch (_) {
-    /* fall through */
-  }
+  } catch (_) { /* fall through */ }
   return nativeImage.createEmpty();
 }
 
 function createMainWindow() {
   const icon = resolveIcon();
+  const fitted = fitToWorkArea(580, 920);
+  const last = loadBounds();
 
-  mainWindow = new BrowserWindow({
-    width: 540,
-    height: 760,
-    minWidth: 460,
-    minHeight: 620,
+  const useLastSize = last && Number.isFinite(last.width) && Number.isFinite(last.height);
+  const useLastPos = last && isWithinDisplay(last.x, last.y);
+
+  const opts = {
+    width: useLastSize ? Math.max(440, last.width) : fitted.width,
+    height: useLastSize ? Math.max(560, last.height) : fitted.height,
+    minWidth: 440,
+    minHeight: 540,
     title: 'Lineage MP Timer',
     backgroundColor: '#0a0f0a',
     icon: icon.isEmpty() ? undefined : icon,
     autoHideMenuBar: true,
     resizable: true,
     show: false,
+    useContentSize: true,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
       preload: path.join(__dirname, 'preload.js')
     }
-  });
+  };
 
+  if (useLastPos) {
+    opts.x = last.x;
+    opts.y = last.y;
+  } else {
+    opts.center = true;
+  }
+
+  mainWindow = new BrowserWindow(opts);
   mainWindow.setMenu(null);
   mainWindow.loadFile(path.join(__dirname, '..', 'src', 'index.html'));
 
   mainWindow.once('ready-to-show', () => {
+    // 사이즈 클램프: workArea보다 큰 경우 자동 축소
+    try {
+      const { workAreaSize } = screen.getPrimaryDisplay();
+      const [w, h] = mainWindow.getSize();
+      const newW = Math.min(w, workAreaSize.width - 40);
+      const newH = Math.min(h, workAreaSize.height - 80);
+      if (newW !== w || newH !== h) {
+        mainWindow.setSize(newW, newH);
+        mainWindow.center();
+      }
+    } catch (_) { /* ignore */ }
+
     mainWindow.show();
     if (DEV) {
       mainWindow.webContents.openDevTools({ mode: 'detach' });
     }
   });
 
+  let saveTimer = null;
+  const debouncedSave = () => {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(saveBounds, 400);
+  };
+  mainWindow.on('resize', debouncedSave);
+  mainWindow.on('move', debouncedSave);
+
   mainWindow.on('close', (e) => {
+    saveBounds();
     if (!isQuitting && minimizeToTrayOnClose) {
       e.preventDefault();
       mainWindow.hide();
@@ -209,6 +289,14 @@ ipcMain.handle('app:show-notification', (_, payload) => {
       }, 4000);
     } catch (_) { /* ignore */ }
   }
+});
+
+ipcMain.handle('app:reset-window-size', () => {
+  if (!mainWindow) return;
+  const fitted = fitToWorkArea(580, 920);
+  mainWindow.setSize(fitted.width, fitted.height);
+  mainWindow.center();
+  saveBounds();
 });
 
 ipcMain.handle('app:quit', () => {

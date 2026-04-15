@@ -592,3 +592,128 @@ body.state-done .stat-value.huge {
   color: var(--pink);
   text-shadow: 0 0 14px rgba(255, 0, 170, 0.6);
 }
+
+/* ========== Session Tracker ========== */
+.small {
+  font-size: 10px;
+}
+
+.tracker-grid {
+  display: grid;
+  grid-template-columns: 90px 1fr 1fr 90px;
+  gap: 4px 8px;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.tracker-row {
+  display: contents;
+}
+
+.tracker-row.header span {
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  padding-bottom: 2px;
+  border-bottom: 1px dashed var(--border);
+  text-align: center;
+}
+
+.tracker-row.header span:first-child {
+  text-align: left;
+}
+
+.tracker-label {
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+}
+
+.tracker-row input {
+  background: var(--bg-panel-alt);
+  color: var(--neon);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  padding: 5px 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+  text-align: right;
+  transition: all 0.15s ease;
+}
+
+.tracker-row input:focus {
+  border-color: var(--neon);
+  box-shadow: var(--shadow-neon);
+}
+
+.tracker-diff {
+  color: var(--neon);
+  font-weight: 700;
+  text-align: right;
+  font-size: 12px;
+  text-shadow: 0 0 4px rgba(0, 255, 159, 0.4);
+}
+
+.tracker-diff.negative {
+  color: var(--red);
+  text-shadow: 0 0 4px rgba(255, 51, 85, 0.4);
+}
+
+.tracker-stats {
+  display: flex;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+  flex-wrap: wrap;
+}
+
+.tracker-stats .stat {
+  min-width: 110px;
+}
+
+.tracker-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.tracker-actions button {
+  flex: 1;
+  padding: 8px;
+  background: var(--bg-panel-alt);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tracker-actions button:hover {
+  border-color: var(--neon-dim);
+  color: var(--neon);
+}
+
+.tracker-actions button.primary {
+  background: linear-gradient(180deg, rgba(0, 255, 159, 0.18), rgba(0, 255, 159, 0.04));
+  color: var(--neon);
+  border-color: var(--neon-dim);
+}
+
+#tracker-status {
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0.2em;
+}
+
+#tracker-status.running {
+  color: var(--neon);
+  text-shadow: 0 0 6px rgba(0, 255, 159, 0.5);
+  animation: pulse 1.6s infinite;
+}

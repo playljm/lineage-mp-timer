@@ -1,5 +1,7 @@
 /**
  * Lineage MP Timer — 렌더러 컨트롤러
+ * - MP 타이머 (계산 + 카운트다운 + 알림)
+ * - Session Tracker (경험치/아데나 시간당 효율)
  */
 (function () {
   'use strict';
@@ -44,25 +46,69 @@
 
     chkSound: $('chk-sound'),
     chkToast: $('chk-toast'),
-    chkMinimize: $('chk-minimize')
+    chkMinimize: $('chk-minimize'),
+
+    // Tracker
+    trkLevelStart: $('track-level-start'),
+    trkLevelNow: $('track-level-now'),
+    trkLevelDiff: $('track-level-diff'),
+    trkExpStart: $('track-exp-start'),
+    trkExpNow: $('track-exp-now'),
+    trkExpDiff: $('track-exp-diff'),
+    trkAdenaStart: $('track-adena-start'),
+    trkAdenaNow: $('track-adena-now'),
+    trkAdenaDiff: $('track-adena-diff'),
+    trkTime: $('tracker-time'),
+    trkExpRate: $('tracker-exp-rate'),
+    trkAdenaRate: $('tracker-adena-rate'),
+    trkStatus: $('tracker-status'),
+    btnTrackerStart: $('btn-tracker-start'),
+    btnTrackerStop: $('btn-tracker-stop'),
+    btnTrackerReset: $('btn-tracker-reset'),
+    btnTrackerSnap: $('btn-tracker-snapshot')
   };
 
   // ========== State ==========
-  const state = {
+  const mpState = {
     running: false,
-    startedAt: null,        // ms
-    simulatedMp: 0,         // 실시간 증가되는 시뮬레이션 MP
-    totalSeconds: 0,        // 계산된 완충 시간
+    startedAt: null,
+    simulatedMp: 0,
+    totalSeconds: 0,
     completedFired: false,
     tickTimerId: null
   };
 
-  // ========== Config ==========
-  function readConfig() {
+  let tracker = S.loadTracker();
+
+  // ========== Helpers ==========
+  function $clampInt(v, min, max, dflt) {
+    const n = parseInt(v, 10);
+    if (!Number.isFinite(n)) return dflt;
+    return Math.max(min, Math.min(max, n));
+  }
+
+  function $clampFloat(v, min, max, dflt) {
+    const n = parseFloat(v);
+    if (!Number.isFinite(n)) return dflt;
+    return Math.max(min, Math.min(max, n));
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[c]);
+  }
+
+  function formatNumber(n) {
+    if (!Number.isFinite(n)) return '0';
+    return Math.round(n).toLocaleString('en-US');
+  }
+
+  function readMpConfig() {
     return {
-      curMp: clampInt(dom.inCurMp.value, 0, 99999, 0),
-      maxMp: clampInt(dom.inMaxMp.value, 1, 99999, 1),
-      wis: clampInt(dom.inWis.value, 1, 50, 15),
+      curMp: $clampInt(dom.inCurMp.value, 0, 99999, 0),
+      maxMp: $clampInt(dom.inMaxMp.value, 1, 99999, 1),
+      wis: $clampInt(dom.inWis.value, 1, 50, 15),
       useBluePotion: dom.chkPotion.checked,
       useMeditation: dom.chkMeditation.checked,
       hasCrystalStaff: dom.chkStaff.checked,
@@ -71,24 +117,18 @@
     };
   }
 
-  function clampInt(v, min, max, dflt) {
-    const n = parseInt(v, 10);
-    if (!Number.isFinite(n)) return dflt;
-    return Math.max(min, Math.min(max, n));
-  }
-
-  // ========== 렌더 ==========
+  // ========== MP Timer Render ==========
   function renderAll() {
-    const cfg = readConfig();
+    const cfg = readMpConfig();
     const total = E.calculateFullMpTime(cfg.curMp, cfg.maxMp, cfg);
-    state.totalSeconds = total;
+    mpState.totalSeconds = total;
 
     renderGauge(cfg.curMp, cfg.maxMp);
     renderBreakdown(cfg);
-    renderTickInfo(cfg, total);
+    renderTickInfo(cfg);
     renderTimes(total);
 
-    if (!state.running) {
+    if (!mpState.running) {
       if (cfg.curMp >= cfg.maxMp) {
         setStatus('done', 'FULL');
         document.body.classList.add('state-done');
@@ -111,7 +151,7 @@
     dom.barFill.classList.toggle('full', cur >= max && max > 0);
   }
 
-  function renderTickInfo(cfg, total) {
+  function renderTickInfo(cfg) {
     const recovery = E.calculateTickRecovery(cfg);
     const interval = E.calculateTickInterval(cfg.state);
     dom.tickRecovery.textContent = cfg.state === 'blocked'
@@ -125,8 +165,8 @@
       dom.timeComplete.textContent = '--:--:--';
       return;
     }
-    const remaining = state.running
-      ? Math.max(0, state.totalSeconds - Math.floor((Date.now() - state.startedAt) / 1000))
+    const remaining = mpState.running
+      ? Math.max(0, mpState.totalSeconds - Math.floor((Date.now() - mpState.startedAt) / 1000))
       : total;
     dom.timeRemaining.textContent = E.formatDuration(remaining);
     dom.timeComplete.textContent = E.formatCompletionTime(remaining);
@@ -152,68 +192,55 @@
     dom.runStatus.textContent = label;
   }
 
-  function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, (c) => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-    })[c]);
-  }
-
-  // ========== 타이머 ==========
+  // ========== MP Timer Logic ==========
   function startTimer() {
-    const cfg = readConfig();
+    const cfg = readMpConfig();
     const total = E.calculateFullMpTime(cfg.curMp, cfg.maxMp, cfg);
-    if (!Number.isFinite(total)) {
-      flashHint('회복 불가 상태입니다.');
-      return;
-    }
-    if (total <= 0) {
-      flashHint('이미 MP가 가득 찼습니다.');
-      return;
-    }
+    if (!Number.isFinite(total)) { flashHint('회복 불가 상태입니다.'); return; }
+    if (total <= 0) { flashHint('이미 MP가 가득 찼습니다.'); return; }
 
-    state.running = true;
-    state.startedAt = Date.now();
-    state.simulatedMp = cfg.curMp;
-    state.totalSeconds = total;
-    state.completedFired = false;
+    mpState.running = true;
+    mpState.startedAt = Date.now();
+    mpState.simulatedMp = cfg.curMp;
+    mpState.totalSeconds = total;
+    mpState.completedFired = false;
     document.body.classList.remove('state-done');
     setStatus('running', 'RUNNING');
 
-    if (state.tickTimerId) clearInterval(state.tickTimerId);
-    state.tickTimerId = setInterval(tick, 1000);
-    tick();
+    if (mpState.tickTimerId) clearInterval(mpState.tickTimerId);
+    mpState.tickTimerId = setInterval(tickMp, 1000);
+    tickMp();
   }
 
   function pauseTimer() {
-    if (!state.running) return;
-    if (state.tickTimerId) {
-      clearInterval(state.tickTimerId);
-      state.tickTimerId = null;
+    if (!mpState.running) return;
+    if (mpState.tickTimerId) {
+      clearInterval(mpState.tickTimerId);
+      mpState.tickTimerId = null;
     }
-    state.running = false;
+    mpState.running = false;
     setStatus('paused', 'PAUSED');
   }
 
   function resetTimer() {
-    if (state.tickTimerId) {
-      clearInterval(state.tickTimerId);
-      state.tickTimerId = null;
+    if (mpState.tickTimerId) {
+      clearInterval(mpState.tickTimerId);
+      mpState.tickTimerId = null;
     }
-    state.running = false;
-    state.startedAt = null;
-    state.simulatedMp = 0;
-    state.totalSeconds = 0;
-    state.completedFired = false;
+    mpState.running = false;
+    mpState.startedAt = null;
+    mpState.simulatedMp = 0;
+    mpState.totalSeconds = 0;
+    mpState.completedFired = false;
     document.body.classList.remove('state-done');
     renderAll();
   }
 
-  function tick() {
-    const cfg = readConfig();
-    const elapsed = Math.floor((Date.now() - state.startedAt) / 1000);
-    const remaining = Math.max(0, state.totalSeconds - elapsed);
+  function tickMp() {
+    const cfg = readMpConfig();
+    const elapsed = Math.floor((Date.now() - mpState.startedAt) / 1000);
+    const remaining = Math.max(0, mpState.totalSeconds - elapsed);
 
-    // 시뮬레이션 MP 계산
     const recovery = E.calculateTickRecovery(cfg);
     const interval = E.calculateTickInterval(cfg.state);
     const ticksElapsed = Math.floor(elapsed / interval);
@@ -223,19 +250,14 @@
     dom.timeRemaining.textContent = E.formatDuration(remaining);
     dom.timeComplete.textContent = E.formatCompletionTime(remaining);
 
-    if (remaining <= 0 || simulatedCur >= cfg.maxMp) {
-      onComplete(cfg);
-    }
+    if (remaining <= 0 || simulatedCur >= cfg.maxMp) onComplete(cfg);
   }
 
   function onComplete(cfg) {
-    if (state.completedFired) return;
-    state.completedFired = true;
-    if (state.tickTimerId) {
-      clearInterval(state.tickTimerId);
-      state.tickTimerId = null;
-    }
-    state.running = false;
+    if (mpState.completedFired) return;
+    mpState.completedFired = true;
+    if (mpState.tickTimerId) { clearInterval(mpState.tickTimerId); mpState.tickTimerId = null; }
+    mpState.running = false;
     document.body.classList.add('state-done');
     setStatus('done', 'FULL!');
     renderGauge(cfg.maxMp, cfg.maxMp);
@@ -245,15 +267,13 @@
     if (settings.toast && api && api.notifyComplete) {
       api.notifyComplete({
         title: '🎉 MP 충전 완료!',
-        body: `${cfg.maxMp} MP 가득 찼습니다. 귀환하세요.`
+        body: `${cfg.maxMp} MP 가득 찼습니다.`
       }).catch(() => {});
     }
-    if (settings.sound) {
-      playCompleteSound(settings.volume ?? 0.5);
-    }
+    if (settings.sound) playCompleteSound(settings.volume ?? 0.5);
   }
 
-  // ========== Web Audio 합성 사운드 ==========
+  // ========== Web Audio ==========
   let audioCtx = null;
   function getAudio() {
     if (!audioCtx) {
@@ -281,7 +301,6 @@
   }
 
   function playCompleteSound(volume) {
-    // 3-tone arpeggio (pleasant ding)
     beep(880, 0.15, volume, 0.0, 'triangle');
     beep(1175, 0.15, volume, 0.15, 'triangle');
     beep(1568, 0.35, volume, 0.3, 'triangle');
@@ -293,7 +312,7 @@
     setTimeout(() => renderAll(), 1500);
   }
 
-  // ========== 프리셋 ==========
+  // ========== Presets ==========
   function renderPresets() {
     const list = S.loadPresets();
     if (!list.length) {
@@ -301,12 +320,10 @@
       return;
     }
     dom.presetList.innerHTML = list
-      .map(
-        (p) => `<span class="preset-item" data-name="${escapeHtml(p.name)}">
-          <span class="preset-load">${escapeHtml(p.name)}</span>
-          <button class="del" title="삭제">×</button>
-        </span>`
-      )
+      .map((p) => `<span class="preset-item" data-name="${escapeHtml(p.name)}">
+        <span class="preset-load">${escapeHtml(p.name)}</span>
+        <button class="del" title="삭제">×</button>
+      </span>`)
       .join('');
   }
 
@@ -323,37 +340,180 @@
   }
 
   function currentPreset(name) {
-    const cfg = readConfig();
+    const cfg = readMpConfig();
     return {
       name,
-      maxMp: cfg.maxMp,
-      wis: cfg.wis,
+      maxMp: cfg.maxMp, wis: cfg.wis,
       useBluePotion: cfg.useBluePotion,
       useMeditation: cfg.useMeditation,
       hasCrystalStaff: cfg.hasCrystalStaff,
-      location: cfg.location,
-      state: cfg.state
+      location: cfg.location, state: cfg.state
     };
   }
 
-  // ========== 이벤트 ==========
+  // ========== Session Tracker ==========
+  function readTrackerInputs() {
+    return {
+      start: {
+        level: $clampInt(dom.trkLevelStart.value, 1, 99, 1),
+        exp: $clampFloat(dom.trkExpStart.value, 0, 100, 0),
+        adena: $clampInt(dom.trkAdenaStart.value, 0, 9999999999, 0)
+      },
+      current: {
+        level: $clampInt(dom.trkLevelNow.value, 1, 99, 1),
+        exp: $clampFloat(dom.trkExpNow.value, 0, 100, 0),
+        adena: $clampInt(dom.trkAdenaNow.value, 0, 9999999999, 0)
+      }
+    };
+  }
+
+  /**
+   * 누적 % 진행도 계산
+   * "1레벨 30%" → "2레벨 10%" 면 +80% 진행
+   */
+  function totalExpProgress(start, current) {
+    const dLevel = current.level - start.level;
+    const dExp = current.exp - start.exp;
+    return dLevel * 100 + dExp;
+  }
+
+  function setTrackerStatus(text, kind) {
+    dom.trkStatus.textContent = text;
+    dom.trkStatus.className = (kind || '') + ' small';
+  }
+
+  function startTracker() {
+    const t = readTrackerInputs();
+    tracker.active = true;
+    tracker.startedAt = Date.now();
+    tracker.start = t.start;
+    tracker.current = t.current;
+    S.saveTracker(tracker);
+    setTrackerStatus('RUNNING', 'running');
+    renderTracker();
+  }
+
+  function stopTracker() {
+    tracker.active = false;
+    S.saveTracker(tracker);
+    setTrackerStatus('STOPPED', '');
+    renderTracker();
+  }
+
+  function resetTracker() {
+    tracker = {
+      active: false,
+      startedAt: null,
+      start: { level: 1, exp: 0, adena: 0 },
+      current: { level: 1, exp: 0, adena: 0 }
+    };
+    S.saveTracker(tracker);
+    dom.trkLevelStart.value = 1;
+    dom.trkLevelNow.value = 1;
+    dom.trkExpStart.value = 0;
+    dom.trkExpNow.value = 0;
+    dom.trkAdenaStart.value = 0;
+    dom.trkAdenaNow.value = 0;
+    setTrackerStatus('IDLE', '');
+    renderTracker();
+  }
+
+  /** 현재값 → 시작값 복사 (스냅샷) */
+  function snapshotTracker() {
+    const cur = readTrackerInputs().current;
+    dom.trkLevelStart.value = cur.level;
+    dom.trkExpStart.value = cur.exp;
+    dom.trkAdenaStart.value = cur.adena;
+    if (tracker.active) {
+      tracker.start = cur;
+      tracker.startedAt = Date.now();
+      S.saveTracker(tracker);
+    }
+    renderTracker();
+  }
+
+  function renderTracker() {
+    const t = readTrackerInputs();
+
+    // 차이
+    const dLevel = t.current.level - t.start.level;
+    const dExp = totalExpProgress(t.start, t.current);
+    const dAdena = t.current.adena - t.start.adena;
+
+    dom.trkLevelDiff.textContent = `${dLevel >= 0 ? '+' : ''}${dLevel}`;
+    dom.trkLevelDiff.classList.toggle('negative', dLevel < 0);
+
+    dom.trkExpDiff.textContent = `${dExp >= 0 ? '+' : ''}${dExp.toFixed(1)}%`;
+    dom.trkExpDiff.classList.toggle('negative', dExp < 0);
+
+    dom.trkAdenaDiff.textContent = `${dAdena >= 0 ? '+' : ''}${formatNumber(dAdena)}`;
+    dom.trkAdenaDiff.classList.toggle('negative', dAdena < 0);
+
+    // 세션 시간 + 시간당 효율
+    let elapsedSec = 0;
+    if (tracker.active && tracker.startedAt) {
+      elapsedSec = Math.max(0, Math.floor((Date.now() - tracker.startedAt) / 1000));
+    } else if (tracker.startedAt) {
+      // 정지 후 마지막 시간 유지 (선택)
+      elapsedSec = 0;
+    }
+    dom.trkTime.textContent = E.formatDuration(elapsedSec);
+
+    if (elapsedSec > 0) {
+      const hours = elapsedSec / 3600;
+      const expPerH = dExp / hours;
+      const adenaPerH = dAdena / hours;
+      dom.trkExpRate.textContent = `${expPerH >= 0 ? '+' : ''}${expPerH.toFixed(1)}%/h`;
+      dom.trkAdenaRate.textContent = `${adenaPerH >= 0 ? '+' : ''}${formatNumber(adenaPerH)}/h`;
+    } else {
+      dom.trkExpRate.textContent = '+0%/h';
+      dom.trkAdenaRate.textContent = '+0/h';
+    }
+  }
+
+  function restoreTrackerInputs() {
+    if (tracker.start) {
+      dom.trkLevelStart.value = tracker.start.level ?? 1;
+      dom.trkExpStart.value = tracker.start.exp ?? 0;
+      dom.trkAdenaStart.value = tracker.start.adena ?? 0;
+    }
+    if (tracker.current) {
+      dom.trkLevelNow.value = tracker.current.level ?? 1;
+      dom.trkExpNow.value = tracker.current.exp ?? 0;
+      dom.trkAdenaNow.value = tracker.current.adena ?? 0;
+    }
+    if (tracker.active) {
+      setTrackerStatus('RUNNING', 'running');
+    } else {
+      setTrackerStatus('IDLE', '');
+    }
+  }
+
+  function saveTrackerCurrent() {
+    const t = readTrackerInputs();
+    tracker.start = t.start;
+    tracker.current = t.current;
+    S.saveTracker(tracker);
+  }
+
+  // ========== Events ==========
   function bindEvents() {
     ['inCurMp','inMaxMp','inWis','inLocation','inState'].forEach((k) => {
-      dom[k].addEventListener('input', () => { if (!state.running) renderAll(); saveLast(); });
-      dom[k].addEventListener('change', () => { if (!state.running) renderAll(); saveLast(); });
+      dom[k].addEventListener('input', () => { if (!mpState.running) renderAll(); saveLast(); });
+      dom[k].addEventListener('change', () => { if (!mpState.running) renderAll(); saveLast(); });
     });
     ['chkPotion','chkMeditation','chkStaff'].forEach((k) => {
-      dom[k].addEventListener('change', () => { if (!state.running) renderAll(); saveLast(); });
+      dom[k].addEventListener('change', () => { if (!mpState.running) renderAll(); saveLast(); });
     });
 
     dom.btnStart.addEventListener('click', () => {
-      if (state.running) pauseTimer();
+      if (mpState.running) pauseTimer();
       else startTimer();
     });
     dom.btnPause.addEventListener('click', pauseTimer);
     dom.btnReset.addEventListener('click', resetTimer);
 
-    // 제목 바 버튼
+    // Titlebar
     dom.btnPin.addEventListener('click', async () => {
       if (!api) return;
       const current = await api.getAlwaysOnTop();
@@ -364,17 +524,15 @@
       settings.alwaysOnTop = next;
       S.saveSettings(settings);
     });
-
     dom.btnTray.addEventListener('click', () => {
       if (api && api.minimizeToTray) api.minimizeToTray();
     });
-
     dom.btnQuit.addEventListener('click', () => {
       if (api && api.quit) api.quit();
       else window.close();
     });
 
-    // 프리셋
+    // Presets
     dom.btnPresetSave.addEventListener('click', () => {
       const name = (dom.presetName.value || '').trim();
       if (!name) { flashHint('프리셋 이름을 입력하세요.'); return; }
@@ -382,7 +540,6 @@
       dom.presetName.value = '';
       renderPresets();
     });
-
     dom.presetList.addEventListener('click', (e) => {
       const item = e.target.closest('.preset-item');
       if (!item) return;
@@ -396,17 +553,27 @@
       applyPreset(preset);
     });
 
-    // 설정
+    // Settings
     dom.chkSound.addEventListener('change', saveSettingsFromUi);
     dom.chkToast.addEventListener('change', saveSettingsFromUi);
     dom.chkMinimize.addEventListener('change', async () => {
       saveSettingsFromUi();
-      if (api && api.setMinimizeOnClose) {
-        await api.setMinimizeOnClose(dom.chkMinimize.checked);
-      }
+      if (api && api.setMinimizeOnClose) await api.setMinimizeOnClose(dom.chkMinimize.checked);
     });
 
-    // 키보드 단축키
+    // Tracker
+    [
+      'trkLevelStart','trkLevelNow','trkExpStart','trkExpNow','trkAdenaStart','trkAdenaNow'
+    ].forEach((k) => {
+      dom[k].addEventListener('input', () => { renderTracker(); saveTrackerCurrent(); });
+      dom[k].addEventListener('change', () => { renderTracker(); saveTrackerCurrent(); });
+    });
+    dom.btnTrackerStart.addEventListener('click', startTracker);
+    dom.btnTrackerStop.addEventListener('click', stopTracker);
+    dom.btnTrackerReset.addEventListener('click', resetTracker);
+    dom.btnTrackerSnap.addEventListener('click', snapshotTracker);
+
+    // Hotkeys
     document.addEventListener('keydown', (e) => {
       const tag = (e.target.tagName || '').toLowerCase();
       if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
@@ -414,7 +581,6 @@
       else if (e.key.toLowerCase() === 'r') { resetTimer(); }
     });
 
-    // Always-on-top 변경 수신
     if (api && api.onAlwaysOnTopChanged) {
       api.onAlwaysOnTopChanged((value) => {
         dom.btnPin.classList.toggle('active', !!value);
@@ -431,16 +597,13 @@
   }
 
   function saveLast() {
-    const cfg = readConfig();
+    const cfg = readMpConfig();
     S.saveLast({
-      curMp: cfg.curMp,
-      maxMp: cfg.maxMp,
-      wis: cfg.wis,
+      curMp: cfg.curMp, maxMp: cfg.maxMp, wis: cfg.wis,
       useBluePotion: cfg.useBluePotion,
       useMeditation: cfg.useMeditation,
       hasCrystalStaff: cfg.hasCrystalStaff,
-      location: cfg.location,
-      state: cfg.state
+      location: cfg.location, state: cfg.state
     });
   }
 
@@ -462,9 +625,7 @@
     dom.chkSound.checked = !!s.sound;
     dom.chkToast.checked = !!s.toast;
     dom.chkMinimize.checked = !!s.minimizeOnClose;
-    if (api && api.setMinimizeOnClose) {
-      api.setMinimizeOnClose(!!s.minimizeOnClose);
-    }
+    if (api && api.setMinimizeOnClose) api.setMinimizeOnClose(!!s.minimizeOnClose);
     if (api && api.setAlwaysOnTop && s.alwaysOnTop) {
       api.setAlwaysOnTop(true);
       dom.btnPin.classList.add('active');
@@ -475,13 +636,15 @@
   function init() {
     restoreSettings();
     restoreLast();
+    restoreTrackerInputs();
     bindEvents();
     renderPresets();
     renderAll();
+    renderTracker();
 
-    // 매 초 업데이트 (카운트다운 동기화)
     setInterval(() => {
-      if (!state.running) renderAll();
+      if (!mpState.running) renderAll();
+      renderTracker();
     }, 1000);
   }
 

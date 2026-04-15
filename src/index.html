@@ -152,6 +152,66 @@
         </div>
       </section>
 
+      <!-- 세션 트래커 -->
+      <section class="panel tracker">
+        <div class="row between baseline">
+          <h3 class="panel-title inline">SESSION TRACKER · 경험치 / 아데나</h3>
+          <span class="muted small" id="tracker-status">IDLE</span>
+        </div>
+
+        <div class="tracker-grid">
+          <div class="tracker-row header">
+            <span></span>
+            <span>시작</span>
+            <span>현재</span>
+            <span>증가량</span>
+          </div>
+
+          <div class="tracker-row">
+            <span class="tracker-label">레벨</span>
+            <input id="track-level-start" type="number" min="1" max="99" step="1" value="1" />
+            <input id="track-level-now" type="number" min="1" max="99" step="1" value="1" />
+            <span id="track-level-diff" class="tracker-diff">+0</span>
+          </div>
+
+          <div class="tracker-row">
+            <span class="tracker-label">경험치 %</span>
+            <input id="track-exp-start" type="number" min="0" max="100" step="0.1" value="0" />
+            <input id="track-exp-now" type="number" min="0" max="100" step="0.1" value="0" />
+            <span id="track-exp-diff" class="tracker-diff">+0%</span>
+          </div>
+
+          <div class="tracker-row">
+            <span class="tracker-label">아데나</span>
+            <input id="track-adena-start" type="number" min="0" step="1" value="0" />
+            <input id="track-adena-now" type="number" min="0" step="1" value="0" />
+            <span id="track-adena-diff" class="tracker-diff">+0</span>
+          </div>
+        </div>
+
+        <div class="tracker-stats">
+          <div class="stat">
+            <span class="stat-label">⏱ SESSION</span>
+            <span class="stat-value" id="tracker-time">00:00:00</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">📈 EXP / H</span>
+            <span class="stat-value" id="tracker-exp-rate">+0%/h</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">💰 ADENA / H</span>
+            <span class="stat-value" id="tracker-adena-rate">+0/h</span>
+          </div>
+        </div>
+
+        <div class="tracker-actions">
+          <button id="btn-tracker-start" class="primary">⏵ START</button>
+          <button id="btn-tracker-stop">■ STOP</button>
+          <button id="btn-tracker-reset">↺ RESET</button>
+          <button id="btn-tracker-snapshot" title="현재값을 시작값으로 복사">📸 SNAP</button>
+        </div>
+      </section>
+
       <!-- 설정 -->
       <section class="panel settings">
         <h3 class="panel-title">SETTINGS</h3>
