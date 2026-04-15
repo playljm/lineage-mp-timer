@@ -127,6 +127,23 @@ body {
   transition: color 0.3s ease;
 }
 
+/* 테마 전환 시 색상/테두리/그림자가 부드럽게 */
+.panel, .field input, .field select, .chk, .stat-value, .stat-label,
+.breakdown .chip, .preset-item, .theme-chip, .hk-binding,
+.controls button, .tracker-actions button, .icon-btn,
+.quick-pct button, .mp-value, #run-status {
+  transition: background-color 0.25s ease, color 0.25s ease,
+              border-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+/* 실행 중 현재 MP 필드 (readonly+자동갱신) */
+.field input[readonly].synced {
+  color: var(--neon-dim);
+  cursor: not-allowed;
+  background: rgba(0, 0, 0, 0.3);
+  opacity: 0.85;
+}
+
 /* ===== Scrollbars ===== */
 ::-webkit-scrollbar {
   width: 10px;

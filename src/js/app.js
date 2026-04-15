@@ -115,8 +115,9 @@
 
   function cfgAffectsRecovery(a, b) {
     if (!a || !b) return true;
+    // 회복 속도에 실제 영향을 주는 속성만 — targetPct/maxMp는 목표만 바꾸므로 누적에 영향 없음
     const keys = ['wis','useBluePotion','useMeditation','hasCrystalStaff',
-                  'location','customLocationBonus','state','maxMp','targetPct'];
+                  'location','customLocationBonus','state'];
     return keys.some((k) => a[k] !== b[k]);
   }
 
@@ -142,8 +143,9 @@
     const newCfg = readMpConfig();
     if (cfgAffectsRecovery(mpState.prevConfigSnapshot, newCfg)) {
       commitSegment();
-      mpState.prevConfigSnapshot = cloneCfg(newCfg);
     }
+    // 회복량 영향 없는 변경(목표%/maxMp)은 commit 없이 snapshot만 갱신 + 재계산
+    mpState.prevConfigSnapshot = cloneCfg(newCfg);
     tickMp();
   }
 
@@ -231,12 +233,24 @@
 
   function renderGauge(cur, max, target) {
     const pct = max > 0 ? Math.max(0, Math.min(100, (cur / max) * 100)) : 0;
-    dom.mpCurrent.textContent = Math.round(cur);
+    const rounded = Math.round(cur);
+    dom.mpCurrent.textContent = rounded;
     dom.mpMax.textContent = max;
     dom.mpPercent.textContent = `${pct.toFixed(1)}%`;
     dom.barFill.style.width = `${pct}%`;
     const goalReached = target ? cur >= target : cur >= max;
     dom.barFill.classList.toggle('full', goalReached && max > 0);
+
+    // 실행/일시정지 중엔 curMp 입력 필드를 시뮬 값으로 동기화 + readonly
+    const isActive = mpState.running || mpState.paused;
+    if (isActive) {
+      if (document.activeElement !== dom.inCurMp) dom.inCurMp.value = rounded;
+      dom.inCurMp.readOnly = true;
+      dom.inCurMp.classList.add('synced');
+    } else {
+      dom.inCurMp.readOnly = false;
+      dom.inCurMp.classList.remove('synced');
+    }
   }
   function renderTickInfo(cfg) {
     const recovery = E.calculateTickRecovery(cfg);
@@ -258,6 +272,25 @@
     dom.breakdown.innerHTML = chips.join('');
   }
   function setStatus(kind, label) { dom.runStatus.className = kind; dom.runStatus.textContent = label; }
+
+  function updateStartButton() {
+    if (mpState.running) dom.btnStart.textContent = '⏸ PAUSE';
+    else if (mpState.paused) dom.btnStart.textContent = '▶ RESUME';
+    else dom.btnStart.textContent = '▶ START';
+  }
+
+  function updateDocumentTitle(remainingSec) {
+    if (!mpState.running && !mpState.paused) {
+      document.title = 'Lineage MP Timer';
+      return;
+    }
+    if (!Number.isFinite(remainingSec)) {
+      document.title = '∞ · Lineage MP Timer';
+      return;
+    }
+    const prefix = mpState.paused ? '⏸' : '⏱';
+    document.title = `${prefix} ${E.formatDuration(remainingSec)} · Lineage MP Timer`;
+  }
 
   // ========== Timer ==========
   function startTimer() {
@@ -294,6 +327,7 @@
 
     if (mpState.tickTimerId) clearInterval(mpState.tickTimerId);
     mpState.tickTimerId = setInterval(tickMp, 1000);
+    updateStartButton();
     tickMp();
   }
 
@@ -309,6 +343,7 @@
     const simCur = Math.min(cfg.maxMp, mpState.startMp + mpState.accumulatedMp);
     renderGauge(simCur, cfg.maxMp, target);
     updatePausedRemaining(cfg, simCur, target);
+    updateStartButton();
   }
 
   function resetTimer() {
@@ -322,7 +357,9 @@
     mpState.prevConfigSnapshot = null;
     mpState.completedFired = false;
     document.body.classList.remove('state-done');
+    document.title = 'Lineage MP Timer';
     renderAll();
+    updateStartButton();
   }
 
   function tickMp() {
@@ -349,6 +386,7 @@
     }
     renderTickInfo(cfg);
     renderBreakdown(cfg);
+    updateDocumentTitle(remaining);
 
     if (simCur >= target) onComplete(cfg);
   }
@@ -365,6 +403,8 @@
     setStatus('done', isFull ? 'FULL!' : `${cfg.targetPct}%!`);
     renderGauge(target, cfg.maxMp, target);
     dom.timeRemaining.textContent = '00:00:00';
+    document.title = '🎉 MP 완료 · Lineage MP Timer';
+    updateStartButton();
     const settings = S.loadSettings();
     if (settings.toast && api && api.notifyComplete) {
       const title = isFull ? '🎉 MP 충전 완료!' : `🎯 목표 MP ${cfg.targetPct}% 도달!`;
@@ -544,10 +584,14 @@
       elapsedSec = Math.max(0, Math.floor((Date.now() - tracker.startedAt) / 1000));
     }
     dom.trkTime.textContent = E.formatDuration(elapsedSec);
-    if (elapsedSec > 0) {
+    // 너무 짧은 경과 시 분모가 작아 rate가 비현실적으로 크게 나와 혼란 → 30초 이후부터 표시
+    if (elapsedSec >= 30) {
       const hours = elapsedSec / 3600;
       dom.trkExpRate.textContent = `${dExp >= 0 ? '+' : ''}${(dExp / hours).toFixed(1)}%/h`;
       dom.trkAdenaRate.textContent = `${dAdena >= 0 ? '+' : ''}${formatNumber(dAdena / hours)}/h`;
+    } else if (tracker.active && elapsedSec > 0) {
+      dom.trkExpRate.textContent = '측정 중...';
+      dom.trkAdenaRate.textContent = '측정 중...';
     } else {
       dom.trkExpRate.textContent = '+0%/h';
       dom.trkAdenaRate.textContent = '+0/h';
