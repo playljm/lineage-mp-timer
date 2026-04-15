@@ -41,10 +41,10 @@ t('WIS 25 → 15', () => assert.equal(E.calculateBluePotionBonus(25), 15));
 console.log('\n[3] 위치 보너스');
 t('field → 0', () => assert.equal(E.calculateLocationBonus('field'), 0));
 t('tavern → 2', () => assert.equal(E.calculateLocationBonus('tavern'), 2));
-t('agate → 2', () => assert.equal(E.calculateLocationBonus('agate'), 2));
-t('singing → 3', () => assert.equal(E.calculateLocationBonus('singing'), 3));
-t('hidden_valley → 3', () => assert.equal(E.calculateLocationBonus('hidden_valley'), 3));
 t('dungeon → -3', () => assert.equal(E.calculateLocationBonus('dungeon'), -3));
+t('custom +5', () => assert.equal(E.calculateLocationBonus('custom', 5), 5));
+t('custom -3', () => assert.equal(E.calculateLocationBonus('custom', -3), -3));
+t('custom 범위 초과 클램프', () => assert.equal(E.calculateLocationBonus('custom', 999), 50));
 
 console.log('\n[4] 틱 주기');
 t('standing → 16s', () => assert.equal(E.calculateTickInterval('standing'), 16));

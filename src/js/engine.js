@@ -22,22 +22,18 @@
     combat: 4
   };
 
+  // 검증된 위치만 (기타는 직접 입력으로 대체)
   const LOCATION_BONUS = {
     field: 0,
     tavern: 2,
-    agate: 2,
-    singing: 3,
-    hidden_valley: 3,
     dungeon: -3
   };
 
   const LOCATION_LABEL = {
     field: '일반 필드',
     tavern: '여관',
-    agate: '아가타 (기란)',
-    singing: '싱잉 아일랜드',
-    hidden_valley: '히든 밸리',
-    dungeon: '마법사 30 퀘스트 던전'
+    dungeon: '마법사 30Q 던전 (페널티)',
+    custom: '직접 입력'
   };
 
   const STATE_LABEL = {
@@ -63,7 +59,12 @@
     return Math.max(1, wis - 10);
   }
 
-  function calculateLocationBonus(location) {
+  function calculateLocationBonus(location, customBonus) {
+    if (location === 'custom') {
+      const v = parseInt(customBonus, 10);
+      if (!Number.isFinite(v)) return 0;
+      return Math.max(-20, Math.min(50, v));
+    }
     return LOCATION_BONUS[location] ?? 0;
   }
 
@@ -80,6 +81,7 @@
       useMeditation = true,
       hasCrystalStaff = false,
       location = 'field',
+      customLocationBonus = 0,
       state = 'standing'
     } = cfg;
 
@@ -88,7 +90,7 @@
     let recovery = calculateBaseTickRecovery(wis);
     if (useBluePotion) recovery += calculateBluePotionBonus(wis);
     if (useMeditation && state === 'standing') recovery += MEDITATION_BONUS;
-    recovery += calculateLocationBonus(location);
+    recovery += calculateLocationBonus(location, customLocationBonus);
     if (hasCrystalStaff) recovery += CRYSTAL_STAFF_BONUS;
 
     return Math.max(1, recovery);
@@ -144,6 +146,7 @@
       useMeditation = true,
       hasCrystalStaff = false,
       location = 'field',
+      customLocationBonus = 0,
       state = 'standing'
     } = cfg;
 
@@ -155,9 +158,10 @@
     if (useMeditation && state === 'standing') {
       items.push({ key: 'meditation', label: '메디테이션', value: MEDITATION_BONUS });
     }
-    const locBonus = calculateLocationBonus(location);
+    const locBonus = calculateLocationBonus(location, customLocationBonus);
     if (locBonus !== 0) {
-      items.push({ key: 'location', label: LOCATION_LABEL[location] || location, value: locBonus });
+      const label = location === 'custom' ? '직접 입력 위치' : (LOCATION_LABEL[location] || location);
+      items.push({ key: 'location', label, value: locBonus });
     }
     if (hasCrystalStaff) {
       items.push({ key: 'staff', label: '수정 지팡이', value: CRYSTAL_STAFF_BONUS });

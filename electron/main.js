@@ -20,6 +20,13 @@ let minimizeToTrayOnClose = false;
 const DEV = process.argv.includes('--dev') || !app.isPackaged;
 const boundsFile = () => path.join(app.getPath('userData'), 'window-bounds.json');
 
+const DEFAULT_GLOBAL_HOTKEYS = {
+  alwaysOnTop: 'F1',
+  toggleHide: 'F2'
+};
+
+let activeGlobalHotkeys = { ...DEFAULT_GLOBAL_HOTKEYS };
+
 function loadBounds() {
   try {
     const raw = fs.readFileSync(boundsFile(), 'utf-8');
@@ -83,7 +90,7 @@ function resolveIcon() {
 
 function createMainWindow() {
   const icon = resolveIcon();
-  const fitted = fitToWorkArea(580, 920);
+  const fitted = fitToWorkArea(580, 980);
   const last = loadBounds();
 
   const useLastSize = last && Number.isFinite(last.width) && Number.isFinite(last.height);
@@ -121,7 +128,6 @@ function createMainWindow() {
   mainWindow.loadFile(path.join(__dirname, '..', 'src', 'index.html'));
 
   mainWindow.once('ready-to-show', () => {
-    // 사이즈 클램프: workArea보다 큰 경우 자동 축소
     try {
       const { workAreaSize } = screen.getPrimaryDisplay();
       const [w, h] = mainWindow.getSize();
@@ -134,9 +140,7 @@ function createMainWindow() {
     } catch (_) { /* ignore */ }
 
     mainWindow.show();
-    if (DEV) {
-      mainWindow.webContents.openDevTools({ mode: 'detach' });
-    }
+    if (DEV) mainWindow.webContents.openDevTools({ mode: 'detach' });
   });
 
   let saveTimer = null;
@@ -171,10 +175,7 @@ function createTray() {
       {
         label: '창 복원',
         click: () => {
-          if (mainWindow) {
-            mainWindow.show();
-            mainWindow.focus();
-          }
+          if (mainWindow) { mainWindow.show(); mainWindow.focus(); }
         }
       },
       {
@@ -190,43 +191,69 @@ function createTray() {
       { type: 'separator' },
       {
         label: '종료',
-        click: () => {
-          isQuitting = true;
-          app.quit();
-        }
+        click: () => { isQuitting = true; app.quit(); }
       }
     ]);
     tray.setContextMenu(menu);
   };
 
   rebuildMenu();
-
   tray.on('double-click', () => {
-    if (mainWindow) {
-      mainWindow.show();
-      mainWindow.focus();
-    }
+    if (mainWindow) { mainWindow.show(); mainWindow.focus(); }
   });
+}
+
+// ========== Global Hotkeys ==========
+function dispatchHotkey(name) {
+  if (!mainWindow) return;
+  if (name === 'alwaysOnTop') {
+    const next = !mainWindow.isAlwaysOnTop();
+    mainWindow.setAlwaysOnTop(next);
+    mainWindow.webContents.send('always-on-top-changed', next);
+  } else if (name === 'toggleHide') {
+    if (mainWindow.isVisible()) mainWindow.hide();
+    else { mainWindow.show(); mainWindow.focus(); }
+  }
+}
+
+/**
+ * @param {Object} map e.g. { alwaysOnTop: 'F1', toggleHide: 'F2' } — null/'' 이면 비활성
+ * @returns {{ success: object, failures: Array<{name, accel, reason}> }}
+ */
+function registerGlobalHotkeys(map) {
+  try { globalShortcut.unregisterAll(); } catch (_) { /* ignore */ }
+
+  const success = {};
+  const failures = [];
+  const seen = new Set();
+
+  for (const [name, accel] of Object.entries(map || {})) {
+    if (!accel || typeof accel !== 'string') continue;
+    if (seen.has(accel)) {
+      failures.push({ name, accel, reason: 'duplicate' });
+      continue;
+    }
+    try {
+      const ok = globalShortcut.register(accel, () => dispatchHotkey(name));
+      if (ok) {
+        success[name] = accel;
+        seen.add(accel);
+      } else {
+        failures.push({ name, accel, reason: 'register-failed' });
+      }
+    } catch (e) {
+      failures.push({ name, accel, reason: e.message || 'error' });
+    }
+  }
+  activeGlobalHotkeys = success;
+  return { success, failures };
 }
 
 app.whenReady().then(() => {
   createMainWindow();
   createTray();
-
-  globalShortcut.register('F1', () => {
-    if (!mainWindow) return;
-    const next = !mainWindow.isAlwaysOnTop();
-    mainWindow.setAlwaysOnTop(next);
-    mainWindow.webContents.send('always-on-top-changed', next);
-  });
-
-  globalShortcut.register('F2', () => {
-    if (mainWindow && mainWindow.isVisible()) {
-      mainWindow.hide();
-    } else if (mainWindow) {
-      mainWindow.show();
-    }
-  });
+  // 기본 단축키 등록 (renderer가 saved 값으로 갱신 가능)
+  registerGlobalHotkeys(DEFAULT_GLOBAL_HOTKEYS);
 });
 
 app.on('activate', () => {
@@ -234,17 +261,12 @@ app.on('activate', () => {
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin' && !minimizeToTrayOnClose) {
-    app.quit();
-  }
+  if (process.platform !== 'darwin' && !minimizeToTrayOnClose) app.quit();
 });
 
-app.on('before-quit', () => {
-  isQuitting = true;
-});
-
+app.on('before-quit', () => { isQuitting = true; });
 app.on('will-quit', () => {
-  globalShortcut.unregisterAll();
+  try { globalShortcut.unregisterAll(); } catch (_) {}
 });
 
 // ========== IPC ==========
@@ -278,25 +300,29 @@ ipcMain.handle('app:show-notification', (_, payload) => {
       });
       n.show();
     }
-  } catch (e) {
-    console.error('notify failed', e);
-  }
+  } catch (e) { console.error('notify failed', e); }
   if (mainWindow) {
     try {
       mainWindow.flashFrame(true);
-      setTimeout(() => {
-        if (mainWindow) mainWindow.flashFrame(false);
-      }, 4000);
-    } catch (_) { /* ignore */ }
+      setTimeout(() => { if (mainWindow) mainWindow.flashFrame(false); }, 4000);
+    } catch (_) {}
   }
 });
 
 ipcMain.handle('app:reset-window-size', () => {
   if (!mainWindow) return;
-  const fitted = fitToWorkArea(580, 920);
+  const fitted = fitToWorkArea(580, 980);
   mainWindow.setSize(fitted.width, fitted.height);
   mainWindow.center();
   saveBounds();
+});
+
+ipcMain.handle('app:set-global-hotkeys', (_, map) => {
+  return registerGlobalHotkeys(map || {});
+});
+
+ipcMain.handle('app:get-global-hotkeys', () => {
+  return activeGlobalHotkeys;
 });
 
 ipcMain.handle('app:quit', () => {
