@@ -9,7 +9,7 @@
  * - 파란물약: +max(1, WIS-10) MP/틱, 600s 지속
  * - 메디테이션: +5 MP/틱, 640s, 정지 상태만
  * - 여관/아가타: +2, 싱잉/히든밸리: +3, 던전: -3
- * - 크리스탈 스태프: +10 MP/틱
+ * - 수정 지팡이: +10 MP/틱
  * - 배고픔/과중: 회복 불가
  */
 (function (global) {
@@ -160,7 +160,7 @@
       items.push({ key: 'location', label: LOCATION_LABEL[location] || location, value: locBonus });
     }
     if (hasCrystalStaff) {
-      items.push({ key: 'staff', label: '크리스탈 스태프', value: CRYSTAL_STAFF_BONUS });
+      items.push({ key: 'staff', label: '수정 지팡이', value: CRYSTAL_STAFF_BONUS });
     }
 
     const total = Math.max(1, items.reduce((a, b) => a + b.value, 0));
