@@ -121,17 +121,22 @@
     return keys.some((k) => a[k] !== b[k]);
   }
 
-  /** 이전 config 기준으로 현재까지의 MP를 누적에 반영 + 세그먼트 재시작 */
+  /** 이전 config 기준으로 현재까지의 MP를 누적에 반영 + 세그먼트 재시작
+   *  segmentStartAt을 "이전 config의 마지막 틱 경계"로 snap해서
+   *  게임 내 실제 틱 주기와 어긋나지 않게 유지한다. */
   function commitSegment() {
     if (!mpState.segmentStartAt || !mpState.prevConfigSnapshot) return;
     const prev = mpState.prevConfigSnapshot;
-    const elapsedSec = Math.max(0, (Date.now() - mpState.segmentStartAt) / 1000);
     if (prev.state !== 'blocked') {
       const recovery = E.calculateTickRecovery(prev);
       const interval = E.calculateTickInterval(prev.state);
       if (interval > 0 && recovery > 0) {
+        const elapsedSec = Math.max(0, (Date.now() - mpState.segmentStartAt) / 1000);
         const ticks = Math.floor(elapsedSec / interval);
         mpState.accumulatedMp += ticks * recovery;
+        // 마지막 틱 경계로 snap → 다음 틱 타이밍이 게임과 동기화 유지
+        mpState.segmentStartAt += ticks * interval * 1000;
+        return;
       }
     }
     mpState.segmentStartAt = Date.now();
@@ -204,6 +209,7 @@
   }
 
   function updatePausedRemaining(cfg, simCur, target) {
+    // paused 상태에서는 마지막 틱 경계부터 멈춰있으므로 "다음 틱 = interval" 로 고정 표시
     const recovery = E.calculateTickRecovery(cfg);
     const interval = E.calculateTickInterval(cfg.state);
     const needed = Math.max(0, target - simCur);
@@ -362,19 +368,30 @@
     updateStartButton();
   }
 
+  /** 게임 틱 단위 simCur와 별개로, remaining은 매초 부드럽게 감소해야 함
+   *  공식: remaining = (다음 틱까지 시간) + max(0, 필요 틱 수 - 1) * interval */
+  function computeSmoothRemaining(cfg, simCur, target) {
+    if (simCur >= target) return 0;
+    const recovery = E.calculateTickRecovery(cfg);
+    const interval = E.calculateTickInterval(cfg.state);
+    if (cfg.state === 'blocked' || recovery <= 0 || interval <= 0) return Infinity;
+
+    const needed = target - simCur;
+    const ticksNeeded = Math.ceil(needed / recovery);
+    // 현재 세그먼트 내에서 다음 틱까지 남은 시간 (0..interval)
+    const segElapsed = mpState.segmentStartAt
+      ? Math.max(0, (Date.now() - mpState.segmentStartAt) / 1000)
+      : 0;
+    const sinceLast = segElapsed % interval;
+    const toNextTick = sinceLast === 0 ? interval : (interval - sinceLast);
+    return toNextTick + Math.max(0, ticksNeeded - 1) * interval;
+  }
+
   function tickMp() {
     const cfg = readMpConfig();
     const target = effectiveTargetMp(cfg);
     const simCur = getSimulatedMp(cfg);
-    const recovery = E.calculateTickRecovery(cfg);
-    const interval = E.calculateTickInterval(cfg.state);
-
-    const needed = Math.max(0, target - simCur);
-    let remaining = 0;
-    if (needed > 0) {
-      if (cfg.state === 'blocked' || recovery <= 0 || interval <= 0) remaining = Infinity;
-      else remaining = Math.ceil(needed / recovery) * interval;
-    }
+    const remaining = computeSmoothRemaining(cfg, simCur, target);
 
     renderGauge(simCur, cfg.maxMp, target);
     if (Number.isFinite(remaining)) {

@@ -156,12 +156,16 @@
       <!-- 프리셋 -->
       <section class="panel presets">
         <div class="row between baseline">
-          <h3 class="panel-title inline">PRESETS</h3>
+          <h3 class="panel-title inline" title="현재 설정을 이름으로 저장하고 원클릭으로 불러옵니다">PRESETS <span class="help-icon" title="도움말">ⓘ</span></h3>
           <div class="preset-actions">
-            <input id="preset-name" type="text" placeholder="프리셋 이름" maxlength="20" />
-            <button id="btn-preset-save">💾 SAVE</button>
+            <input id="preset-name" type="text" placeholder="예: 마법사 사냥" maxlength="20" title="프리셋에 붙일 이름" />
+            <button id="btn-preset-save" title="현재 설정을 이 이름으로 저장 (이미 있으면 덮어쓰기)">💾 SAVE</button>
           </div>
         </div>
+        <p class="panel-help muted small">
+          저장되는 값: <b>최대 MP · WIS · 버프 · 위치/보너스 · 상태 · 목표 %</b><br/>
+          활용 예: <code>"법사 여관"</code>, <code>"명상만"</code>, <code>"전투중"</code>, <code>"다크엘프 50%"</code> 등 캐릭터·상황별 빠른 전환
+        </p>
         <div class="preset-list" id="preset-list">
           <span class="muted">저장된 프리셋이 없습니다.</span>
         </div>
