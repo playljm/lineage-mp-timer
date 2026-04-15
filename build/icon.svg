@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <radialGradient id="orb" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#7dffce" stop-opacity="0.95"/>
+      <stop offset="55%" stop-color="#00ff9f" stop-opacity="0.65"/>
+      <stop offset="100%" stop-color="#003824" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ring" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#7dffce"/>
+      <stop offset="100%" stop-color="#00b675"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- 배경 (라운드 사각형) -->
+  <rect x="0" y="0" width="256" height="256" rx="44" ry="44" fill="#05080a"/>
+
+  <!-- CRT 스캔라인 패턴 -->
+  <g opacity="0.08">
+    <line x1="0" y1="30" x2="256" y2="30" stroke="#00ff9f" stroke-width="1"/>
+    <line x1="0" y1="60" x2="256" y2="60" stroke="#00ff9f" stroke-width="1"/>
+    <line x1="0" y1="90" x2="256" y2="90" stroke="#00ff9f" stroke-width="1"/>
+    <line x1="0" y1="120" x2="256" y2="120" stroke="#00ff9f" stroke-width="1"/>
+    <line x1="0" y1="150" x2="256" y2="150" stroke="#00ff9f" stroke-width="1"/>
+    <line x1="0" y1="180" x2="256" y2="180" stroke="#00ff9f" stroke-width="1"/>
+    <line x1="0" y1="210" x2="256" y2="210" stroke="#00ff9f" stroke-width="1"/>
+    <line x1="0" y1="240" x2="256" y2="240" stroke="#00ff9f" stroke-width="1"/>
+  </g>
+
+  <!-- 외곽 링 (아크 형태로 게이지 느낌) -->
+  <circle cx="128" cy="128" r="104" fill="none" stroke="#1a2a22" stroke-width="6"/>
+  <path d="M 128 24 A 104 104 0 1 1 56 200" fill="none" stroke="url(#ring)"
+        stroke-width="6" stroke-linecap="round" filter="url(#glow)"/>
+
+  <!-- 중앙 마나 오브 -->
+  <circle cx="128" cy="128" r="74" fill="url(#orb)" filter="url(#glow)"/>
+  <circle cx="128" cy="128" r="74" fill="none" stroke="#00ff9f" stroke-width="1.5" opacity="0.4"/>
+
+  <!-- MP 글자 -->
+  <text x="128" y="152" font-family="Consolas, 'Courier New', monospace" font-size="72"
+        font-weight="900" text-anchor="middle" fill="#05080a"
+        style="letter-spacing: 2px">MP</text>
+
+  <!-- 하이라이트 글리프 (오브 반사) -->
+  <ellipse cx="104" cy="104" rx="22" ry="12" fill="#ffffff" opacity="0.25"/>
+
+  <!-- 코너 틱 마크 (RPG 게이지 느낌) -->
+  <g stroke="#00ff9f" stroke-width="3" stroke-linecap="round" opacity="0.7">
+    <line x1="128" y1="10" x2="128" y2="22"/>
+    <line x1="128" y1="234" x2="128" y2="246"/>
+    <line x1="10" y1="128" x2="22" y2="128"/>
+    <line x1="234" y1="128" x2="246" y2="128"/>
+  </g>
+</svg>

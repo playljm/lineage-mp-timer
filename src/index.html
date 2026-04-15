@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self';" />
+    <title>Lineage MP Timer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Share+Tech+Mono&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles/neon.css" />
+  </head>
+  <body>
+    <div class="scanlines"></div>
+
+    <header class="titlebar">
+      <div class="brand">
+        <span class="dot"></span>
+        <span class="title">LINEAGE · MP TIMER</span>
+      </div>
+      <div class="actions">
+        <button id="btn-pin" class="icon-btn" title="항상 위 (F1)">📌</button>
+        <button id="btn-tray" class="icon-btn" title="트레이로 숨기기 (F2)">⎯</button>
+        <button id="btn-quit" class="icon-btn close" title="종료">✕</button>
+      </div>
+    </header>
+
+    <main class="content">
+      <!-- MP 게이지 -->
+      <section class="panel gauge">
+        <div class="row between baseline">
+          <span class="label">MP</span>
+          <span class="mp-value">
+            <span id="mp-current">0</span>
+            <span class="sep">/</span>
+            <span id="mp-max">0</span>
+            <span class="mp-percent" id="mp-percent">0%</span>
+          </span>
+        </div>
+        <div class="bar" aria-hidden="true">
+          <div class="bar-fill" id="bar-fill"></div>
+          <div class="bar-scan"></div>
+        </div>
+      </section>
+
+      <!-- 카운트다운 -->
+      <section class="panel countdown" id="countdown-panel">
+        <div class="row countdown-row">
+          <div class="stat">
+            <span class="stat-label">⏱ REMAINING</span>
+            <span class="stat-value huge" id="time-remaining">--:--:--</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">⌛ COMPLETE AT</span>
+            <span class="stat-value" id="time-complete">--:--:--</span>
+          </div>
+        </div>
+        <div class="row">
+          <div class="stat">
+            <span class="stat-label">⚡ PER TICK</span>
+            <span class="stat-value" id="tick-recovery">+0 MP / 16s</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">◉ STATUS</span>
+            <span class="stat-value" id="run-status">IDLE</span>
+          </div>
+        </div>
+        <div class="breakdown" id="breakdown"></div>
+      </section>
+
+      <!-- 입력 -->
+      <section class="panel inputs">
+        <h3 class="panel-title">INPUTS</h3>
+        <div class="grid3">
+          <label class="field">
+            <span>현재 MP</span>
+            <input id="in-cur-mp" type="number" min="0" step="1" value="50" />
+          </label>
+          <label class="field">
+            <span>최대 MP</span>
+            <input id="in-max-mp" type="number" min="1" step="1" value="327" />
+          </label>
+          <label class="field">
+            <span>WIS</span>
+            <input id="in-wis" type="number" min="1" max="50" step="1" value="15" />
+          </label>
+        </div>
+
+        <h3 class="panel-title">BUFFS</h3>
+        <div class="buffs">
+          <label class="chk">
+            <input type="checkbox" id="chk-potion" checked />
+            <span>파란물약 <small>(+max(1, WIS-10))</small></span>
+          </label>
+          <label class="chk">
+            <input type="checkbox" id="chk-meditation" checked />
+            <span>메디테이션 <small>(+5, 정지 전용)</small></span>
+          </label>
+          <label class="chk">
+            <input type="checkbox" id="chk-staff" />
+            <span>크리스탈 스태프 <small>(+10)</small></span>
+          </label>
+        </div>
+
+        <h3 class="panel-title">LOCATION / STATE</h3>
+        <div class="grid2">
+          <label class="field">
+            <span>위치</span>
+            <select id="in-location">
+              <option value="field">일반 필드 (0)</option>
+              <option value="tavern" selected>여관 (+2)</option>
+              <option value="agate">아가타/기란 (+2)</option>
+              <option value="singing">싱잉 아일랜드 (+3)</option>
+              <option value="hidden_valley">히든 밸리 (+3)</option>
+              <option value="dungeon">법사 30Q 던전 (-3)</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>상태</span>
+            <select id="in-state">
+              <option value="standing" selected>정지 (x1, 16s)</option>
+              <option value="moving">이동 (x2, 32s)</option>
+              <option value="combat">전투 (x4, 64s)</option>
+              <option value="blocked">회복 불가 (배고픔/과중)</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <!-- 컨트롤 -->
+      <section class="panel controls">
+        <button id="btn-start" class="primary">▶ START</button>
+        <button id="btn-pause">⏸ PAUSE</button>
+        <button id="btn-reset">↺ RESET</button>
+      </section>
+
+      <!-- 프리셋 -->
+      <section class="panel presets">
+        <div class="row between baseline">
+          <h3 class="panel-title inline">PRESETS</h3>
+          <div class="preset-actions">
+            <input id="preset-name" type="text" placeholder="프리셋 이름" maxlength="20" />
+            <button id="btn-preset-save">💾 SAVE</button>
+          </div>
+        </div>
+        <div class="preset-list" id="preset-list">
+          <span class="muted">저장된 프리셋이 없습니다.</span>
+        </div>
+      </section>
+
+      <!-- 설정 -->
+      <section class="panel settings">
+        <h3 class="panel-title">SETTINGS</h3>
+        <label class="chk">
+          <input type="checkbox" id="chk-sound" checked />
+          <span>완료 시 사운드 재생</span>
+        </label>
+        <label class="chk">
+          <input type="checkbox" id="chk-toast" checked />
+          <span>완료 시 Windows 토스트</span>
+        </label>
+        <label class="chk">
+          <input type="checkbox" id="chk-minimize" />
+          <span>창 닫기 시 트레이로 최소화</span>
+        </label>
+      </section>
+
+      <footer class="footer">
+        <span class="muted">
+          단축키: Space 시작/정지 · R 리셋 · F1 항상 위 · F2 숨기기
+        </span>
+      </footer>
+    </main>
+
+    <script src="js/engine.js"></script>
+    <script src="js/storage.js"></script>
+    <script src="js/app.js"></script>
+  </body>
+</html>

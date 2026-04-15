@@ -1,0 +1,53 @@
+{
+  "name": "lineage-mp-timer",
+  "version": "1.0.0",
+  "description": "리니지 클래식 MP 자연회복 완충 시간 계산 + 알림 Electron 앱",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "electron-builder",
+    "build:portable": "electron-builder --win portable",
+    "test": "node test/engine.test.js"
+  },
+  "keywords": [
+    "lineage",
+    "lineage-classic",
+    "mp-timer",
+    "electron"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.lineage.mptimer",
+    "productName": "LineageMPTimer",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Lineage MP Timer"
+    },
+    "portable": {
+      "artifactName": "LineageMPTimer-portable-${version}.exe"
+    }
+  }
+}
