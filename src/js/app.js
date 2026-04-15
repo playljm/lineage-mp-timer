@@ -1,6 +1,8 @@
 /**
  * Lineage MP Timer — 렌더러 컨트롤러
- * - MP 타이머, 트래커, 핫키, 테마, 직접 입력 위치
+ * - 세그먼트 기반 실시간 MP 재계산 (실행 중 버프/위치/상태 변경 즉시 반영)
+ * - pause / resume 지원 (일시정지 후 START 다시 누르면 이어서)
+ * - Session Tracker, Hotkeys, Theme, Custom Location
  */
 (function () {
   'use strict';
@@ -29,7 +31,6 @@
     presetList: $('preset-list'),
     chkSound: $('chk-sound'), chkToast: $('chk-toast'), chkMinimize: $('chk-minimize'),
     btnResetWindow: $('btn-reset-window'),
-    // tracker
     trkLevelStart: $('track-level-start'), trkLevelNow: $('track-level-now'),
     trkLevelDiff: $('track-level-diff'),
     trkExpStart: $('track-exp-start'), trkExpNow: $('track-exp-now'),
@@ -40,20 +41,27 @@
     trkAdenaRate: $('tracker-adena-rate'), trkStatus: $('tracker-status'),
     btnTrackerStart: $('btn-tracker-start'), btnTrackerStop: $('btn-tracker-stop'),
     btnTrackerReset: $('btn-tracker-reset'), btnTrackerSnap: $('btn-tracker-snapshot'),
-    // hotkeys
     btnHotkeyReset: $('btn-hotkey-reset')
   };
 
   const THEMES = ['green', 'cyan', 'pink', 'yellow', 'purple', 'red'];
 
   const mpState = {
-    running: false, startedAt: null, simulatedMp: 0,
-    totalSeconds: 0, completedFired: false, tickTimerId: null
+    running: false,
+    paused: false,
+    startedAt: null,
+    startMp: 0,
+    accumulatedMp: 0,
+    segmentStartAt: null,
+    prevConfigSnapshot: null,
+    completedFired: false,
+    tickTimerId: null
   };
   let tracker = S.loadTracker();
   let hotkeys = S.loadHotkeys();
   let captureTarget = null;
 
+  // ========== Helpers ==========
   function $clampInt(v, min, max, dflt) {
     const n = parseInt(v, 10);
     if (!Number.isFinite(n)) return dflt;
@@ -102,29 +110,128 @@
     });
   }
 
-  // ========== MP Timer ==========
+  // ========== Segment-based Simulation ==========
+  function cloneCfg(cfg) { return JSON.parse(JSON.stringify(cfg)); }
+
+  function cfgAffectsRecovery(a, b) {
+    if (!a || !b) return true;
+    const keys = ['wis','useBluePotion','useMeditation','hasCrystalStaff',
+                  'location','customLocationBonus','state','maxMp','targetPct'];
+    return keys.some((k) => a[k] !== b[k]);
+  }
+
+  /** 이전 config 기준으로 현재까지의 MP를 누적에 반영 + 세그먼트 재시작 */
+  function commitSegment() {
+    if (!mpState.segmentStartAt || !mpState.prevConfigSnapshot) return;
+    const prev = mpState.prevConfigSnapshot;
+    const elapsedSec = Math.max(0, (Date.now() - mpState.segmentStartAt) / 1000);
+    if (prev.state !== 'blocked') {
+      const recovery = E.calculateTickRecovery(prev);
+      const interval = E.calculateTickInterval(prev.state);
+      if (interval > 0 && recovery > 0) {
+        const ticks = Math.floor(elapsedSec / interval);
+        mpState.accumulatedMp += ticks * recovery;
+      }
+    }
+    mpState.segmentStartAt = Date.now();
+  }
+
+  /** 실행 중 config 변경 시 즉시 호출 */
+  function onConfigChangedWhileRunning() {
+    if (!mpState.running) return;
+    const newCfg = readMpConfig();
+    if (cfgAffectsRecovery(mpState.prevConfigSnapshot, newCfg)) {
+      commitSegment();
+      mpState.prevConfigSnapshot = cloneCfg(newCfg);
+    }
+    tickMp();
+  }
+
+  function getSimulatedMp(cfg) {
+    // 시작되지 않았으면 입력값 그대로
+    if (!mpState.startedAt) return cfg.curMp;
+    let segMp = 0;
+    if (mpState.running && mpState.segmentStartAt && mpState.prevConfigSnapshot) {
+      const prev = mpState.prevConfigSnapshot;
+      if (prev.state !== 'blocked') {
+        const segElapsed = Math.max(0, (Date.now() - mpState.segmentStartAt) / 1000);
+        const recovery = E.calculateTickRecovery(prev);
+        const interval = E.calculateTickInterval(prev.state);
+        if (interval > 0 && recovery > 0) {
+          const segTicks = Math.floor(segElapsed / interval);
+          segMp = segTicks * recovery;
+        }
+      }
+    }
+    return Math.min(cfg.maxMp, mpState.startMp + mpState.accumulatedMp + segMp);
+  }
+
+  // ========== Render ==========
   function renderAll() {
     const cfg = readMpConfig();
     const target = effectiveTargetMp(cfg);
-    const total = E.calculateFullMpTime(cfg.curMp, target, cfg);
-    mpState.totalSeconds = total;
-    renderGauge(cfg.curMp, cfg.maxMp, target);
+    // running/paused 상태에서는 status 건드리지 않음 (각 함수가 관리)
     renderBreakdown(cfg);
     renderTickInfo(cfg);
-    renderTimes(total);
-    if (!mpState.running) {
-      if (cfg.curMp >= target) {
-        const label = cfg.targetPct >= 100 ? 'FULL' : `${cfg.targetPct}%`;
-        setStatus('done', label);
-        document.body.classList.add('state-done');
-      }
-      else if (cfg.state === 'blocked') { setStatus('blocked', 'BLOCKED'); document.body.classList.remove('state-done'); }
-      else { setStatus('idle', 'IDLE'); document.body.classList.remove('state-done'); }
+    if (mpState.running) {
+      tickMp();
+      return;
+    }
+    if (mpState.paused) {
+      // paused 시 현재 누적만 반영, 시간 표시는 그대로
+      const simCur = Math.min(cfg.maxMp, mpState.startMp + mpState.accumulatedMp);
+      renderGauge(simCur, cfg.maxMp, target);
+      updatePausedRemaining(cfg, simCur, target);
+      return;
+    }
+    // idle 경로
+    const total = E.calculateFullMpTime(cfg.curMp, target, cfg);
+    renderGauge(cfg.curMp, cfg.maxMp, target);
+    renderIdleTimes(total, cfg);
+    if (cfg.curMp >= target) {
+      const label = cfg.targetPct >= 100 ? 'FULL' : `${cfg.targetPct}%`;
+      setStatus('done', label);
+      document.body.classList.add('state-done');
+    } else if (cfg.state === 'blocked') {
+      setStatus('blocked', 'BLOCKED');
+      document.body.classList.remove('state-done');
+    } else {
+      setStatus('idle', 'IDLE');
+      document.body.classList.remove('state-done');
     }
   }
+
+  function updatePausedRemaining(cfg, simCur, target) {
+    const recovery = E.calculateTickRecovery(cfg);
+    const interval = E.calculateTickInterval(cfg.state);
+    const needed = Math.max(0, target - simCur);
+    let remaining = 0;
+    if (needed > 0) {
+      if (cfg.state === 'blocked' || recovery <= 0 || interval <= 0) remaining = Infinity;
+      else remaining = Math.ceil(needed / recovery) * interval;
+    }
+    if (Number.isFinite(remaining)) {
+      dom.timeRemaining.textContent = E.formatDuration(remaining);
+      dom.timeComplete.textContent = E.formatCompletionTime(remaining);
+    } else {
+      dom.timeRemaining.textContent = '∞';
+      dom.timeComplete.textContent = '--:--:--';
+    }
+  }
+
+  function renderIdleTimes(total, cfg) {
+    if (!Number.isFinite(total)) {
+      dom.timeRemaining.textContent = '∞';
+      dom.timeComplete.textContent = '--:--:--';
+      return;
+    }
+    dom.timeRemaining.textContent = E.formatDuration(total);
+    dom.timeComplete.textContent = E.formatCompletionTime(total);
+  }
+
   function renderGauge(cur, max, target) {
     const pct = max > 0 ? Math.max(0, Math.min(100, (cur / max) * 100)) : 0;
-    dom.mpCurrent.textContent = cur;
+    dom.mpCurrent.textContent = Math.round(cur);
     dom.mpMax.textContent = max;
     dom.mpPercent.textContent = `${pct.toFixed(1)}%`;
     dom.barFill.style.width = `${pct}%`;
@@ -135,18 +242,6 @@
     const recovery = E.calculateTickRecovery(cfg);
     const interval = E.calculateTickInterval(cfg.state);
     dom.tickRecovery.textContent = cfg.state === 'blocked' ? '회복 불가' : `+${recovery} MP / ${interval}s`;
-  }
-  function renderTimes(total) {
-    if (!Number.isFinite(total)) {
-      dom.timeRemaining.textContent = '∞';
-      dom.timeComplete.textContent = '--:--:--';
-      return;
-    }
-    const remaining = mpState.running
-      ? Math.max(0, mpState.totalSeconds - Math.floor((Date.now() - mpState.startedAt) / 1000))
-      : total;
-    dom.timeRemaining.textContent = E.formatDuration(remaining);
-    dom.timeComplete.textContent = E.formatCompletionTime(remaining);
   }
   function renderBreakdown(cfg) {
     if (cfg.state === 'blocked') {
@@ -164,58 +259,106 @@
   }
   function setStatus(kind, label) { dom.runStatus.className = kind; dom.runStatus.textContent = label; }
 
+  // ========== Timer ==========
   function startTimer() {
     const cfg = readMpConfig();
     const target = effectiveTargetMp(cfg);
-    const total = E.calculateFullMpTime(cfg.curMp, target, cfg);
-    if (!Number.isFinite(total)) { flashHint('회복 불가 상태입니다.'); return; }
-    if (total <= 0) { flashHint(cfg.targetPct >= 100 ? '이미 MP가 가득 찼습니다.' : `이미 목표 ${cfg.targetPct}% 도달.`); return; }
+    if (cfg.state === 'blocked') { flashHint('회복 불가 상태입니다.'); return; }
+
+    const isResume = mpState.paused && !mpState.completedFired;
+
+    if (!isResume) {
+      // 이미 목표 도달 상태면 시작 안 함
+      if (cfg.curMp >= target) {
+        flashHint(cfg.targetPct >= 100 ? '이미 MP가 가득 찼습니다.' : `이미 목표 ${cfg.targetPct}% 도달.`);
+        return;
+      }
+      mpState.startMp = cfg.curMp;
+      mpState.accumulatedMp = 0;
+      mpState.startedAt = Date.now();
+      mpState.completedFired = false;
+    } else {
+      // Resume: 현재 누적 기준 이미 목표 초과인지 체크
+      const simCur = Math.min(cfg.maxMp, mpState.startMp + mpState.accumulatedMp);
+      if (simCur >= target) {
+        flashHint('이미 목표 도달. 리셋 후 새로 시작하세요.');
+        return;
+      }
+    }
+    mpState.segmentStartAt = Date.now();
+    mpState.prevConfigSnapshot = cloneCfg(cfg);
     mpState.running = true;
-    mpState.startedAt = Date.now();
-    mpState.simulatedMp = cfg.curMp;
-    mpState.totalSeconds = total;
-    mpState.completedFired = false;
+    mpState.paused = false;
     document.body.classList.remove('state-done');
     setStatus('running', 'RUNNING');
+
     if (mpState.tickTimerId) clearInterval(mpState.tickTimerId);
     mpState.tickTimerId = setInterval(tickMp, 1000);
     tickMp();
   }
+
   function pauseTimer() {
     if (!mpState.running) return;
+    commitSegment();
     if (mpState.tickTimerId) { clearInterval(mpState.tickTimerId); mpState.tickTimerId = null; }
     mpState.running = false;
+    mpState.paused = true;
     setStatus('paused', 'PAUSED');
+    const cfg = readMpConfig();
+    const target = effectiveTargetMp(cfg);
+    const simCur = Math.min(cfg.maxMp, mpState.startMp + mpState.accumulatedMp);
+    renderGauge(simCur, cfg.maxMp, target);
+    updatePausedRemaining(cfg, simCur, target);
   }
+
   function resetTimer() {
     if (mpState.tickTimerId) { clearInterval(mpState.tickTimerId); mpState.tickTimerId = null; }
     mpState.running = false;
+    mpState.paused = false;
     mpState.startedAt = null;
-    mpState.simulatedMp = 0;
-    mpState.totalSeconds = 0;
+    mpState.startMp = 0;
+    mpState.accumulatedMp = 0;
+    mpState.segmentStartAt = null;
+    mpState.prevConfigSnapshot = null;
     mpState.completedFired = false;
     document.body.classList.remove('state-done');
     renderAll();
   }
+
   function tickMp() {
     const cfg = readMpConfig();
     const target = effectiveTargetMp(cfg);
-    const elapsed = Math.floor((Date.now() - mpState.startedAt) / 1000);
-    const remaining = Math.max(0, mpState.totalSeconds - elapsed);
+    const simCur = getSimulatedMp(cfg);
     const recovery = E.calculateTickRecovery(cfg);
     const interval = E.calculateTickInterval(cfg.state);
-    const ticksElapsed = Math.floor(elapsed / interval);
-    const simulatedCur = Math.min(cfg.maxMp, cfg.curMp + ticksElapsed * recovery);
-    renderGauge(simulatedCur, cfg.maxMp, target);
-    dom.timeRemaining.textContent = E.formatDuration(remaining);
-    dom.timeComplete.textContent = E.formatCompletionTime(remaining);
-    if (remaining <= 0 || simulatedCur >= target) onComplete(cfg);
+
+    const needed = Math.max(0, target - simCur);
+    let remaining = 0;
+    if (needed > 0) {
+      if (cfg.state === 'blocked' || recovery <= 0 || interval <= 0) remaining = Infinity;
+      else remaining = Math.ceil(needed / recovery) * interval;
+    }
+
+    renderGauge(simCur, cfg.maxMp, target);
+    if (Number.isFinite(remaining)) {
+      dom.timeRemaining.textContent = E.formatDuration(remaining);
+      dom.timeComplete.textContent = E.formatCompletionTime(remaining);
+    } else {
+      dom.timeRemaining.textContent = '∞';
+      dom.timeComplete.textContent = '--:--:--';
+    }
+    renderTickInfo(cfg);
+    renderBreakdown(cfg);
+
+    if (simCur >= target) onComplete(cfg);
   }
+
   function onComplete(cfg) {
     if (mpState.completedFired) return;
     mpState.completedFired = true;
     if (mpState.tickTimerId) { clearInterval(mpState.tickTimerId); mpState.tickTimerId = null; }
     mpState.running = false;
+    mpState.paused = false;
     document.body.classList.add('state-done');
     const target = effectiveTargetMp(cfg);
     const isFull = cfg.targetPct >= 100;
@@ -265,13 +408,9 @@
     setTimeout(() => renderAll(), 1500);
   }
 
-  // ========== Custom Location Visibility ==========
+  // ========== Custom Location ==========
   function updateCustomLocationVisibility() {
-    if (dom.inLocation.value === 'custom') {
-      dom.customLocationWrap.style.display = '';
-    } else {
-      dom.customLocationWrap.style.display = 'none';
-    }
+    dom.customLocationWrap.style.display = (dom.inLocation.value === 'custom') ? '' : 'none';
   }
 
   // ========== Theme ==========
@@ -311,7 +450,9 @@
     if (preset.state) dom.inState.value = preset.state;
     if (preset.targetPct != null) dom.inTargetPct.value = preset.targetPct;
     updateCustomLocationVisibility();
-    renderAll();
+    updateQuickPctActive();
+    if (mpState.running) onConfigChangedWhileRunning();
+    else renderAll();
   }
   function currentPreset(name) {
     const cfg = readMpConfig();
@@ -482,7 +623,7 @@
           if (row) {
             const btn = row.querySelector('[data-hk-bind]');
             btn.classList.add('conflict');
-            btn.title = `등록 실패 (${f.reason}). 다른 앱과 충돌하거나 사용 불가한 키.`;
+            btn.title = `등록 실패 (${f.reason}).`;
           }
         }
       }
@@ -494,7 +635,7 @@
     button.classList.add('capturing');
     button.classList.remove('conflict');
     button.textContent = '키 입력...';
-    button.title = '새 키를 누르세요. Esc=취소, Backspace=비우기';
+    button.title = 'Esc=취소, Backspace=비우기';
     document.addEventListener('keydown', captureHandler, true);
   }
   function endHotkeyCapture(save = true) {
@@ -555,17 +696,29 @@
   }
 
   // ========== Events ==========
+  function onInputChanged(k) {
+    if (mpState.running) onConfigChangedWhileRunning();
+    else renderAll();
+    saveLast();
+    if (k === 'inTargetPct') updateQuickPctActive();
+  }
+
   function bindEvents() {
     ['inCurMp','inMaxMp','inWis','inLocationCustom','inState','inTargetPct'].forEach((k) => {
-      dom[k].addEventListener('input', () => {
-        if (!mpState.running) renderAll();
-        saveLast();
-        if (k === 'inTargetPct') updateQuickPctActive();
-      });
-      dom[k].addEventListener('change', () => { if (!mpState.running) renderAll(); saveLast(); });
+      dom[k].addEventListener('input', () => onInputChanged(k));
+      dom[k].addEventListener('change', () => onInputChanged(k));
     });
 
-    // 숫자 입력 편의성 — Enter=Start, Focus=전체선택
+    dom.inLocation.addEventListener('change', () => {
+      updateCustomLocationVisibility();
+      onInputChanged('inLocation');
+    });
+
+    ['chkPotion','chkMeditation','chkStaff'].forEach((k) => {
+      dom[k].addEventListener('change', () => onInputChanged(k));
+    });
+
+    // 숫자 입력 편의성
     const numericInputs = ['inCurMp','inMaxMp','inWis','inLocationCustom','inTargetPct',
       'trkLevelStart','trkLevelNow','trkExpStart','trkExpNow','trkAdenaStart','trkAdenaNow'];
     numericInputs.forEach((k) => {
@@ -576,7 +729,6 @@
         if (e.key === 'Enter') {
           e.preventDefault();
           el.blur();
-          // MP 관련 입력이면 타이머 시작/정지 토글
           if (['inCurMp','inMaxMp','inWis','inLocationCustom','inTargetPct'].includes(k)) {
             dom.btnStart.click();
           }
@@ -590,18 +742,8 @@
         const pct = parseInt(btn.getAttribute('data-pct'), 10);
         if (!Number.isFinite(pct)) return;
         dom.inTargetPct.value = pct;
-        if (!mpState.running) renderAll();
-        saveLast();
-        updateQuickPctActive();
+        onInputChanged('inTargetPct');
       });
-    });
-    dom.inLocation.addEventListener('change', () => {
-      updateCustomLocationVisibility();
-      if (!mpState.running) renderAll();
-      saveLast();
-    });
-    ['chkPotion','chkMeditation','chkStaff'].forEach((k) => {
-      dom[k].addEventListener('change', () => { if (!mpState.running) renderAll(); saveLast(); });
     });
 
     dom.btnStart.addEventListener('click', () => {
@@ -686,7 +828,6 @@
       });
     });
 
-    // 윈도우 단축키
     document.addEventListener('keydown', (e) => {
       if (captureTarget) return;
       const tag = (e.target.tagName || '').toLowerCase();
