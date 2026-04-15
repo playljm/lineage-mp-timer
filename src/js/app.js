@@ -95,6 +95,13 @@
     return Math.max(1, Math.min(max, t));
   }
 
+  function updateQuickPctActive() {
+    const pct = parseInt(dom.inTargetPct.value, 10);
+    document.querySelectorAll('.quick-pct button').forEach((b) => {
+      b.classList.toggle('active', parseInt(b.getAttribute('data-pct'), 10) === pct);
+    });
+  }
+
   // ========== MP Timer ==========
   function renderAll() {
     const cfg = readMpConfig();
@@ -550,8 +557,43 @@
   // ========== Events ==========
   function bindEvents() {
     ['inCurMp','inMaxMp','inWis','inLocationCustom','inState','inTargetPct'].forEach((k) => {
-      dom[k].addEventListener('input', () => { if (!mpState.running) renderAll(); saveLast(); });
+      dom[k].addEventListener('input', () => {
+        if (!mpState.running) renderAll();
+        saveLast();
+        if (k === 'inTargetPct') updateQuickPctActive();
+      });
       dom[k].addEventListener('change', () => { if (!mpState.running) renderAll(); saveLast(); });
+    });
+
+    // 숫자 입력 편의성 — Enter=Start, Focus=전체선택
+    const numericInputs = ['inCurMp','inMaxMp','inWis','inLocationCustom','inTargetPct',
+      'trkLevelStart','trkLevelNow','trkExpStart','trkExpNow','trkAdenaStart','trkAdenaNow'];
+    numericInputs.forEach((k) => {
+      const el = dom[k];
+      if (!el) return;
+      el.addEventListener('focus', () => { setTimeout(() => el.select(), 0); });
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          el.blur();
+          // MP 관련 입력이면 타이머 시작/정지 토글
+          if (['inCurMp','inMaxMp','inWis','inLocationCustom','inTargetPct'].includes(k)) {
+            dom.btnStart.click();
+          }
+        }
+      });
+    });
+
+    // 목표 % 빠른 선택
+    document.querySelectorAll('.quick-pct button').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const pct = parseInt(btn.getAttribute('data-pct'), 10);
+        if (!Number.isFinite(pct)) return;
+        dom.inTargetPct.value = pct;
+        if (!mpState.running) renderAll();
+        saveLast();
+        updateQuickPctActive();
+      });
     });
     dom.inLocation.addEventListener('change', () => {
       updateCustomLocationVisibility();
@@ -717,6 +759,7 @@
     updateCustomLocationVisibility();
     bindEvents();
     renderPresets();
+    updateQuickPctActive();
     renderAll();
     renderTracker();
     applyGlobalHotkeys();

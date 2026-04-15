@@ -91,8 +91,15 @@
         </div>
 
         <label class="field" style="margin-bottom: 12px;">
-          <span>🎯 목표 MP % <small style="color:var(--muted);text-transform:none;letter-spacing:0;">— 이 % 도달 시 알림 (기본 100)</small></span>
-          <input id="in-target-pct" type="number" min="1" max="100" step="1" value="100" />
+          <span>🎯 목표 MP % <small style="color:var(--muted);text-transform:none;letter-spacing:0;">— 이 % 도달 시 알림</small></span>
+          <div class="input-with-buttons">
+            <input id="in-target-pct" type="number" min="1" max="100" step="1" value="100" />
+            <div class="quick-pct">
+              <button type="button" data-pct="50">50</button>
+              <button type="button" data-pct="80">80</button>
+              <button type="button" data-pct="100">100</button>
+            </div>
+          </div>
         </label>
 
         <h3 class="panel-title">BUFFS</h3>
