@@ -592,7 +592,7 @@
     const dAdena = t.current.adena - t.start.adena;
     dom.trkLevelDiff.textContent = `${dLevel >= 0 ? '+' : ''}${dLevel}`;
     dom.trkLevelDiff.classList.toggle('negative', dLevel < 0);
-    dom.trkExpDiff.textContent = `${dExp >= 0 ? '+' : ''}${dExp.toFixed(1)}%`;
+    dom.trkExpDiff.textContent = `${dExp >= 0 ? '+' : ''}${dExp.toFixed(4)}%`;
     dom.trkExpDiff.classList.toggle('negative', dExp < 0);
     dom.trkAdenaDiff.textContent = `${dAdena >= 0 ? '+' : ''}${formatNumber(dAdena)}`;
     dom.trkAdenaDiff.classList.toggle('negative', dAdena < 0);
@@ -604,13 +604,13 @@
     // 너무 짧은 경과 시 분모가 작아 rate가 비현실적으로 크게 나와 혼란 → 30초 이후부터 표시
     if (elapsedSec >= 30) {
       const hours = elapsedSec / 3600;
-      dom.trkExpRate.textContent = `${dExp >= 0 ? '+' : ''}${(dExp / hours).toFixed(1)}%/h`;
+      dom.trkExpRate.textContent = `${dExp >= 0 ? '+' : ''}${(dExp / hours).toFixed(4)}%/h`;
       dom.trkAdenaRate.textContent = `${dAdena >= 0 ? '+' : ''}${formatNumber(dAdena / hours)}/h`;
     } else if (tracker.active && elapsedSec > 0) {
       dom.trkExpRate.textContent = '측정 중...';
       dom.trkAdenaRate.textContent = '측정 중...';
     } else {
-      dom.trkExpRate.textContent = '+0%/h';
+      dom.trkExpRate.textContent = '+0.0000%/h';
       dom.trkAdenaRate.textContent = '+0/h';
     }
   }
@@ -965,6 +965,16 @@
     renderAll();
     renderTracker();
     applyGlobalHotkeys();
+
+    // 전역 드래그&드롭 차단 — 숫자 입력 값이 드래그로 이동되는 것 방지
+    window.addEventListener('dragstart', (e) => {
+      const tag = (e.target && e.target.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'select' || tag === 'textarea') {
+        e.preventDefault();
+      }
+    });
+    window.addEventListener('dragover', (e) => e.preventDefault());
+    window.addEventListener('drop', (e) => e.preventDefault());
     setInterval(() => {
       if (!mpState.running) renderAll();
       renderTracker();
