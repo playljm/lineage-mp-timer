@@ -72,6 +72,42 @@
     if (!Number.isFinite(n)) return dflt;
     return Math.max(min, Math.min(max, n));
   }
+
+  /**
+   * 경험치 % 입력 파싱: 소수점 없이 정수만 입력하면 마지막 4자리를 소수부로 자동 변환.
+   *   "874564" → 87.4564
+   *   "54321"  → 5.4321
+   *   "4321"   → 0.4321
+   *   "21"     → 0.0021
+   *   "25.4321" (소수점 직접 입력) → 25.4321 그대로
+   *   "" or invalid → 0
+   * 반환은 0~100 범위로 클램프된 숫자.
+   */
+  function parseExpPct(raw) {
+    if (raw == null) return 0;
+    const s = String(raw).trim();
+    if (!s) return 0;
+    // 사용자가 직접 소수점을 찍은 경우: 그대로 파싱
+    if (s.includes('.')) {
+      const n = parseFloat(s);
+      if (!Number.isFinite(n)) return 0;
+      return Math.max(0, Math.min(100, n));
+    }
+    // 정수만 입력: 숫자 외 제거 후 마지막 4자리를 소수부로
+    const digits = s.replace(/[^0-9]/g, '');
+    if (!digits) return 0;
+    const padded = digits.padStart(5, '0'); // 최소 5자리 확보 (앞=정수부, 뒤4=소수부)
+    const intPart = padded.slice(0, -4);
+    const decPart = padded.slice(-4);
+    const n = parseFloat(`${parseInt(intPart, 10)}.${decPart}`);
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(0, Math.min(100, n));
+  }
+
+  function formatExpPct(n) {
+    const v = Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0;
+    return v.toFixed(4);
+  }
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -527,12 +563,12 @@
     return {
       start: {
         level: $clampInt(dom.trkLevelStart.value, 1, 99, 1),
-        exp: $clampFloat(dom.trkExpStart.value, 0, 100, 0),
+        exp: parseExpPct(dom.trkExpStart.value),
         adena: $clampInt(dom.trkAdenaStart.value, 0, 9999999999, 0)
       },
       current: {
         level: $clampInt(dom.trkLevelNow.value, 1, 99, 1),
-        exp: $clampFloat(dom.trkExpNow.value, 0, 100, 0),
+        exp: parseExpPct(dom.trkExpNow.value),
         adena: $clampInt(dom.trkAdenaNow.value, 0, 9999999999, 0)
       }
     };
@@ -617,12 +653,12 @@
   function restoreTrackerInputs() {
     if (tracker.start) {
       dom.trkLevelStart.value = tracker.start.level ?? 1;
-      dom.trkExpStart.value = tracker.start.exp ?? 0;
+      dom.trkExpStart.value = formatExpPct(tracker.start.exp ?? 0);
       dom.trkAdenaStart.value = tracker.start.adena ?? 0;
     }
     if (tracker.current) {
       dom.trkLevelNow.value = tracker.current.level ?? 1;
-      dom.trkExpNow.value = tracker.current.exp ?? 0;
+      dom.trkExpNow.value = formatExpPct(tracker.current.exp ?? 0);
       dom.trkAdenaNow.value = tracker.current.adena ?? 0;
     }
     setTrackerStatus(tracker.active ? 'RUNNING' : 'IDLE', tracker.active ? 'running' : '');
@@ -864,6 +900,23 @@
     ].forEach((k) => {
       dom[k].addEventListener('input', () => { renderTracker(); saveTrackerCurrent(); });
       dom[k].addEventListener('change', () => { renderTracker(); saveTrackerCurrent(); });
+    });
+
+    // 경험치 % 전용: blur 시 자동 소수점 포맷 ("874564" → "87.4564")
+    ['trkExpStart','trkExpNow'].forEach((k) => {
+      dom[k].addEventListener('blur', () => {
+        const parsed = parseExpPct(dom[k].value);
+        dom[k].value = formatExpPct(parsed);
+        renderTracker();
+        saveTrackerCurrent();
+      });
+      dom[k].addEventListener('keydown', (e) => {
+        // Enter 시 즉시 포맷 적용 (타이머 시작 트리거는 기존 numericInputs에 포함 안 됨 — 여기서 수동 처리)
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          dom[k].blur();
+        }
+      });
     });
     dom.btnTrackerStart.addEventListener('click', startTracker);
     dom.btnTrackerStop.addEventListener('click', stopTracker);
