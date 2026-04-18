@@ -153,6 +153,34 @@
         <button id="btn-reset">↺ RESET</button>
       </section>
 
+      <!-- 사냥 획득 아이템 판매 계산 -->
+      <section class="panel items">
+        <div class="row between baseline">
+          <h3 class="panel-title inline">ITEM DROPS · 사냥 획득 아이템 판매</h3>
+          <button id="btn-items-apply" class="primary-small" title="합계를 현재 아데나에 더하고 수량 리셋">💰 아데나에 더하기</button>
+        </div>
+        <p class="panel-help muted small">
+          판매 가격과 드랍 수량을 입력하면 <b>합계가 자동 계산</b>됩니다. 아이템 이름·가격도 직접 수정 가능.
+        </p>
+        <div class="items-header">
+          <span>아이템</span>
+          <span>수량</span>
+          <span>단가</span>
+          <span>소계</span>
+          <span></span>
+        </div>
+        <div class="items-list" id="items-list"></div>
+        <div class="items-footer">
+          <button id="btn-item-add" class="ghost-btn">＋ 아이템 추가</button>
+          <button id="btn-items-reset" class="ghost-btn">↺ 수량 리셋</button>
+          <div class="items-total">
+            <span class="stat-label">합계</span>
+            <span id="items-total-value">0</span>
+            <span class="items-unit">원</span>
+          </div>
+        </div>
+      </section>
+
       <!-- 프리셋 -->
       <section class="panel presets">
         <div class="row between baseline">

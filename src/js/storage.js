@@ -1,5 +1,5 @@
 /**
- * 프리셋 + 설정 + 트래커 + 핫키 저장 (localStorage)
+ * 프리셋 + 설정 + 트래커 + 핫키 + 아이템(사냥 획득) 저장 (localStorage)
  */
 (function (global) {
   'use strict';
@@ -9,6 +9,7 @@
   const LAST_KEY = 'lmp.last.v1';
   const TRACKER_KEY = 'lmp.tracker.v1';
   const HOTKEY_KEY = 'lmp.hotkeys.v1';
+  const ITEMS_KEY = 'lmp.items.v1';
 
   const DEFAULT_HOTKEYS = {
     alwaysOnTop: { accel: 'F1', enabled: true, scope: 'global', label: '항상 위' },
@@ -16,6 +17,13 @@
     startPause:  { accel: 'Space', enabled: true, scope: 'window', label: '타이머 시작/정지' },
     reset:       { accel: 'R', enabled: true, scope: 'window', label: '타이머 리셋' }
   };
+
+  const DEFAULT_ITEMS = [
+    { id: 'it-minil',    name: '미늘갑옷',       price: 10000, qty: 0 },
+    { id: 'it-magic',    name: '마력의 지팡이',   price: 4500,  qty: 0 },
+    { id: 'it-greataxe', name: '대형 도끼',       price: 6500,  qty: 0 },
+    { id: 'it-bronze',   name: '청동판금갑옷',    price: 8000,  qty: 0 }
+  ];
 
   function safeParse(raw, fallback) {
     try {
@@ -77,7 +85,6 @@
     const stored = safeParse(localStorage.getItem(HOTKEY_KEY), null);
     const defaults = JSON.parse(JSON.stringify(DEFAULT_HOTKEYS));
     if (!stored) return defaults;
-    // merge — 새 default key가 추가됐을 때 보강
     for (const k of Object.keys(defaults)) {
       if (stored[k]) defaults[k] = { ...defaults[k], ...stored[k] };
     }
@@ -88,11 +95,23 @@
   }
   function defaultHotkeys() { return JSON.parse(JSON.stringify(DEFAULT_HOTKEYS)); }
 
+  // ===== Items (사냥 획득 아이템) =====
+  function loadItems() {
+    const stored = safeParse(localStorage.getItem(ITEMS_KEY), null);
+    if (stored && Array.isArray(stored) && stored.length > 0) return stored;
+    return defaultItems();
+  }
+  function saveItems(items) {
+    try { localStorage.setItem(ITEMS_KEY, JSON.stringify(items)); } catch (_) {}
+  }
+  function defaultItems() { return JSON.parse(JSON.stringify(DEFAULT_ITEMS)); }
+
   global.MpStorage = {
     loadPresets, savePresets, addPreset, removePreset,
     loadSettings, saveSettings,
     loadLast, saveLast,
     loadTracker, saveTracker,
-    loadHotkeys, saveHotkeys, defaultHotkeys
+    loadHotkeys, saveHotkeys, defaultHotkeys,
+    loadItems, saveItems, defaultItems
   };
 })(window);

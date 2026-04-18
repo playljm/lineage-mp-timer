@@ -654,6 +654,128 @@ body {
 
 .preset-actions button:hover { background: var(--neon-soft); }
 
+/* ========== ITEM DROPS (사냥 획득) ========== */
+.items-header, .item-row {
+  display: grid;
+  grid-template-columns: 1.3fr 58px 80px 86px 26px;
+  gap: 6px;
+  align-items: center;
+}
+.items-header {
+  margin-top: 10px;
+  padding-bottom: 4px;
+  border-bottom: 1px dashed var(--border);
+}
+.items-header span {
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  text-align: right;
+}
+.items-header span:first-child { text-align: left; }
+.items-list { margin-top: 4px; }
+.item-row {
+  margin-bottom: 4px;
+}
+.item-row input {
+  background: var(--bg-panel-alt);
+  color: var(--neon);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  padding: 5px 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+  transition: all 0.15s ease;
+  min-width: 0;
+}
+.item-row input.item-name { color: var(--text); text-align: left; }
+.item-row input.item-qty,
+.item-row input.item-price { text-align: right; }
+.item-row input:focus {
+  border-color: var(--neon);
+  box-shadow: var(--shadow-neon);
+}
+.item-subtotal {
+  color: var(--neon);
+  font-weight: 700;
+  text-align: right;
+  font-size: 12px;
+  text-shadow: 0 0 4px var(--neon-soft);
+  padding-right: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.item-del {
+  width: 26px;
+  height: 26px;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.item-del:hover {
+  color: var(--red);
+  border-color: var(--red);
+  background: rgba(255, 51, 85, 0.1);
+}
+.items-footer {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+.items-footer .ghost-btn {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 6px 14px;
+  margin-top: 0;
+}
+.items-total {
+  margin-left: auto;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.items-total .stat-label { margin-right: 4px; }
+#items-total-value {
+  color: var(--neon);
+  font-weight: 700;
+  font-size: 18px;
+  font-family: var(--font-mono);
+  text-shadow: 0 0 6px var(--neon-soft);
+  letter-spacing: 0.02em;
+}
+.items-unit {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+#btn-items-apply.primary-small {
+  background: linear-gradient(180deg, var(--neon-soft), rgba(0, 0, 0, 0));
+  color: var(--neon);
+  border: 1px solid var(--neon-dim);
+  border-radius: 3px;
+  padding: 5px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  letter-spacing: 0.1em;
+  box-shadow: 0 0 4px var(--neon-soft);
+  transition: all 0.15s ease;
+}
+#btn-items-apply.primary-small:hover {
+  background: var(--neon-soft);
+  box-shadow: 0 0 8px var(--neon-soft);
+}
+
 .panel-help {
   margin-top: 8px;
   padding: 8px 10px;

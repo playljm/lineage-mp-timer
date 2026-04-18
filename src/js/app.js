@@ -41,7 +41,13 @@
     trkAdenaRate: $('tracker-adena-rate'), trkStatus: $('tracker-status'),
     btnTrackerStart: $('btn-tracker-start'), btnTrackerStop: $('btn-tracker-stop'),
     btnTrackerReset: $('btn-tracker-reset'), btnTrackerSnap: $('btn-tracker-snapshot'),
-    btnHotkeyReset: $('btn-hotkey-reset')
+    btnHotkeyReset: $('btn-hotkey-reset'),
+    // items
+    itemsList: $('items-list'),
+    itemsTotal: $('items-total-value'),
+    btnItemsApply: $('btn-items-apply'),
+    btnItemAdd: $('btn-item-add'),
+    btnItemsReset: $('btn-items-reset')
   };
 
   const THEMES = ['green', 'cyan', 'pink', 'yellow', 'purple', 'red'];
@@ -59,7 +65,9 @@
   };
   let tracker = S.loadTracker();
   let hotkeys = S.loadHotkeys();
+  let items = S.loadItems();
   let captureTarget = null;
+  const expDebounce = { trkExpStart: null, trkExpNow: null };
 
   // ========== Helpers ==========
   function $clampInt(v, min, max, dflt) {
@@ -670,6 +678,105 @@
     S.saveTracker(tracker);
   }
 
+  // ========== Items (사냥 획득 아이템 판매 계산) ==========
+  function itemSubtotal(it) {
+    const qty = Math.max(0, Math.floor(Number(it.qty) || 0));
+    const price = Math.max(0, Math.floor(Number(it.price) || 0));
+    return qty * price;
+  }
+
+  function itemsGrandTotal() {
+    return items.reduce((sum, it) => sum + itemSubtotal(it), 0);
+  }
+
+  function renderItems() {
+    if (!dom.itemsList) return;
+    const html = items.map((it, idx) => `
+      <div class="item-row" data-idx="${idx}">
+        <input type="text" class="item-name" data-field="name" value="${escapeHtml(it.name || '')}" placeholder="아이템 이름" title="아이템 이름" />
+        <input type="number" class="item-qty" data-field="qty" min="0" step="1" value="${it.qty || 0}" title="드랍 수량" />
+        <input type="number" class="item-price" data-field="price" min="0" step="100" value="${it.price || 0}" title="판매 단가 (원)" />
+        <span class="item-subtotal" data-subtotal>${formatNumber(itemSubtotal(it))}</span>
+        <button class="item-del" title="아이템 제거">×</button>
+      </div>
+    `).join('');
+    dom.itemsList.innerHTML = html;
+    updateItemsTotal();
+  }
+
+  function updateItemsTotal() {
+    if (!dom.itemsTotal) return;
+    dom.itemsTotal.textContent = formatNumber(itemsGrandTotal());
+    // 각 행의 소계도 갱신
+    document.querySelectorAll('#items-list .item-row').forEach((row) => {
+      const idx = parseInt(row.getAttribute('data-idx'), 10);
+      const it = items[idx];
+      if (!it) return;
+      const subtotalEl = row.querySelector('[data-subtotal]');
+      if (subtotalEl) subtotalEl.textContent = formatNumber(itemSubtotal(it));
+    });
+  }
+
+  function onItemFieldChange(idx, field, value) {
+    const it = items[idx];
+    if (!it) return;
+    if (field === 'name') {
+      it.name = value;
+    } else if (field === 'qty') {
+      it.qty = Math.max(0, Math.floor(Number(value) || 0));
+    } else if (field === 'price') {
+      it.price = Math.max(0, Math.floor(Number(value) || 0));
+    }
+    S.saveItems(items);
+    updateItemsTotal();
+  }
+
+  function onItemDelete(idx) {
+    items.splice(idx, 1);
+    S.saveItems(items);
+    renderItems();
+  }
+
+  function onItemAdd() {
+    items.push({
+      id: 'it-custom-' + Date.now(),
+      name: '새 아이템',
+      price: 0,
+      qty: 0
+    });
+    S.saveItems(items);
+    renderItems();
+    // 새로 추가된 행의 이름 필드에 포커스
+    const rows = document.querySelectorAll('#items-list .item-row');
+    const last = rows[rows.length - 1];
+    if (last) {
+      const nameInput = last.querySelector('.item-name');
+      if (nameInput) { nameInput.focus(); nameInput.select(); }
+    }
+  }
+
+  function onItemsReset() {
+    items.forEach((it) => { it.qty = 0; });
+    S.saveItems(items);
+    renderItems();
+  }
+
+  function onItemsApplyToAdena() {
+    const total = itemsGrandTotal();
+    if (total <= 0) {
+      flashHint('합계가 0원입니다. 수량을 먼저 입력하세요.');
+      return;
+    }
+    const curAdena = $clampInt(dom.trkAdenaNow.value, 0, 9999999999, 0);
+    dom.trkAdenaNow.value = curAdena + total;
+    // 수량 리셋 (단가는 유지)
+    items.forEach((it) => { it.qty = 0; });
+    S.saveItems(items);
+    renderItems();
+    renderTracker();
+    saveTrackerCurrent();
+  }
+
   // ========== Hotkeys ==========
   function eventToAccelerator(e) {
     const parts = [];
@@ -902,19 +1009,33 @@
       dom[k].addEventListener('change', () => { renderTracker(); saveTrackerCurrent(); });
     });
 
-    // 경험치 % 전용: blur 시 자동 소수점 포맷 ("874564" → "87.4564")
+    // 경험치 % 자동 소수점 포맷 ("874564" → "87.4564")
+    //   · input 이벤트: 700ms 디바운스 후 자동 변환 (타이핑 멈추면 자동 포맷)
+    //   · blur / Enter / Tab: 즉시 변환
     ['trkExpStart','trkExpNow'].forEach((k) => {
-      dom[k].addEventListener('blur', () => {
+      const applyFormat = () => {
         const parsed = parseExpPct(dom[k].value);
-        dom[k].value = formatExpPct(parsed);
+        const formatted = formatExpPct(parsed);
+        if (dom[k].value !== formatted) {
+          dom[k].value = formatted;
+        }
         renderTracker();
         saveTrackerCurrent();
+      };
+      dom[k].addEventListener('input', () => {
+        clearTimeout(expDebounce[k]);
+        expDebounce[k] = setTimeout(applyFormat, 700);
+      });
+      dom[k].addEventListener('blur', () => {
+        clearTimeout(expDebounce[k]);
+        applyFormat();
       });
       dom[k].addEventListener('keydown', (e) => {
-        // Enter 시 즉시 포맷 적용 (타이머 시작 트리거는 기존 numericInputs에 포함 안 됨 — 여기서 수동 처리)
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          dom[k].blur();
+        if (e.key === 'Enter' || e.key === 'Tab') {
+          clearTimeout(expDebounce[k]);
+          if (e.key === 'Enter') e.preventDefault();
+          applyFormat();
+          if (e.key === 'Enter') dom[k].blur();
         }
       });
     });
@@ -922,6 +1043,28 @@
     dom.btnTrackerStop.addEventListener('click', stopTracker);
     dom.btnTrackerReset.addEventListener('click', resetTracker);
     dom.btnTrackerSnap.addEventListener('click', snapshotTracker);
+
+    // Items
+    if (dom.itemsList) {
+      dom.itemsList.addEventListener('input', (e) => {
+        const row = e.target.closest('.item-row');
+        if (!row) return;
+        const idx = parseInt(row.getAttribute('data-idx'), 10);
+        const field = e.target.getAttribute('data-field');
+        if (field) onItemFieldChange(idx, field, e.target.value);
+      });
+      dom.itemsList.addEventListener('click', (e) => {
+        if (e.target.classList.contains('item-del')) {
+          const row = e.target.closest('.item-row');
+          if (!row) return;
+          const idx = parseInt(row.getAttribute('data-idx'), 10);
+          onItemDelete(idx);
+        }
+      });
+    }
+    if (dom.btnItemAdd) dom.btnItemAdd.addEventListener('click', onItemAdd);
+    if (dom.btnItemsReset) dom.btnItemsReset.addEventListener('click', onItemsReset);
+    if (dom.btnItemsApply) dom.btnItemsApply.addEventListener('click', onItemsApplyToAdena);
 
     // Hotkeys
     document.querySelectorAll('.hotkey-row').forEach((row) => {
@@ -1014,6 +1157,7 @@
     updateCustomLocationVisibility();
     bindEvents();
     renderPresets();
+    renderItems();
     updateQuickPctActive();
     renderAll();
     renderTracker();
