@@ -27,7 +27,10 @@
   --text: #d8ffe8;
   --text-dim: #9dc4b3;
 
-  --font-mono: 'JetBrains Mono', 'Share Tech Mono', Consolas, monospace;
+  /* 영문: JetBrains Mono, 한글: Nanum Gothic Coding — 둘 다 모노스페이스로 일관성 유지 */
+  --font-mono: 'JetBrains Mono', 'Nanum Gothic Coding', 'Share Tech Mono', Consolas, monospace;
+  /* 본문 가독성용 한글 sans (설명 문구 등) */
+  --font-sans: 'Noto Sans KR', 'Nanum Gothic Coding', 'JetBrains Mono', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
   --radius: 6px;
 }
 
@@ -778,12 +781,19 @@ body {
 
 .panel-help {
   margin-top: 8px;
-  padding: 8px 10px;
+  padding: 10px 12px;
   background: rgba(0, 0, 0, 0.25);
   border-left: 2px solid var(--neon-dim);
   border-radius: 2px;
-  line-height: 1.6;
-  font-size: 10.5px;
+  line-height: 1.75;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  letter-spacing: 0;
+  color: var(--text-dim);
+}
+.panel-help b {
+  color: var(--neon);
+  font-weight: 700;
 }
 .panel-help code {
   background: var(--bg-panel-alt);
@@ -1064,7 +1074,10 @@ body.state-done .stat-value.huge {
 .hotkey-help {
   margin-top: 6px;
   margin-bottom: 10px;
-  line-height: 1.6;
+  line-height: 1.75;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  letter-spacing: 0;
 }
 
 .ghost-btn {
