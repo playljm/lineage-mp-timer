@@ -69,6 +69,123 @@
   let captureTarget = null;
   const expDebounce = { trkExpStart: null, trkExpNow: null };
 
+  // ========== Undo / Redo ==========
+  const UNDO_LIMIT = 50;
+  const undoStack = [];
+  const redoStack = [];
+  let undoDebounceTimer = null;
+  let lastSnapshotSerialized = null;
+  let applyingSnapshot = false;
+
+  function captureSnapshot() {
+    return {
+      curMp: dom.inCurMp.value,
+      maxMp: dom.inMaxMp.value,
+      wis: dom.inWis.value,
+      useBluePotion: dom.chkPotion.checked,
+      useMeditation: dom.chkMeditation.checked,
+      hasCrystalStaff: dom.chkStaff.checked,
+      location: dom.inLocation.value,
+      customLocation: dom.inLocationCustom.value,
+      state: dom.inState.value,
+      targetPct: dom.inTargetPct.value,
+      trkLevelStart: dom.trkLevelStart.value,
+      trkLevelNow: dom.trkLevelNow.value,
+      trkExpStart: dom.trkExpStart.value,
+      trkExpNow: dom.trkExpNow.value,
+      trkAdenaStart: dom.trkAdenaStart.value,
+      trkAdenaNow: dom.trkAdenaNow.value,
+      items: JSON.parse(JSON.stringify(items))
+    };
+  }
+
+  function applySnapshot(snap) {
+    if (!snap) return;
+    applyingSnapshot = true;
+    try {
+      dom.inCurMp.value = snap.curMp ?? dom.inCurMp.value;
+      dom.inMaxMp.value = snap.maxMp ?? dom.inMaxMp.value;
+      dom.inWis.value = snap.wis ?? dom.inWis.value;
+      dom.chkPotion.checked = !!snap.useBluePotion;
+      dom.chkMeditation.checked = !!snap.useMeditation;
+      dom.chkStaff.checked = !!snap.hasCrystalStaff;
+      if (snap.location) dom.inLocation.value = snap.location;
+      dom.inLocationCustom.value = snap.customLocation ?? dom.inLocationCustom.value;
+      if (snap.state) dom.inState.value = snap.state;
+      dom.inTargetPct.value = snap.targetPct ?? dom.inTargetPct.value;
+      dom.trkLevelStart.value = snap.trkLevelStart ?? dom.trkLevelStart.value;
+      dom.trkLevelNow.value = snap.trkLevelNow ?? dom.trkLevelNow.value;
+      dom.trkExpStart.value = snap.trkExpStart ?? dom.trkExpStart.value;
+      dom.trkExpNow.value = snap.trkExpNow ?? dom.trkExpNow.value;
+      dom.trkAdenaStart.value = snap.trkAdenaStart ?? dom.trkAdenaStart.value;
+      dom.trkAdenaNow.value = snap.trkAdenaNow ?? dom.trkAdenaNow.value;
+      if (snap.items) items = JSON.parse(JSON.stringify(snap.items));
+
+      updateCustomLocationVisibility();
+      updateQuickPctActive();
+      renderItems();
+      if (mpState.running) onConfigChangedWhileRunning();
+      else renderAll();
+      renderTracker();
+      saveLast();
+      saveTrackerCurrent();
+      S.saveItems(items);
+    } finally {
+      applyingSnapshot = false;
+    }
+  }
+
+  function pushUndoImmediate() {
+    if (applyingSnapshot) return;
+    const snap = captureSnapshot();
+    const ser = JSON.stringify(snap);
+    if (ser === lastSnapshotSerialized) return;
+    lastSnapshotSerialized = ser;
+    undoStack.push(snap);
+    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+    redoStack.length = 0;
+  }
+
+  function pushUndo() {
+    if (applyingSnapshot) return;
+    clearTimeout(undoDebounceTimer);
+    undoDebounceTimer = setTimeout(pushUndoImmediate, 500);
+  }
+
+  function undo() {
+    clearTimeout(undoDebounceTimer);
+    // 디바운스 대기 중인 최신 변경이 있으면 먼저 커밋
+    const pending = captureSnapshot();
+    const pendingSer = JSON.stringify(pending);
+    if (pendingSer !== lastSnapshotSerialized) {
+      lastSnapshotSerialized = pendingSer;
+      undoStack.push(pending);
+      if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+    }
+    if (undoStack.length < 2) {
+      flashHint('↶ 되돌릴 내용이 없습니다.');
+      return;
+    }
+    const current = undoStack.pop();
+    redoStack.push(current);
+    const prev = undoStack[undoStack.length - 1];
+    lastSnapshotSerialized = JSON.stringify(prev);
+    applySnapshot(prev);
+    flashHint('↶ 되돌리기');
+  }
+
+  function redo() {
+    if (redoStack.length === 0) {
+      flashHint('↷ 다시 실행할 내용이 없습니다.');
+      return;
+    }
+    const snap = redoStack.pop();
+    lastSnapshotSerialized = JSON.stringify(snap);
+    undoStack.push(snap);
+    applySnapshot(snap);
+    flashHint('↷ 다시 실행');
+  }
+
   // ========== Helpers ==========
   function $clampInt(v, min, max, dflt) {
     const n = parseInt(v, 10);
@@ -554,6 +671,7 @@
     updateQuickPctActive();
     if (mpState.running) onConfigChangedWhileRunning();
     else renderAll();
+    pushUndoImmediate();
   }
   function currentPreset(name) {
     const cfg = readMpConfig();
@@ -729,12 +847,14 @@
     }
     S.saveItems(items);
     updateItemsTotal();
+    pushUndo();
   }
 
   function onItemDelete(idx) {
     items.splice(idx, 1);
     S.saveItems(items);
     renderItems();
+    pushUndoImmediate();
   }
 
   function onItemAdd() {
@@ -746,6 +866,7 @@
     });
     S.saveItems(items);
     renderItems();
+    pushUndoImmediate();
     // 새로 추가된 행의 이름 필드에 포커스
     const rows = document.querySelectorAll('#items-list .item-row');
     const last = rows[rows.length - 1];
@@ -759,6 +880,7 @@
     items.forEach((it) => { it.qty = 0; });
     S.saveItems(items);
     renderItems();
+    pushUndoImmediate();
   }
 
   function onItemsApplyToAdena() {
@@ -775,6 +897,7 @@
     renderItems();
     renderTracker();
     saveTrackerCurrent();
+    pushUndoImmediate();
   }
 
   // ========== Hotkeys ==========
@@ -905,6 +1028,7 @@
     else renderAll();
     saveLast();
     if (k === 'inTargetPct') updateQuickPctActive();
+    pushUndo();
   }
 
   function bindEvents() {
@@ -1005,8 +1129,8 @@
     [
       'trkLevelStart','trkLevelNow','trkExpStart','trkExpNow','trkAdenaStart','trkAdenaNow'
     ].forEach((k) => {
-      dom[k].addEventListener('input', () => { renderTracker(); saveTrackerCurrent(); });
-      dom[k].addEventListener('change', () => { renderTracker(); saveTrackerCurrent(); });
+      dom[k].addEventListener('input', () => { renderTracker(); saveTrackerCurrent(); pushUndo(); });
+      dom[k].addEventListener('change', () => { renderTracker(); saveTrackerCurrent(); pushUndo(); });
     });
 
     // 경험치 % 자동 소수점 포맷 ("874564" → "87.4564")
@@ -1089,6 +1213,24 @@
       if (captureTarget) return;
       const tag = (e.target.tagName || '').toLowerCase();
       const isInput = (tag === 'input' || tag === 'select' || tag === 'textarea');
+
+      // Undo / Redo — Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y
+      if (e.ctrlKey || e.metaKey) {
+        const k = (e.key || '').toLowerCase();
+        if (k === 'z' && !e.shiftKey) {
+          if (isInput) return; // input 내에선 브라우저 기본 텍스트 undo
+          e.preventDefault();
+          undo();
+          return;
+        }
+        if ((k === 'z' && e.shiftKey) || k === 'y') {
+          if (isInput) return;
+          e.preventDefault();
+          redo();
+          return;
+        }
+      }
+
       const matched = matchWindowHotkey(e);
       if (!matched) return;
       if (isInput) return;
@@ -1162,6 +1304,8 @@
     renderAll();
     renderTracker();
     applyGlobalHotkeys();
+    // 초기 스냅샷 (undo 기준점)
+    setTimeout(() => pushUndoImmediate(), 100);
 
     // 전역 드래그&드롭 차단 — 숫자 입력 값이 드래그로 이동되는 것 방지
     window.addEventListener('dragstart', (e) => {
