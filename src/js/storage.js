@@ -55,7 +55,8 @@
   function loadSettings() {
     return safeParse(localStorage.getItem(SETTINGS_KEY), {
       sound: true, toast: true, minimizeOnClose: false,
-      alwaysOnTop: false, volume: 0.5, theme: 'green'
+      alwaysOnTop: false, volume: 0.5, theme: 'green',
+      expAutoFormatDelayMs: 3000
     });
   }
   function saveSettings(settings) {

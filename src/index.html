@@ -21,6 +21,7 @@
       <div class="brand">
         <span class="dot"></span>
         <span class="title">LINEAGE · MP TIMER</span>
+        <span class="app-version" id="app-version" title="앱 버전" style="margin-left:8px;font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums;letter-spacing:0.5px;">v—</span>
       </div>
       <div class="actions">
         <button id="btn-pin" class="icon-btn" title="항상 위 (F1)">📌</button>
@@ -274,7 +275,15 @@
           <input type="checkbox" id="chk-minimize" />
           <span>창 닫기 시 트레이로 최소화</span>
         </label>
-        <button id="btn-reset-window" class="ghost-btn">⤢ 창 크기 기본값으로 복원</button>
+        <div class="exp-delay-row" style="margin-top:10px;display:flex;flex-direction:column;gap:4px;">
+          <label for="in-exp-delay" style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;">
+            <span>경험치 % 자동 포맷 딜레이</span>
+            <span id="exp-delay-value" style="font-variant-numeric:tabular-nums;color:var(--neon);font-weight:600;">3.0s</span>
+          </label>
+          <input type="range" id="in-exp-delay" min="500" max="10000" step="100" value="3000" title="숫자만 입력했을 때 이 시간 동안 타이핑을 멈추면 xx.xxxx 형식으로 자동 변환됩니다. 너무 짧으면 천천히 타이핑할 때 중간에 포맷이 끼어들어 입력이 깨집니다. (blur/Enter/Tab은 즉시 변환)" />
+          <small style="color:var(--muted);font-size:11px;line-height:1.4;">숫자만 입력 시 이 시간 동안 멈추면 자동 소수점 변환. 느리게 타이핑하면 늘리세요. (포커스 해제/Enter/Tab은 즉시)</small>
+        </div>
+        <button id="btn-reset-window" class="ghost-btn" style="margin-top:10px;">⤢ 창 크기 기본값으로 복원</button>
       </section>
 
       <!-- 테마 -->

@@ -131,6 +131,19 @@ onAlwaysOnTopChanged (event callback)
 - [x] 목표 MP % 알림 (50/80/100 빠른 선택)
 - [x] 커스텀 체크박스 스타일 (테마 연동)
 
+## 📜 버전 히스토리
+
+### v1.1.0 (2026-04-25)
+- 경험치 % 자동 포맷 디바운스 **사용자 설정화** (기본 700ms → 3000ms)
+  - SETTINGS 패널에 슬라이더 추가 (0.5s ~ 10.0s, 0.1s 단위)
+  - `lmp.settings.v1.expAutoFormatDelayMs`로 localStorage 저장
+  - 천천히 타이핑할 때 부분 입력이 `0.000X` 로 조기 포맷되는 문제 해결
+- 타이틀바에 **버전 배지** 추가 (`app.getVersion()` IPC)
+  - 새 빌드 적용 여부를 즉시 확인 가능
+
+### v1.0.0 (초기)
+- MP 계산 엔진 + UI + 트래커 + 핫키 + 테마 + 프리셋
+
 ## 🛠️ 향후 개선 후보 (TODO)
 
 - [ ] `build/icon.ico` 생성 (SVG → ICO 변환) → 앱 아이콘 커스텀화

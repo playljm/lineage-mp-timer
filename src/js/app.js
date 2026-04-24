@@ -27,9 +27,11 @@
     inTargetPct: $('in-target-pct'),
     btnStart: $('btn-start'), btnPause: $('btn-pause'), btnReset: $('btn-reset'),
     btnPin: $('btn-pin'), btnTray: $('btn-tray'), btnQuit: $('btn-quit'),
+    appVersion: $('app-version'),
     presetName: $('preset-name'), btnPresetSave: $('btn-preset-save'),
     presetList: $('preset-list'),
     chkSound: $('chk-sound'), chkToast: $('chk-toast'), chkMinimize: $('chk-minimize'),
+    inExpDelay: $('in-exp-delay'), expDelayValue: $('exp-delay-value'),
     btnResetWindow: $('btn-reset-window'),
     trkLevelStart: $('track-level-start'), trkLevelNow: $('track-level-now'),
     trkLevelDiff: $('track-level-diff'),
@@ -68,6 +70,15 @@
   let items = S.loadItems();
   let captureTarget = null;
   const expDebounce = { trkExpStart: null, trkExpNow: null };
+  const EXP_DELAY_MIN = 500;
+  const EXP_DELAY_MAX = 10000;
+  const EXP_DELAY_DEFAULT = 3000;
+  let expAutoFormatDelayMs = EXP_DELAY_DEFAULT;
+  function clampExpDelay(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return EXP_DELAY_DEFAULT;
+    return Math.max(EXP_DELAY_MIN, Math.min(EXP_DELAY_MAX, Math.round(n)));
+  }
 
   // ========== Undo / Redo ==========
   const UNDO_LIMIT = 50;
@@ -1119,6 +1130,17 @@
       saveSettingsFromUi();
       if (api && api.setMinimizeOnClose) await api.setMinimizeOnClose(dom.chkMinimize.checked);
     });
+    if (dom.inExpDelay) {
+      const updateExpDelay = (persist) => {
+        expAutoFormatDelayMs = clampExpDelay(dom.inExpDelay.value);
+        if (dom.expDelayValue) {
+          dom.expDelayValue.textContent = (expAutoFormatDelayMs / 1000).toFixed(1) + 's';
+        }
+        if (persist) saveSettingsFromUi();
+      };
+      dom.inExpDelay.addEventListener('input', () => updateExpDelay(false));
+      dom.inExpDelay.addEventListener('change', () => updateExpDelay(true));
+    }
     if (dom.btnResetWindow) {
       dom.btnResetWindow.addEventListener('click', () => {
         if (api && api.resetWindowSize) api.resetWindowSize();
@@ -1148,7 +1170,7 @@
       };
       dom[k].addEventListener('input', () => {
         clearTimeout(expDebounce[k]);
-        expDebounce[k] = setTimeout(applyFormat, 700);
+        expDebounce[k] = setTimeout(applyFormat, expAutoFormatDelayMs);
       });
       dom[k].addEventListener('blur', () => {
         clearTimeout(expDebounce[k]);
@@ -1251,6 +1273,7 @@
     s.sound = dom.chkSound.checked;
     s.toast = dom.chkToast.checked;
     s.minimizeOnClose = dom.chkMinimize.checked;
+    s.expAutoFormatDelayMs = expAutoFormatDelayMs;
     S.saveSettings(s);
   }
 
@@ -1282,6 +1305,9 @@
     dom.chkSound.checked = !!s.sound;
     dom.chkToast.checked = !!s.toast;
     dom.chkMinimize.checked = !!s.minimizeOnClose;
+    expAutoFormatDelayMs = clampExpDelay(s.expAutoFormatDelayMs != null ? s.expAutoFormatDelayMs : EXP_DELAY_DEFAULT);
+    if (dom.inExpDelay) dom.inExpDelay.value = String(expAutoFormatDelayMs);
+    if (dom.expDelayValue) dom.expDelayValue.textContent = (expAutoFormatDelayMs / 1000).toFixed(1) + 's';
     if (api && api.setMinimizeOnClose) api.setMinimizeOnClose(!!s.minimizeOnClose);
     if (api && api.setAlwaysOnTop && s.alwaysOnTop) {
       api.setAlwaysOnTop(true);
@@ -1290,9 +1316,20 @@
     applyTheme(s.theme || 'green', false);
   }
 
+  async function applyAppVersion() {
+    if (!dom.appVersion) return;
+    try {
+      if (api && api.getVersion) {
+        const v = await api.getVersion();
+        if (v) dom.appVersion.textContent = 'v' + v;
+      }
+    } catch (_) { /* ignore */ }
+  }
+
   // ========== Init ==========
   function init() {
     restoreSettings();
+    applyAppVersion();
     restoreLast();
     restoreTrackerInputs();
     renderAllHotkeys();

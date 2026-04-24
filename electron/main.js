@@ -325,6 +325,10 @@ ipcMain.handle('app:get-global-hotkeys', () => {
   return activeGlobalHotkeys;
 });
 
+ipcMain.handle('app:get-version', () => {
+  try { return app.getVersion(); } catch (_) { return ''; }
+});
+
 ipcMain.handle('app:quit', () => {
   isQuitting = true;
   app.quit();
