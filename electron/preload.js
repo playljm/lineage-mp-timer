@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('api', {
   getVersion: () => ipcRenderer.invoke('app:get-version'),
   listDisplays: () => ipcRenderer.invoke('app:list-displays'),
   startRegionSelect: (displayId) => ipcRenderer.invoke('app:start-region-select', displayId),
+  openDevTools: () => ipcRenderer.invoke('app:open-devtools'),
   quit: () => ipcRenderer.invoke('app:quit'),
   onAlwaysOnTopChanged: (cb) => {
     ipcRenderer.on('always-on-top-changed', (_, value) => {

@@ -851,18 +851,37 @@
     if (ocrWorker) return ocrWorker;
     if (ocrInitPromise) return ocrInitPromise;
     if (typeof Tesseract === 'undefined') {
-      throw new Error('Tesseract.js 로드 실패');
+      throw new Error('Tesseract.js 라이브러리가 로드되지 않았습니다. (CDN/CSP 확인)');
     }
+    console.log('[OCR] Tesseract worker 초기화 시작...');
     ocrInitPromise = (async () => {
-      const w = await Tesseract.createWorker('eng', 1);
       try {
-        await w.setParameters({
-          tessedit_char_whitelist: '0123456789/ ',
-          tessedit_pageseg_mode: '7'
+        // file:// + asar 환경에서 워커/코어 로드 안정화: CDN 경로 명시
+        // (첫 실행 시 인터넷 필요, 이후 IndexedDB에 캐싱)
+        const w = await Tesseract.createWorker('eng', 1, {
+          workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
+          corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5',
+          langPath: 'https://tessdata.projectnaptha.com/4.0.0',
+          cacheMethod: 'write',
+          logger: (m) => {
+            if (m && m.status) console.log('[Tesseract]', m.status, m.progress != null ? `${Math.round(m.progress * 100)}%` : '');
+          },
+          errorHandler: (e) => console.error('[Tesseract worker error]', e)
         });
-      } catch (_) { /* legacy api fallback */ }
-      ocrWorker = w;
-      return w;
+        try {
+          await w.setParameters({
+            tessedit_char_whitelist: '0123456789/ ',
+            tessedit_pageseg_mode: '7'
+          });
+        } catch (e) { console.warn('[OCR] setParameters skipped:', e && e.message); }
+        console.log('[OCR] Tesseract worker 초기화 완료');
+        ocrWorker = w;
+        return w;
+      } catch (err) {
+        console.error('[OCR] Tesseract worker init 실패:', err);
+        ocrInitPromise = null;
+        throw err;
+      }
     })();
     return ocrInitPromise;
   }
@@ -984,7 +1003,10 @@
         dom.adLast.textContent = `❌ "${(result.text || '???').slice(0, 20)}"`;
       }
     } catch (e) {
-      dom.adLast.textContent = '⚠️ ' + (e.message || 'error');
+      const msg = (e && e.message) || String(e);
+      console.error('[AutoDetect] tick error:', e);
+      dom.adLast.textContent = '⚠️ ' + msg;
+      dom.adLast.title = (e && e.stack) || msg;
     } finally {
       detectionRunning = false;
     }
@@ -996,9 +1018,13 @@
       return;
     }
     setAdStatus('초기화...', 'on');
+    dom.adLast.textContent = '워커 준비 중... (첫 실행 시 OCR 데이터 다운로드 ~10MB)';
     try {
+      console.log('[AutoDetect] 시작 시도', { sourceId: autoDetect.sourceId, region: autoDetect.region });
       await setupCaptureStream();
+      console.log('[AutoDetect] capture stream OK');
       await initOcrWorker();
+      console.log('[AutoDetect] OCR worker OK');
       autoDetect.enabled = true;
       S.saveAutoDetect(autoDetect);
       renderAutoDetectInfo();
@@ -1006,11 +1032,19 @@
       detectInterval = setInterval(runDetectionTick, autoDetect.intervalMs || 1000);
       runDetectionTick();
     } catch (e) {
-      console.error('startAutoDetect failed', e);
+      const msg = (e && (e.stack || e.message)) || String(e);
+      console.error('[AutoDetect] startAutoDetect FAILED:', e);
       setAdStatus('ERROR', 'error');
-      flashHint('⚠️ 시작 실패: ' + (e.message || e));
+      const short = (e && e.message) ? e.message : '시작 실패';
+      dom.adLast.textContent = '⚠️ ' + short;
+      dom.adLast.title = msg;
+      flashHint('⚠️ ' + short + ' (DevTools 자동 열림)');
       autoDetect.enabled = false;
       S.saveAutoDetect(autoDetect);
+      // 에러 진단을 위해 DevTools 자동 열기
+      if (api && api.openDevTools) {
+        try { await api.openDevTools(); } catch (_) {}
+      }
     }
   }
 

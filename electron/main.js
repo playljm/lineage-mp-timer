@@ -335,6 +335,12 @@ ipcMain.handle('app:quit', () => {
   app.quit();
 });
 
+ipcMain.handle('app:open-devtools', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.openDevTools({ mode: 'detach' }); } catch (e) { console.error('openDevTools failed', e); }
+  }
+});
+
 // ========== MP Auto-detect (Display + Region select) ==========
 let overlayWindow = null;
 
