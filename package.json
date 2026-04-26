@@ -31,7 +31,31 @@
     "files": [
       "electron/**/*",
       "src/**/*",
+      "node_modules/tesseract.js/**/*",
+      "node_modules/tesseract.js-core/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "node_modules/tesseract.js/dist/worker.min.js",
+        "to": "tesseract/worker.min.js"
+      },
+      {
+        "from": "node_modules/tesseract.js-core",
+        "to": "tesseract/core",
+        "filter": [
+          "tesseract-core*.wasm*",
+          "tesseract-core*.js",
+          "package.json"
+        ]
+      },
+      {
+        "from": "build/tessdata",
+        "to": "tesseract/tessdata",
+        "filter": [
+          "*.traineddata*"
+        ]
+      }
     ],
     "win": {
       "target": [

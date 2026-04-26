@@ -865,22 +865,40 @@
 
     ocrInitPromise = (async () => {
       try {
-        const createPromise = Tesseract.createWorker('eng', 1, {
+        // 패키징된 앱은 로컬 파일 (인터넷 차단 환경 대응), dev는 CDN
+        let resourcePaths = null;
+        if (api && api.getResourcePaths) {
+          try { resourcePaths = await api.getResourcePaths(); } catch (e) { console.warn('[OCR] resource paths fetch failed:', e); }
+        }
+        const useLocal = !!resourcePaths;
+        console.log('[OCR] resource source:', useLocal ? 'LOCAL (packaged)' : 'CDN (dev)');
+        if (dom.adInitStatus) dom.adInitStatus.textContent = useLocal ? '⏳ 로컬 OCR 파일 로드...' : '⏳ CDN OCR 파일 로드...';
+
+        const opts = useLocal ? {
+          workerPath: resourcePaths.workerPath,
+          corePath: resourcePaths.corePath,
+          langPath: resourcePaths.langPath,
+          // file:// 환경에서 blob URL 워커가 file:// 리소스를 cross-origin으로 막는 문제 방지
+          workerBlobURL: false,
+          cacheMethod: 'none',
+          gzip: true
+        } : {
           workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
           corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5',
           langPath: 'https://tessdata.projectnaptha.com/4.0.0',
-          cacheMethod: 'write',
-          logger: (m) => {
-            if (m && m.status) {
-              const pct = m.progress != null ? Math.round(m.progress * 100) + '%' : '';
-              lastStatus = m.status + (pct ? ' ' + pct : '');
-              const elapsed = Math.round((Date.now() - start) / 1000);
-              console.log('[Tesseract]', lastStatus, '+' + elapsed + 's');
-              if (dom.adInitStatus) dom.adInitStatus.textContent = '⏳ ' + lastStatus + ' (+' + elapsed + 's)';
-            }
-          },
-          errorHandler: (e) => console.error('[Tesseract worker error]', e)
-        });
+          cacheMethod: 'write'
+        };
+        opts.logger = (m) => {
+          if (m && m.status) {
+            const pct = m.progress != null ? Math.round(m.progress * 100) + '%' : '';
+            lastStatus = m.status + (pct ? ' ' + pct : '');
+            const elapsed = Math.round((Date.now() - start) / 1000);
+            console.log('[Tesseract]', lastStatus, '+' + elapsed + 's');
+            if (dom.adInitStatus) dom.adInitStatus.textContent = '⏳ ' + lastStatus + ' (+' + elapsed + 's)';
+          }
+        };
+        opts.errorHandler = (e) => console.error('[Tesseract worker error]', e);
+        const createPromise = Tesseract.createWorker('eng', 1, opts);
 
         const timeoutPromise = new Promise((_, rej) => {
           setTimeout(() => rej(new Error(

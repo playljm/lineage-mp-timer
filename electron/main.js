@@ -341,6 +341,27 @@ ipcMain.handle('app:open-devtools', () => {
   }
 });
 
+ipcMain.handle('app:get-resource-paths', () => {
+  // 패키징된 앱: process.resourcesPath/tesseract/...
+  // dev (npm start): 인터넷 CDN 사용 (null 반환)
+  if (!app.isPackaged) return null;
+  try {
+    const { pathToFileURL } = require('node:url');
+    const base = process.resourcesPath;
+    const toUrl = (p) => pathToFileURL(p).href;
+    const tessBase = path.join(base, 'tesseract');
+    if (!fs.existsSync(tessBase)) return null;
+    return {
+      workerPath: toUrl(path.join(tessBase, 'worker.min.js')),
+      corePath: toUrl(path.join(tessBase, 'core')),
+      langPath: toUrl(path.join(tessBase, 'tessdata'))
+    };
+  } catch (e) {
+    console.error('get-resource-paths failed', e);
+    return null;
+  }
+});
+
 // ========== MP Auto-detect (Display + Region select) ==========
 let overlayWindow = null;
 
