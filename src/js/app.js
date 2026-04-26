@@ -64,6 +64,7 @@
     adMpPreview: $('ad-mp-preview'),
     adExpPreview: $('ad-exp-preview'),
     chkAdAutoStart: $('chk-ad-auto-start'),
+    chkAdAutoStartTracker: $('chk-ad-auto-start-tracker'),
     chkAdPreview: $('chk-ad-preview')
   };
 
@@ -1115,30 +1116,37 @@
       const digits = text.replace(/[^0-9]/g, '');
       if (digits) {
         const maxLen = String(userMax).length;
+        let tryCur = NaN;
         if (digits.length === maxLen) {
-          // 한 덩어리 숫자가 max 자릿수와 같음 → cur로 사용 (max는 INPUTS 값)
-          cur = parseInt(digits, 10);
-          max = userMax;
-          usedFallback = true;
+          tryCur = parseInt(digits, 10);
         } else if (digits.length > maxLen && digits.length <= maxLen * 2 + 1) {
-          // 두 숫자 붙음 → 끝에서 max 자릿수 떼어내 cur 추출 (max는 INPUTS 값)
-          cur = parseInt(digits.slice(0, digits.length - maxLen), 10);
-          max = userMax;
-          usedFallback = true;
+          // 끝에서 max 자릿수 떼어내고 앞부분을 cur로
+          tryCur = parseInt(digits.slice(0, digits.length - maxLen), 10);
+          // 만약 cur > max면 한 자리 더 떼어내 재시도 (OCR이 끝에 노이즈 한 자리 추가한 케이스)
+          if (Number.isFinite(tryCur) && tryCur > userMax && digits.length > maxLen + 1) {
+            const retry = parseInt(digits.slice(0, digits.length - maxLen - 1), 10);
+            if (Number.isFinite(retry) && retry <= userMax) {
+              tryCur = retry;
+              console.log('[OCR MP fallback4 retry] 끝 노이즈 한 자리 추가 떼기:', digits, '→ cur=' + tryCur);
+            }
+          }
         } else if (digits.length > 0 && digits.length < maxLen) {
-          // 영역이 cur만 잡혀서 짧은 숫자 → cur 사용 (max는 INPUTS 값)
-          cur = parseInt(digits, 10);
+          tryCur = parseInt(digits, 10);
+        }
+
+        if (Number.isFinite(tryCur) && tryCur >= 0 && tryCur <= userMax) {
+          cur = tryCur;
           max = userMax;
           usedFallback = true;
+          console.log('[OCR MP fallback4]', { initialValid, digits, cur, max, userMax });
         } else {
+          // fallback도 invalid → null 반환 (일관성 검증에 들어가지 않게)
           return { text, confidence, parsed: null };
         }
-        console.log('[OCR MP fallback4]', { initialValid, digits, cur, max, userMax });
       } else if (!initialValid) {
         return { text, confidence, parsed: null };
       }
     } else if (!initialValid && userMax === 0) {
-      // userMax 없고 1순위 invalid → 결과 그대로 반환 (validation 단계에서 거름)
       console.log('[OCR MP] 1순위 invalid, INPUTS의 max 입력 시 자동 복구 가능');
     }
 
@@ -1286,6 +1294,11 @@
                 dom.trkExpNow.value = formatExpPct(exp);
                 renderTracker();
                 saveTrackerCurrent();
+              }
+              // 트래커 자동 시작: 트래커 비활성 + 첫 인식이면 시작값으로 설정 + START
+              if (autoDetect.autoStartTracker && !tracker.active) {
+                dom.trkExpStart.value = formatExpPct(exp);
+                try { startTracker(); } catch (_) {}
               }
               const confLabel = r.confidence > 0 ? ` · ${Math.round(r.confidence)}%` : '';
               dom.adExpLast.textContent = `✅ ${formatExpPct(exp)}%${confLabel}`;
@@ -1869,6 +1882,13 @@
       dom.chkAdAutoStart.checked = !!autoDetect.autoStart;
       dom.chkAdAutoStart.addEventListener('change', () => {
         autoDetect.autoStart = dom.chkAdAutoStart.checked;
+        S.saveAutoDetect(autoDetect);
+      });
+    }
+    if (dom.chkAdAutoStartTracker) {
+      dom.chkAdAutoStartTracker.checked = !!autoDetect.autoStartTracker;
+      dom.chkAdAutoStartTracker.addEventListener('change', () => {
+        autoDetect.autoStartTracker = dom.chkAdAutoStartTracker.checked;
         S.saveAutoDetect(autoDetect);
       });
     }
