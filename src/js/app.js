@@ -1034,7 +1034,8 @@
     const sy = Math.max(0, Math.round(region.y * scale));
     const sw = Math.max(1, Math.round(region.width * scale));
     const sh = Math.max(1, Math.round(region.height * scale));
-    const upscale = 3;
+    // 업스케일 5x — Tesseract OCR 정확도 개선 (큰 글자에 더 강함)
+    const upscale = 5;
     const canvas = document.createElement('canvas');
     canvas.width = sw * upscale;
     canvas.height = sh * upscale;
@@ -1066,22 +1067,64 @@
     if (!canvas) return null;
     updatePreview(dom.adMpPreview, canvas);
     const w = await initOcrWorker();
+    // MP 전용: 슬래시 + 숫자만 (점 제외) + 사전 추측 OFF (숫자 시퀀스 정확도 ↑)
+    try {
+      await w.setParameters({
+        tessedit_char_whitelist: '0123456789/',
+        tessedit_pageseg_mode: '7',
+        load_system_dawg: '0',
+        load_freq_dawg: '0',
+        load_unambig_dawg: '0',
+        load_punc_dawg: '0',
+        load_number_dawg: '0',
+        load_bigram_dawg: '0'
+      });
+    } catch (_) {}
     const res = await w.recognize(canvas);
     const text = ((res && res.data && res.data.text) || '').trim();
-    const confidence = (res && res.data && res.data.confidence) || 0;
+    const rawConf = (res && res.data && res.data.confidence);
+    // Tesseract.js v5: confidence가 -1로 나오는 케이스 있음 → 0으로 보정
+    const confidence = Math.max(0, Number.isFinite(rawConf) ? rawConf : 0);
+    console.log('[OCR MP] text=' + JSON.stringify(text) + ' conf=' + Math.round(confidence) + ' rawConf=' + rawConf);
+
+    // INPUTS에 입력된 max MP — 슬래시 인식 실패 시 폴백으로 활용
+    const userMax = parseInt(dom.inMaxMp.value, 10) || 0;
 
     // 1순위: 슬래시/파이프/콜론 구분자
     let m = text.match(/(\d{1,5})\s*[\/\\|:]\s*(\d{1,5})/);
-    // 2순위: 슬래시 인식 못한 경우 — 두 숫자가 비숫자로 구분된 패턴
+    // 2순위: 두 숫자가 비숫자로 구분된 패턴
     if (!m) m = text.match(/(\d{1,5})[^\d]+(\d{1,5})/);
     // 3순위: 텍스트 안의 첫 두 숫자
     if (!m) {
       const nums = text.match(/\d{1,5}/g);
       if (nums && nums.length >= 2) m = [null, nums[0], nums[1]];
     }
-    if (!m) return { text, confidence, parsed: null };
-    const cur = parseInt(m[1], 10);
-    const max = parseInt(m[2], 10);
+
+    let cur, max;
+    if (m) {
+      cur = parseInt(m[1], 10);
+      max = parseInt(m[2], 10);
+    } else if (userMax > 0) {
+      // 4순위(슬래시 인식 완전 실패): 한 덩어리 숫자 → max 자릿수로 분리
+      const digits = text.replace(/[^0-9]/g, '');
+      if (!digits) return { text, confidence, parsed: null };
+      const maxLen = String(userMax).length;
+      if (digits.length === maxLen) {
+        // 한 숫자 = cur, max는 INPUTS의 값
+        cur = parseInt(digits, 10);
+        max = userMax;
+      } else if (digits.length > maxLen && digits.length <= maxLen * 2 + 1) {
+        // 두 숫자 붙음 = 끝에서 max 자릿수만 떼어 max로, 나머지 cur (max는 INPUTS 값)
+        cur = parseInt(digits.slice(0, digits.length - maxLen), 10);
+        max = userMax;
+        console.log('[OCR MP fallback4] split digits:', digits, '→ cur=' + cur + ', max=' + max);
+      } else {
+        return { text, confidence, parsed: null };
+      }
+    } else {
+      return { text, confidence, parsed: null };
+    }
+
     if (!Number.isFinite(cur) || !Number.isFinite(max)) {
       return { text, confidence, parsed: null };
     }
@@ -1094,9 +1137,24 @@
     if (!canvas) return null;
     updatePreview(dom.adExpPreview, canvas);
     const w = await initOcrWorker();
+    // EXP 전용: 점 + 숫자만 (슬래시 제외) + 사전 추측 OFF
+    try {
+      await w.setParameters({
+        tessedit_char_whitelist: '0123456789.',
+        tessedit_pageseg_mode: '7',
+        load_system_dawg: '0',
+        load_freq_dawg: '0',
+        load_unambig_dawg: '0',
+        load_punc_dawg: '0',
+        load_number_dawg: '0',
+        load_bigram_dawg: '0'
+      });
+    } catch (_) {}
     const res = await w.recognize(canvas);
     const text = ((res && res.data && res.data.text) || '').trim();
-    const confidence = (res && res.data && res.data.confidence) || 0;
+    const rawConf = (res && res.data && res.data.confidence);
+    const confidence = Math.max(0, Number.isFinite(rawConf) ? rawConf : 0);
+    console.log('[OCR EXP] text=' + JSON.stringify(text) + ' conf=' + Math.round(confidence) + ' rawConf=' + rawConf);
     // "87.4321" 또는 "87.4321%" — 첫 소수 패턴 또는 정수 (5자리 이상이면 87.4321 형태로 변환)
     let parsed = null;
     const decMatch = text.match(/(\d{1,3})\s*\.\s*(\d{1,4})/);
@@ -1125,6 +1183,18 @@
     return p && Number.isFinite(p.exp) && p.exp >= 0 && p.exp <= 100;
   }
 
+  // 일관성 검증: 같은 값이 N회 연속 나와야 진짜로 인정 (단발 OCR 오류 거름)
+  const STABILITY_REQUIRED = 2; // 2회 연속 (디폴트는 1초 주기 → 2초 안정)
+  let mpStableLast = null;     // 'cur/max'
+  let mpStableCount = 0;
+  let expStableLast = null;    // 'exp'
+  let expStableCount = 0;
+
+  function checkStability(key, lastKey, count) {
+    if (key === lastKey) return { lastKey, count: count + 1, stable: count + 1 >= STABILITY_REQUIRED };
+    return { lastKey: key, count: 1, stable: STABILITY_REQUIRED <= 1 };
+  }
+
   async function runDetectionTick() {
     if (detectionRunning) return; // 이전 틱 진행 중이면 스킵
     detectionRunning = true;
@@ -1137,7 +1207,13 @@
           if (r) {
             const validParsed = isValidMpParsed(r.parsed);
             const passConfidence = r.confidence >= threshold;
-            if (validParsed && passConfidence) {
+            // 일관성 검증
+            const key = validParsed ? `${r.parsed.cur}/${r.parsed.max}` : null;
+            const stab = checkStability(key, mpStableLast, mpStableCount);
+            mpStableLast = stab.lastKey;
+            mpStableCount = stab.count;
+            console.log('[OCR MP decision]', { parsed: r.parsed, validParsed, conf: r.confidence, threshold, passConfidence, stableCount: mpStableCount, stable: stab.stable });
+            if (validParsed && passConfidence && stab.stable) {
               const { cur, max } = r.parsed;
               const prevCur = parseInt(dom.inCurMp.value, 10) || 0;
               const prevMax = parseInt(dom.inMaxMp.value, 10) || 0;
@@ -1161,6 +1237,8 @@
               dom.adMpLast.textContent = `✅ ${cur}/${max}${confLabel}`;
             } else if (r.parsed && !validParsed) {
               dom.adMpLast.textContent = `🟡 ${r.parsed.cur}/${r.parsed.max} (범위 벗어남)`;
+            } else if (r.parsed && validParsed && !stab.stable) {
+              dom.adMpLast.textContent = `🔄 ${r.parsed.cur}/${r.parsed.max} (검증 ${mpStableCount}/${STABILITY_REQUIRED})`;
             } else if (r.parsed) {
               dom.adMpLast.textContent = `🟡 ${r.parsed.cur}/${r.parsed.max} · ${Math.round(r.confidence)}% (낮음)`;
             } else {
@@ -1178,7 +1256,13 @@
           if (r) {
             const validParsed = isValidExpParsed(r.parsed);
             const passConfidence = r.confidence >= threshold;
-            if (validParsed && passConfidence) {
+            // 경험치는 천천히 변하므로 안정성 검증 (소수 4자리까지 같은지 비교)
+            const expKey = validParsed ? r.parsed.exp.toFixed(4) : null;
+            const stabExp = checkStability(expKey, expStableLast, expStableCount);
+            expStableLast = stabExp.lastKey;
+            expStableCount = stabExp.count;
+            console.log('[OCR EXP decision]', { parsed: r.parsed, validParsed, conf: r.confidence, threshold, passConfidence, stableCount: expStableCount, stable: stabExp.stable });
+            if (validParsed && passConfidence && stabExp.stable) {
               const exp = r.parsed.exp;
               const prev = parseExpPct(dom.trkExpNow.value);
               if (Math.abs(exp - prev) > 0.0001) {
@@ -1190,6 +1274,8 @@
               dom.adExpLast.textContent = `✅ ${formatExpPct(exp)}%${confLabel}`;
             } else if (r.parsed && !validParsed) {
               dom.adExpLast.textContent = `🟡 ${formatExpPct(r.parsed.exp)}% (범위 벗어남)`;
+            } else if (r.parsed && validParsed && !stabExp.stable) {
+              dom.adExpLast.textContent = `🔄 ${formatExpPct(r.parsed.exp)}% (검증 ${expStableCount}/${STABILITY_REQUIRED})`;
             } else if (r.parsed) {
               dom.adExpLast.textContent = `🟡 ${formatExpPct(r.parsed.exp)}% · ${Math.round(r.confidence)}% (낮음)`;
             } else {
