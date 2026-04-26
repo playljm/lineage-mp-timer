@@ -147,23 +147,29 @@
         </label>
       </section>
 
-      <!-- MP 자동 감지 (OCR) -->
+      <!-- MP / 경험치 자동 감지 (OCR) -->
       <section class="panel auto-detect">
         <div class="row between baseline">
-          <h3 class="panel-title inline">🔍 MP 자동 감지 (OCR)</h3>
+          <h3 class="panel-title inline">🔍 MP·경험치 자동 감지 (OCR)</h3>
           <span class="ad-status-badge" id="ad-status">OFF</span>
         </div>
         <p class="panel-help muted small">
-          리니지 화면에서 <b>현재/최대 MP가 보이는 영역</b>(예: <code>50/327</code>)을 한 번 드래그로 지정하면, 1초 주기로 자동 인식해 <b>현재 MP에 반영</b>됩니다.
+          리니지 화면에서 <b>MP 영역</b>(예: <code>50/327</code>)과 <b>경험치 영역</b>(예: <code>87.4321%</code>)을 각각 드래그로 지정하면, 1초 주기로 자동 인식해 입력칸에 반영됩니다. 둘 중 하나만 지정해도 동작.
         </p>
         <div class="auto-detect-actions">
-          <button id="btn-ad-region" class="ghost-btn ad-btn">📷 MP 영역 지정</button>
-          <button id="btn-ad-toggle" class="ghost-btn ad-btn primary-ghost">▶ 자동 감지 시작</button>
+          <button id="btn-ad-mp-region" class="ghost-btn ad-btn">📷 MP 영역</button>
+          <button id="btn-ad-exp-region" class="ghost-btn ad-btn">📷 경험치 영역</button>
+        </div>
+        <div class="auto-detect-actions" style="margin-top: 6px;">
+          <button id="btn-ad-toggle" class="ghost-btn ad-btn primary-ghost" style="flex: 1;">▶ 자동 감지 시작</button>
         </div>
         <div class="ad-info" id="ad-info">
           <div class="ad-info-row"><span class="ad-info-label">모니터</span><span id="ad-display">미지정</span></div>
-          <div class="ad-info-row"><span class="ad-info-label">영역</span><span id="ad-region-info">미지정</span></div>
-          <div class="ad-info-row"><span class="ad-info-label">최근 인식</span><span id="ad-last">-</span></div>
+          <div class="ad-info-row"><span class="ad-info-label">MP 영역</span><span id="ad-mp-region-info">미지정</span></div>
+          <div class="ad-info-row"><span class="ad-info-label">경험치 영역</span><span id="ad-exp-region-info">미지정</span></div>
+          <div class="ad-info-row"><span class="ad-info-label">최근 MP</span><span id="ad-mp-last">-</span></div>
+          <div class="ad-info-row"><span class="ad-info-label">최근 경험치</span><span id="ad-exp-last">-</span></div>
+          <div class="ad-info-row"><span class="ad-info-label">초기화 진행</span><span id="ad-init-status">-</span></div>
         </div>
       </section>
 

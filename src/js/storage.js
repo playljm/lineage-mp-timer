@@ -97,18 +97,28 @@
   }
   function defaultHotkeys() { return JSON.parse(JSON.stringify(DEFAULT_HOTKEYS)); }
 
-  // ===== Auto-detect (MP 자동 감지) =====
+  // ===== Auto-detect (MP/EXP OCR 자동 감지) =====
   function loadAutoDetect() {
-    return safeParse(localStorage.getItem(AUTO_DETECT_KEY), {
+    const stored = safeParse(localStorage.getItem(AUTO_DETECT_KEY), null);
+    const defaults = {
       enabled: false,
       sourceId: null,
       displayId: null,
       displayLabel: null,
-      region: null,           // { x, y, width, height } — 디스플레이 좌표
+      scaleFactor: 1,
       confidenceThreshold: 50,
       intervalMs: 1000,
-      preprocess: true        // 그레이스케일+threshold 전처리
-    });
+      preprocess: true,        // 그레이스케일+threshold 전처리
+      mpRegion: null,          // { x, y, width, height }
+      expRegion: null
+    };
+    if (!stored) return defaults;
+    // 마이그레이션: 이전 'region' → 'mpRegion'
+    if (stored.region && !stored.mpRegion) {
+      stored.mpRegion = stored.region;
+      delete stored.region;
+    }
+    return { ...defaults, ...stored };
   }
   function saveAutoDetect(s) {
     try { localStorage.setItem(AUTO_DETECT_KEY, JSON.stringify(s)); } catch (_) {}
