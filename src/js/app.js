@@ -1163,33 +1163,65 @@
     return { text, confidence, parsed: { cur, max }, usedFallback };
   }
 
+  // 다중 PSM 시도해서 가장 빈도 높은 결과 선택 — 단일 숫자 인식에 효과적
   async function ocrLevelRegion() {
     if (!autoDetect.levelRegion) return null;
     const canvas = captureRegionToCanvas(autoDetect.levelRegion);
     if (!canvas) return null;
     updatePreview(dom.adLevelPreview, canvas);
     const w = await initOcrWorker();
-    try {
-      await w.setParameters({
-        tessedit_char_whitelist: '0123456789',
-        tessedit_pageseg_mode: '7',
-        load_system_dawg: '0', load_freq_dawg: '0',
-        load_unambig_dawg: '0', load_punc_dawg: '0',
-        load_number_dawg: '0', load_bigram_dawg: '0'
-      });
-    } catch (_) {}
-    const res = await w.recognize(canvas);
-    const text = ((res && res.data && res.data.text) || '').trim();
-    const rawConf = (res && res.data && res.data.confidence);
-    const confidence = Math.max(0, Number.isFinite(rawConf) ? rawConf : 0);
-    console.log('[OCR LEVEL] text=' + JSON.stringify(text) + ' conf=' + Math.round(confidence));
-    const digits = text.replace(/[^0-9]/g, '');
-    if (!digits) return { text, confidence, parsed: null };
-    const level = parseInt(digits, 10);
-    if (!Number.isFinite(level) || level < 1 || level > 99) {
-      return { text, confidence, parsed: null };
+
+    // PSM 7 (single line), 8 (single word), 13 (raw line) 세 가지 모드로 시도 후 다수결
+    const psmModes = ['7', '8', '13'];
+    const results = [];
+    for (const psm of psmModes) {
+      try {
+        await w.setParameters({
+          tessedit_char_whitelist: '0123456789',
+          tessedit_pageseg_mode: psm,
+          load_system_dawg: '0', load_freq_dawg: '0',
+          load_unambig_dawg: '0', load_punc_dawg: '0',
+          load_number_dawg: '0', load_bigram_dawg: '0'
+        });
+        const res = await w.recognize(canvas);
+        const text = ((res && res.data && res.data.text) || '').trim();
+        const rawConf = (res && res.data && res.data.confidence);
+        const confidence = Math.max(0, Number.isFinite(rawConf) ? rawConf : 0);
+        const digits = text.replace(/[^0-9]/g, '');
+        const level = digits ? parseInt(digits, 10) : NaN;
+        results.push({ psm, text, confidence, level });
+        console.log('[OCR LEVEL psm=' + psm + '] text=' + JSON.stringify(text) + ' conf=' + Math.round(confidence) + ' level=' + level);
+      } catch (e) {
+        console.warn('[OCR LEVEL psm=' + psm + '] failed:', e);
+      }
     }
-    return { text, confidence, parsed: { level } };
+
+    if (results.length === 0) return null;
+
+    // 결과들 중 valid한 것만 모음 + 다수결 (같은 값이 더 많이 나온 쪽)
+    const valid = results.filter((r) => Number.isFinite(r.level) && r.level >= 1 && r.level <= 99);
+    if (valid.length === 0) {
+      const t = results[0];
+      return { text: t.text, confidence: t.confidence, parsed: null };
+    }
+
+    // 다수결: 같은 level 값을 카운트
+    const counts = {};
+    valid.forEach((r) => { counts[r.level] = (counts[r.level] || 0) + 1; });
+    let bestLevel = valid[0].level;
+    let bestCount = 0;
+    for (const [lv, cnt] of Object.entries(counts)) {
+      if (cnt > bestCount) { bestCount = cnt; bestLevel = parseInt(lv, 10); }
+    }
+    // 가장 많이 나온 결과의 confidence 평균
+    const matched = valid.filter((r) => r.level === bestLevel);
+    const avgConf = matched.reduce((s, r) => s + r.confidence, 0) / matched.length;
+    console.log('[OCR LEVEL] 다수결:', counts, '→ Lv.' + bestLevel + ' (count=' + bestCount + '/' + valid.length + ')');
+    return {
+      text: matched[0].text,
+      confidence: avgConf,
+      parsed: { level: bestLevel, agreementCount: bestCount, totalAttempts: valid.length }
+    };
   }
 
   async function ocrAdenaRegion() {
@@ -1391,20 +1423,28 @@
           dom.adExpLast.textContent = '⚠️ ' + (e.message || e);
         }
       }
-      // 레벨 영역
+      // 레벨 영역 — 다수결 결과만 입력 (단발 오류 거름)
       if (autoDetect.levelRegion) {
         try {
           const r = await ocrLevelRegion();
           if (r) {
             if (r.parsed) {
               const lv = r.parsed.level;
-              const prev = parseInt(dom.trkLevelNow.value, 10) || 0;
-              if (lv !== prev) {
-                dom.trkLevelNow.value = lv;
-                renderTracker();
-                saveTrackerCurrent();
+              const agreement = r.parsed.agreementCount || 1;
+              const total = r.parsed.totalAttempts || 1;
+              // 다수결이 충분하지 않으면 (PSM 3개 중 1개만 동의) 입력 안 함 → 다음 틱에서 재시도
+              const isHighConfidence = agreement >= 2;  // 3개 중 2개 이상 같아야
+              if (isHighConfidence) {
+                const prev = parseInt(dom.trkLevelNow.value, 10) || 0;
+                if (lv !== prev) {
+                  dom.trkLevelNow.value = lv;
+                  renderTracker();
+                  saveTrackerCurrent();
+                }
+                dom.adLevelLast.textContent = `✅ Lv.${lv} (${agreement}/${total} 일치)`;
+              } else {
+                dom.adLevelLast.textContent = `🔄 Lv.${lv} (${agreement}/${total} — 재시도 중)`;
               }
-              dom.adLevelLast.textContent = `✅ Lv.${lv}`;
             } else {
               dom.adLevelLast.textContent = `❌ "${(r.text || '???').slice(0, 20)}"`;
             }
