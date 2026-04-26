@@ -60,7 +60,11 @@
     adExpRegionInfo: $('ad-exp-region-info'),
     adMpLast: $('ad-mp-last'),
     adExpLast: $('ad-exp-last'),
-    adInitStatus: $('ad-init-status')
+    adInitStatus: $('ad-init-status'),
+    adMpPreview: $('ad-mp-preview'),
+    adExpPreview: $('ad-exp-preview'),
+    chkAdAutoStart: $('chk-ad-auto-start'),
+    chkAdPreview: $('chk-ad-preview')
   };
 
   const THEMES = ['green', 'cyan', 'pink', 'yellow', 'purple', 'red'];
@@ -1045,10 +1049,22 @@
     return canvas;
   }
 
+  function updatePreview(targetEl, canvas) {
+    if (!targetEl) return;
+    if (!autoDetect.showPreview) {
+      targetEl.removeAttribute('src');
+      return;
+    }
+    try {
+      targetEl.src = canvas.toDataURL('image/png');
+    } catch (_) { /* ignore */ }
+  }
+
   async function ocrMpRegion() {
     if (!autoDetect.mpRegion) return null;
     const canvas = captureRegionToCanvas(autoDetect.mpRegion);
     if (!canvas) return null;
+    updatePreview(dom.adMpPreview, canvas);
     const w = await initOcrWorker();
     const res = await w.recognize(canvas);
     const text = ((res && res.data && res.data.text) || '').trim();
@@ -1076,6 +1092,7 @@
     if (!autoDetect.expRegion) return null;
     const canvas = captureRegionToCanvas(autoDetect.expRegion);
     if (!canvas) return null;
+    updatePreview(dom.adExpPreview, canvas);
     const w = await initOcrWorker();
     const res = await w.recognize(canvas);
     const text = ((res && res.data && res.data.text) || '').trim();
@@ -1131,6 +1148,14 @@
                 if (mpState.running) onConfigChangedWhileRunning();
                 else renderAll();
                 saveLast();
+                // 자동 START — idle 상태이고 cur < target이면 타이머 시작
+                if (autoDetect.autoStart && !mpState.running && !mpState.paused) {
+                  const cfg = readMpConfig();
+                  const tgt = effectiveTargetMp(cfg);
+                  if (cfg.curMp < tgt && cfg.state !== 'blocked') {
+                    try { startTimer(); } catch (_) {}
+                  }
+                }
               }
               const confLabel = r.confidence > 0 ? ` · ${Math.round(r.confidence)}%` : '';
               dom.adMpLast.textContent = `✅ ${cur}/${max}${confLabel}`;
@@ -1737,6 +1762,24 @@
     if (dom.btnAdMpRegion) dom.btnAdMpRegion.addEventListener('click', () => onPickRegion('mp'));
     if (dom.btnAdExpRegion) dom.btnAdExpRegion.addEventListener('click', () => onPickRegion('exp'));
     if (dom.btnAdToggle) dom.btnAdToggle.addEventListener('click', toggleAutoDetect);
+    if (dom.chkAdAutoStart) {
+      dom.chkAdAutoStart.checked = !!autoDetect.autoStart;
+      dom.chkAdAutoStart.addEventListener('change', () => {
+        autoDetect.autoStart = dom.chkAdAutoStart.checked;
+        S.saveAutoDetect(autoDetect);
+      });
+    }
+    if (dom.chkAdPreview) {
+      dom.chkAdPreview.checked = autoDetect.showPreview !== false;
+      dom.chkAdPreview.addEventListener('change', () => {
+        autoDetect.showPreview = dom.chkAdPreview.checked;
+        S.saveAutoDetect(autoDetect);
+        if (!dom.chkAdPreview.checked) {
+          if (dom.adMpPreview) dom.adMpPreview.removeAttribute('src');
+          if (dom.adExpPreview) dom.adExpPreview.removeAttribute('src');
+        }
+      });
+    }
 
     // Hotkeys
     document.querySelectorAll('.hotkey-row').forEach((row) => {

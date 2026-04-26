@@ -657,6 +657,60 @@ body {
 
 .preset-actions button:hover { background: var(--neon-soft); }
 
+/* ========== Auto-detect MP/EXP capture preview ========== */
+.ad-preview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+.ad-preview-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ad-preview-label {
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+.ad-preview-img-wrap {
+  background: #000;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  overflow: hidden;
+}
+.ad-preview-img-wrap img {
+  max-width: 100%;
+  max-height: 80px;
+  image-rendering: pixelated;
+  display: block;
+}
+.ad-preview-img-wrap img:not([src]),
+.ad-preview-img-wrap img[src=""] {
+  display: none;
+}
+.ad-preview-img-wrap:has(img:not([src])):before,
+.ad-preview-img-wrap:has(img[src=""]):before {
+  content: '미리보기 없음';
+  color: var(--muted);
+  font-size: 10px;
+}
+.ad-options {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
 /* ========== Auto-detect (MP OCR) ========== */
 .auto-detect-actions {
   display: flex;

@@ -154,7 +154,8 @@
           <span class="ad-status-badge" id="ad-status">OFF</span>
         </div>
         <p class="panel-help muted small">
-          리니지 화면에서 <b>MP 영역</b>(예: <code>50/327</code>)과 <b>경험치 영역</b>(예: <code>87.4321%</code>)을 각각 드래그로 지정하면, 1초 주기로 자동 인식해 입력칸에 반영됩니다. 둘 중 하나만 지정해도 동작.
+          리니지 화면에서 <b>MP 영역</b>(예: <code>150/217</code>)과 <b>경험치 영역</b>(예: <code>87.4321%</code>)을 각각 드래그로 지정하면, 1초 주기로 자동 인식해 입력칸에 반영됩니다.
+          <br/>💡 <b>영역 잡는 팁</b>: <code>MP:</code> 같은 라벨은 빼고 <b>숫자와 슬래시만</b> 깔끔히 (좌우 1~2px 여유). 너무 좁아 슬래시(<code>/</code>)가 빠지면 인식 실패.
         </p>
         <div class="auto-detect-actions">
           <button id="btn-ad-mp-region" class="ghost-btn ad-btn">📷 MP 영역</button>
@@ -170,6 +171,26 @@
           <div class="ad-info-row"><span class="ad-info-label">최근 MP</span><span id="ad-mp-last">-</span></div>
           <div class="ad-info-row"><span class="ad-info-label">최근 경험치</span><span id="ad-exp-last">-</span></div>
           <div class="ad-info-row"><span class="ad-info-label">초기화 진행</span><span id="ad-init-status">-</span></div>
+        </div>
+        <div class="ad-preview-grid">
+          <div class="ad-preview-cell">
+            <span class="ad-preview-label">MP 캡처 미리보기</span>
+            <div class="ad-preview-img-wrap"><img id="ad-mp-preview" alt="MP" /></div>
+          </div>
+          <div class="ad-preview-cell">
+            <span class="ad-preview-label">경험치 캡처 미리보기</span>
+            <div class="ad-preview-img-wrap"><img id="ad-exp-preview" alt="EXP" /></div>
+          </div>
+        </div>
+        <div class="ad-options">
+          <label class="chk inline">
+            <input type="checkbox" id="chk-ad-auto-start" />
+            <span>인식 후 타이머 자동 시작</span>
+          </label>
+          <label class="chk inline">
+            <input type="checkbox" id="chk-ad-preview" checked />
+            <span>캡처 미리보기 표시</span>
+          </label>
         </div>
       </section>
 

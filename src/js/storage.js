@@ -109,6 +109,8 @@
       confidenceThreshold: 0,  // Tesseract.js v5는 confidence가 0으로 떨어지는 케이스 많음 → 결과 sanity check로 대체
       intervalMs: 1000,
       preprocess: true,        // 그레이스케일+threshold 전처리
+      autoStart: false,        // 인식 후 타이머 자동 시작
+      showPreview: true,       // 캡처된 이미지 미리보기
       mpRegion: null,          // { x, y, width, height }
       expRegion: null
     };
