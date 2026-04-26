@@ -74,7 +74,8 @@
     chkAdAutoStart: $('chk-ad-auto-start'),
     chkAdAutoStartTracker: $('chk-ad-auto-start-tracker'),
     chkAdPreview: $('chk-ad-preview'),
-    selAdStability: $('sel-ad-stability')
+    selAdStability: $('sel-ad-stability'),
+    inAdLevelOffset: $('in-ad-level-offset')
   };
 
   const THEMES = ['green', 'cyan', 'pink', 'yellow', 'purple', 'red'];
@@ -107,6 +108,9 @@
 
   // 마지막 OCR raw 값 (사용자 수정 시 offset 자동 학습용)
   let lastRawOcrLevel = null;
+  // 안정된 raw OCR 레벨 (최근 N번 같은 값일 때만 갱신) — 자동 학습은 안정 상태에서만
+  let lastStableRawOcrLevel = null;
+  let recentRawOcrLevels = [];
   const EXP_DELAY_MIN = 500;
   const EXP_DELAY_MAX = 10000;
   const EXP_DELAY_DEFAULT = 3000;
@@ -1223,7 +1227,14 @@
     const offset = parseInt(autoDetect.levelOffset, 10) || 0;
     const corrected = bestLevel + offset;
     lastRawOcrLevel = bestLevel;  // raw 값 저장 (사용자 수정 시 학습용)
-    console.log('[OCR LEVEL] 다수결:', counts, '→ raw Lv.' + bestLevel + ' (count=' + bestCount + '/' + valid.length + ') → 보정 +' + offset + ' = Lv.' + corrected);
+
+    // 안정성 추적 — 최근 5번 raw OCR 결과 중 모두 같은 값이면 안정 상태로 간주
+    recentRawOcrLevels.push(bestLevel);
+    if (recentRawOcrLevels.length > 5) recentRawOcrLevels.shift();
+    if (recentRawOcrLevels.length >= 3 && recentRawOcrLevels.every((v) => v === bestLevel)) {
+      lastStableRawOcrLevel = bestLevel;
+    }
+    console.log('[OCR LEVEL] 다수결:', counts, '→ raw Lv.' + bestLevel + ' (count=' + bestCount + '/' + valid.length + ') → 보정 +' + offset + ' = Lv.' + corrected + ' (안정=' + lastStableRawOcrLevel + ')');
     return {
       text: matched[0].text,
       confidence: avgConf,
@@ -2034,18 +2045,23 @@
       dom[k].addEventListener('change', () => { renderTracker(); saveTrackerCurrent(); pushUndo(); });
     });
 
-    // 레벨 OCR 자동 학습: 사용자가 trkLevelNow를 직접 수정하면 OCR raw 값과 차이를 offset으로 저장
+    // 레벨 OCR 자동 학습: 사용자가 trkLevelNow 수정 + OCR이 안정된 상태일 때만 학습
     if (dom.trkLevelNow) {
       dom.trkLevelNow.addEventListener('change', () => {
         const userVal = parseInt(dom.trkLevelNow.value, 10);
-        if (Number.isFinite(userVal) && Number.isFinite(lastRawOcrLevel) && autoDetect.levelRegion) {
-          const newOffset = userVal - lastRawOcrLevel;
-          if (newOffset !== (autoDetect.levelOffset || 0) && Math.abs(newOffset) <= 9) {
-            autoDetect.levelOffset = newOffset;
-            S.saveAutoDetect(autoDetect);
-            console.log('[OCR LEVEL] 보정 자동 학습:', { userVal, raw: lastRawOcrLevel, offset: newOffset });
-            flashHint(`✅ 레벨 OCR 보정 학습: ${newOffset > 0 ? '+' : ''}${newOffset}`);
-          }
+        if (!Number.isFinite(userVal) || !autoDetect.levelRegion) return;
+        // 안정된 OCR 결과(최근 3+ 번 같은 값)가 있을 때만 학습 — 들쭉날쭉이면 잘못 학습 방지
+        if (lastStableRawOcrLevel === null) {
+          flashHint('⚠️ OCR이 아직 안정되지 않아 보정 학습 보류. 수동 입력 필드 사용 권장.');
+          return;
+        }
+        const newOffset = userVal - lastStableRawOcrLevel;
+        if (newOffset !== (autoDetect.levelOffset || 0) && Math.abs(newOffset) <= 9) {
+          autoDetect.levelOffset = newOffset;
+          S.saveAutoDetect(autoDetect);
+          if (dom.inAdLevelOffset) dom.inAdLevelOffset.value = newOffset;
+          console.log('[OCR LEVEL] 보정 자동 학습:', { userVal, stableRaw: lastStableRawOcrLevel, offset: newOffset });
+          flashHint(`✅ 레벨 OCR 보정 학습: ${newOffset > 0 ? '+' : ''}${newOffset} (안정 raw=${lastStableRawOcrLevel})`);
         }
       });
     }
@@ -2133,6 +2149,16 @@
       dom.selAdStability.addEventListener('change', () => {
         autoDetect.stabilityRequired = parseInt(dom.selAdStability.value, 10);
         S.saveAutoDetect(autoDetect);
+      });
+    }
+    if (dom.inAdLevelOffset) {
+      dom.inAdLevelOffset.value = parseInt(autoDetect.levelOffset, 10) || 0;
+      dom.inAdLevelOffset.addEventListener('change', () => {
+        const v = parseInt(dom.inAdLevelOffset.value, 10) || 0;
+        autoDetect.levelOffset = Math.max(-9, Math.min(9, v));
+        dom.inAdLevelOffset.value = autoDetect.levelOffset;
+        S.saveAutoDetect(autoDetect);
+        flashHint(`레벨 보정: ${autoDetect.levelOffset > 0 ? '+' : ''}${autoDetect.levelOffset}`);
       });
     }
     if (dom.chkAdPreview) {
