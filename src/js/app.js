@@ -65,7 +65,8 @@
     adExpPreview: $('ad-exp-preview'),
     chkAdAutoStart: $('chk-ad-auto-start'),
     chkAdAutoStartTracker: $('chk-ad-auto-start-tracker'),
-    chkAdPreview: $('chk-ad-preview')
+    chkAdPreview: $('chk-ad-preview'),
+    selAdStability: $('sel-ad-stability')
   };
 
   const THEMES = ['green', 'cyan', 'pink', 'yellow', 'purple', 'red'];
@@ -1209,15 +1210,24 @@
   }
 
   // 일관성 검증: 같은 값이 N회 연속 나와야 진짜로 인정 (단발 OCR 오류 거름)
-  const STABILITY_REQUIRED = 2; // 2회 연속 (디폴트는 1초 주기 → 2초 안정)
+  // autoDetect.stabilityRequired로 사용자가 조정 (0=즉시, 1=1회, 2=2회 연속)
   let mpStableLast = null;     // 'cur/max'
   let mpStableCount = 0;
   let expStableLast = null;    // 'exp'
   let expStableCount = 0;
 
+  function getStabilityRequired() {
+    const v = autoDetect.stabilityRequired;
+    if (v === 0 || v === '0') return 0;
+    if (v === 1 || v === '1') return 1;
+    return 2;  // 기본 2 (안정성 우선)
+  }
+
   function checkStability(key, lastKey, count) {
-    if (key === lastKey) return { lastKey, count: count + 1, stable: count + 1 >= STABILITY_REQUIRED };
-    return { lastKey: key, count: 1, stable: STABILITY_REQUIRED <= 1 };
+    const req = getStabilityRequired();
+    if (req === 0) return { lastKey: key, count: 1, stable: true };  // 즉시 통과
+    if (key === lastKey) return { lastKey, count: count + 1, stable: count + 1 >= req };
+    return { lastKey: key, count: 1, stable: 1 >= req };
   }
 
   async function runDetectionTick() {
@@ -1249,17 +1259,18 @@
                 if (mpState.running) onConfigChangedWhileRunning();
                 else renderAll();
                 saveLast();
-                // 자동 START — idle 상태이고 cur < target이면 타이머 시작
-                if (autoDetect.autoStart && !mpState.running && !mpState.paused) {
-                  const cfg = readMpConfig();
-                  const tgt = effectiveTargetMp(cfg);
-                  if (cfg.curMp < tgt && cfg.state !== 'blocked') {
-                    try { startTimer(); } catch (_) {}
-                  }
+              }
+              // 자동 START — idle/done 상태이고 cur < target이면 타이머 시작 (매 틱 체크)
+              if (autoDetect.autoStart && !mpState.running && !mpState.paused) {
+                const cfgNow = readMpConfig();
+                const tgt = effectiveTargetMp(cfgNow);
+                if (cfgNow.curMp < tgt && cfgNow.state !== 'blocked' && cfgNow.curMp >= 0) {
+                  try { startTimer(); } catch (_) {}
                 }
               }
               const confLabel = r.confidence > 0 ? ` · ${Math.round(r.confidence)}%` : '';
-              dom.adMpLast.textContent = `✅ ${cur}/${max}${confLabel}`;
+              const stableLabel = mpStableCount > 1 ? ` ×${mpStableCount}` : '';
+              dom.adMpLast.textContent = `✅ ${cur}/${max}${confLabel}${stableLabel}`;
             } else if (r.parsed && !validParsed) {
               dom.adMpLast.textContent = `🟡 ${r.parsed.cur}/${r.parsed.max} (범위 벗어남)`;
             } else if (r.parsed && validParsed && !stab.stable) {
@@ -1889,6 +1900,14 @@
       dom.chkAdAutoStartTracker.checked = !!autoDetect.autoStartTracker;
       dom.chkAdAutoStartTracker.addEventListener('change', () => {
         autoDetect.autoStartTracker = dom.chkAdAutoStartTracker.checked;
+        S.saveAutoDetect(autoDetect);
+      });
+    }
+    if (dom.selAdStability) {
+      const cur = (typeof autoDetect.stabilityRequired === 'number') ? String(autoDetect.stabilityRequired) : '1';
+      dom.selAdStability.value = cur;
+      dom.selAdStability.addEventListener('change', () => {
+        autoDetect.stabilityRequired = parseInt(dom.selAdStability.value, 10);
         S.saveAutoDetect(autoDetect);
       });
     }

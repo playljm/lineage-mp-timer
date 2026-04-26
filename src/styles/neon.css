@@ -709,6 +709,18 @@ body {
   gap: 14px;
   padding-top: 10px;
   border-top: 1px dashed var(--border);
+  align-items: center;
+}
+.field.inline-field {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+.field.inline-field span {
+  margin: 0;
+  white-space: nowrap;
 }
 
 /* ========== Auto-detect (MP OCR) ========== */
