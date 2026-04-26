@@ -1101,34 +1101,51 @@
     }
 
     let cur, max;
+    let usedFallback = false;
     if (m) {
       cur = parseInt(m[1], 10);
       max = parseInt(m[2], 10);
-    } else if (userMax > 0) {
-      // 4순위(슬래시 인식 완전 실패): 한 덩어리 숫자 → max 자릿수로 분리
+    }
+
+    // 1순위 결과가 sanity check 통과 못 하면(cur>max 등) fallback4 시도
+    const initialValid = m && Number.isFinite(cur) && Number.isFinite(max)
+      && cur <= max && max > 0 && max <= 99999;
+
+    if (!initialValid && userMax > 0) {
       const digits = text.replace(/[^0-9]/g, '');
-      if (!digits) return { text, confidence, parsed: null };
-      const maxLen = String(userMax).length;
-      if (digits.length === maxLen) {
-        // 한 숫자 = cur, max는 INPUTS의 값
-        cur = parseInt(digits, 10);
-        max = userMax;
-      } else if (digits.length > maxLen && digits.length <= maxLen * 2 + 1) {
-        // 두 숫자 붙음 = 끝에서 max 자릿수만 떼어 max로, 나머지 cur (max는 INPUTS 값)
-        cur = parseInt(digits.slice(0, digits.length - maxLen), 10);
-        max = userMax;
-        console.log('[OCR MP fallback4] split digits:', digits, '→ cur=' + cur + ', max=' + max);
-      } else {
+      if (digits) {
+        const maxLen = String(userMax).length;
+        if (digits.length === maxLen) {
+          // 한 덩어리 숫자가 max 자릿수와 같음 → cur로 사용 (max는 INPUTS 값)
+          cur = parseInt(digits, 10);
+          max = userMax;
+          usedFallback = true;
+        } else if (digits.length > maxLen && digits.length <= maxLen * 2 + 1) {
+          // 두 숫자 붙음 → 끝에서 max 자릿수 떼어내 cur 추출 (max는 INPUTS 값)
+          cur = parseInt(digits.slice(0, digits.length - maxLen), 10);
+          max = userMax;
+          usedFallback = true;
+        } else if (digits.length > 0 && digits.length < maxLen) {
+          // 영역이 cur만 잡혀서 짧은 숫자 → cur 사용 (max는 INPUTS 값)
+          cur = parseInt(digits, 10);
+          max = userMax;
+          usedFallback = true;
+        } else {
+          return { text, confidence, parsed: null };
+        }
+        console.log('[OCR MP fallback4]', { initialValid, digits, cur, max, userMax });
+      } else if (!initialValid) {
         return { text, confidence, parsed: null };
       }
-    } else {
-      return { text, confidence, parsed: null };
+    } else if (!initialValid && userMax === 0) {
+      // userMax 없고 1순위 invalid → 결과 그대로 반환 (validation 단계에서 거름)
+      console.log('[OCR MP] 1순위 invalid, INPUTS의 max 입력 시 자동 복구 가능');
     }
 
     if (!Number.isFinite(cur) || !Number.isFinite(max)) {
       return { text, confidence, parsed: null };
     }
-    return { text, confidence, parsed: { cur, max } };
+    return { text, confidence, parsed: { cur, max }, usedFallback };
   }
 
   async function ocrExpRegion() {
