@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta http-equiv="Content-Security-Policy"
-      content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self';" />
+      content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' blob: data: https://tessdata.projectnaptha.com; img-src 'self' blob: data:; media-src 'self' blob: mediastream:;" />
     <title>Lineage MP Timer</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -145,6 +145,26 @@
           <span>위치 보너스 직접 입력 (MP/틱)</span>
           <input id="in-location-custom" type="number" min="-20" max="50" step="1" value="0" />
         </label>
+      </section>
+
+      <!-- MP 자동 감지 (OCR) -->
+      <section class="panel auto-detect">
+        <div class="row between baseline">
+          <h3 class="panel-title inline">🔍 MP 자동 감지 (OCR)</h3>
+          <span class="ad-status-badge" id="ad-status">OFF</span>
+        </div>
+        <p class="panel-help muted small">
+          리니지 화면에서 <b>현재/최대 MP가 보이는 영역</b>(예: <code>50/327</code>)을 한 번 드래그로 지정하면, 1초 주기로 자동 인식해 <b>현재 MP에 반영</b>됩니다.
+        </p>
+        <div class="auto-detect-actions">
+          <button id="btn-ad-region" class="ghost-btn ad-btn">📷 MP 영역 지정</button>
+          <button id="btn-ad-toggle" class="ghost-btn ad-btn primary-ghost">▶ 자동 감지 시작</button>
+        </div>
+        <div class="ad-info" id="ad-info">
+          <div class="ad-info-row"><span class="ad-info-label">모니터</span><span id="ad-display">미지정</span></div>
+          <div class="ad-info-row"><span class="ad-info-label">영역</span><span id="ad-region-info">미지정</span></div>
+          <div class="ad-info-row"><span class="ad-info-label">최근 인식</span><span id="ad-last">-</span></div>
+        </div>
       </section>
 
       <!-- 컨트롤 -->
@@ -357,6 +377,7 @@
       </footer>
     </main>
 
+    <script src="../node_modules/tesseract.js/dist/tesseract.min.js"></script>
     <script src="js/engine.js"></script>
     <script src="js/storage.js"></script>
     <script src="js/app.js"></script>

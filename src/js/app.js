@@ -49,7 +49,14 @@
     itemsTotal: $('items-total-value'),
     btnItemsApply: $('btn-items-apply'),
     btnItemAdd: $('btn-item-add'),
-    btnItemsReset: $('btn-items-reset')
+    btnItemsReset: $('btn-items-reset'),
+    // auto-detect
+    btnAdRegion: $('btn-ad-region'),
+    btnAdToggle: $('btn-ad-toggle'),
+    adStatus: $('ad-status'),
+    adDisplay: $('ad-display'),
+    adRegionInfo: $('ad-region-info'),
+    adLast: $('ad-last')
   };
 
   const THEMES = ['green', 'cyan', 'pink', 'yellow', 'purple', 'red'];
@@ -68,8 +75,17 @@
   let tracker = S.loadTracker();
   let hotkeys = S.loadHotkeys();
   let items = S.loadItems();
+  let autoDetect = S.loadAutoDetect();
   let captureTarget = null;
   const expDebounce = { trkExpStart: null, trkExpNow: null };
+
+  // OCR / Capture state
+  let ocrWorker = null;
+  let ocrInitPromise = null;
+  let captureStream = null;
+  let captureVideo = null;
+  let detectInterval = null;
+  let detectionRunning = false;
   const EXP_DELAY_MIN = 500;
   const EXP_DELAY_MAX = 10000;
   const EXP_DELAY_DEFAULT = 3000;
@@ -807,6 +823,284 @@
     S.saveTracker(tracker);
   }
 
+  // ========== MP Auto-detect (OCR) ==========
+  function setAdStatus(label, kind) {
+    if (!dom.adStatus) return;
+    dom.adStatus.textContent = label;
+    dom.adStatus.className = 'ad-status-badge' + (kind ? ' ' + kind : '');
+  }
+
+  function renderAutoDetectInfo() {
+    if (!dom.adDisplay) return;
+    dom.adDisplay.textContent = autoDetect.displayLabel || '미지정';
+    if (autoDetect.region) {
+      const r = autoDetect.region;
+      dom.adRegionInfo.textContent = `${r.x}, ${r.y} · ${r.width}×${r.height}`;
+    } else {
+      dom.adRegionInfo.textContent = '미지정';
+    }
+    if (dom.btnAdToggle) {
+      dom.btnAdToggle.textContent = autoDetect.enabled
+        ? '⏹ 자동 감지 중지'
+        : '▶ 자동 감지 시작';
+    }
+    setAdStatus(autoDetect.enabled ? 'ON' : 'OFF', autoDetect.enabled ? 'on' : '');
+  }
+
+  async function initOcrWorker() {
+    if (ocrWorker) return ocrWorker;
+    if (ocrInitPromise) return ocrInitPromise;
+    if (typeof Tesseract === 'undefined') {
+      throw new Error('Tesseract.js 로드 실패');
+    }
+    ocrInitPromise = (async () => {
+      const w = await Tesseract.createWorker('eng', 1);
+      try {
+        await w.setParameters({
+          tessedit_char_whitelist: '0123456789/ ',
+          tessedit_pageseg_mode: '7'
+        });
+      } catch (_) { /* legacy api fallback */ }
+      ocrWorker = w;
+      return w;
+    })();
+    return ocrInitPromise;
+  }
+
+  async function setupCaptureStream() {
+    if (captureStream) {
+      try { captureStream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+      captureStream = null;
+      captureVideo = null;
+    }
+    if (!autoDetect.sourceId) throw new Error('소스 미지정');
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        mandatory: {
+          chromeMediaSource: 'desktop',
+          chromeMediaSourceId: autoDetect.sourceId,
+          minWidth: 1, maxWidth: 4096,
+          minHeight: 1, maxHeight: 2160
+        }
+      }
+    });
+    const video = document.createElement('video');
+    video.srcObject = stream;
+    video.muted = true;
+    video.autoplay = true;
+    video.playsInline = true;
+    await new Promise((res, rej) => {
+      const t = setTimeout(() => rej(new Error('video timeout')), 5000);
+      video.onloadedmetadata = () => { clearTimeout(t); res(); };
+      video.onerror = (e) => { clearTimeout(t); rej(e); };
+    });
+    try { await video.play(); } catch (_) {}
+    captureStream = stream;
+    captureVideo = video;
+  }
+
+  function preprocessCanvas(canvas) {
+    const ctx = canvas.getContext('2d');
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const d = img.data;
+    // 그레이스케일 + threshold (반전 자동 결정)
+    let sum = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      sum += (d[i] + d[i + 1] + d[i + 2]) / 3;
+    }
+    const avg = sum / (d.length / 4);
+    // 평균 휘도가 어두우면 글자가 밝은 것 → 흰 배경 검은 글자로 반전
+    const invert = avg < 128;
+    for (let i = 0; i < d.length; i += 4) {
+      const v = (d[i] + d[i + 1] + d[i + 2]) / 3;
+      let bw = v > 128 ? 255 : 0;
+      if (invert) bw = 255 - bw;
+      d[i] = bw; d[i + 1] = bw; d[i + 2] = bw;
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
+  async function captureAndOcr() {
+    if (!captureVideo || !autoDetect.region) return null;
+    const r = autoDetect.region;
+    const scale = autoDetect.scaleFactor || 1;
+    // displayId 좌표는 화면 픽셀 기준이지만 video는 sourceId 기준. 일반 케이스는 동일.
+    const sx = Math.max(0, Math.round(r.x * scale));
+    const sy = Math.max(0, Math.round(r.y * scale));
+    const sw = Math.max(1, Math.round(r.width * scale));
+    const sh = Math.max(1, Math.round(r.height * scale));
+    const upscale = 3;
+    const canvas = document.createElement('canvas');
+    canvas.width = sw * upscale;
+    canvas.height = sh * upscale;
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    try {
+      ctx.drawImage(captureVideo, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    } catch (e) {
+      throw new Error('캡처 실패: ' + e.message);
+    }
+    if (autoDetect.preprocess !== false) preprocessCanvas(canvas);
+
+    const w = await initOcrWorker();
+    const res = await w.recognize(canvas);
+    const text = ((res && res.data && res.data.text) || '').trim();
+    const confidence = (res && res.data && res.data.confidence) || 0;
+    const m = text.match(/(\d{1,5})\s*\/\s*(\d{1,5})/);
+    if (!m) return { text, confidence, parsed: null };
+    return {
+      text,
+      confidence,
+      parsed: { cur: parseInt(m[1], 10), max: parseInt(m[2], 10) }
+    };
+  }
+
+  async function runDetectionTick() {
+    if (detectionRunning) return; // 이전 틱 진행 중이면 스킵
+    detectionRunning = true;
+    try {
+      const result = await captureAndOcr();
+      if (!result) { return; }
+      const threshold = autoDetect.confidenceThreshold || 50;
+      if (result.parsed && result.confidence >= threshold) {
+        const { cur, max } = result.parsed;
+        if (max > 0 && cur <= max && max <= 99999) {
+          const prevCur = parseInt(dom.inCurMp.value, 10) || 0;
+          const prevMax = parseInt(dom.inMaxMp.value, 10) || 0;
+          let changed = false;
+          if (cur !== prevCur) { dom.inCurMp.value = cur; changed = true; }
+          if (max !== prevMax) { dom.inMaxMp.value = max; changed = true; }
+          if (changed) {
+            if (mpState.running) onConfigChangedWhileRunning();
+            else renderAll();
+            saveLast();
+          }
+        }
+        dom.adLast.textContent = `${result.parsed.cur}/${result.parsed.max} · ${Math.round(result.confidence)}%`;
+      } else if (result.parsed) {
+        dom.adLast.textContent = `🟡 ${result.parsed.cur}/${result.parsed.max} · ${Math.round(result.confidence)}% (낮음)`;
+      } else {
+        dom.adLast.textContent = `❌ "${(result.text || '???').slice(0, 20)}"`;
+      }
+    } catch (e) {
+      dom.adLast.textContent = '⚠️ ' + (e.message || 'error');
+    } finally {
+      detectionRunning = false;
+    }
+  }
+
+  async function startAutoDetect() {
+    if (!autoDetect.region || !autoDetect.sourceId) {
+      flashHint('먼저 [📷 MP 영역 지정]을 해주세요.');
+      return;
+    }
+    setAdStatus('초기화...', 'on');
+    try {
+      await setupCaptureStream();
+      await initOcrWorker();
+      autoDetect.enabled = true;
+      S.saveAutoDetect(autoDetect);
+      renderAutoDetectInfo();
+      if (detectInterval) clearInterval(detectInterval);
+      detectInterval = setInterval(runDetectionTick, autoDetect.intervalMs || 1000);
+      runDetectionTick();
+    } catch (e) {
+      console.error('startAutoDetect failed', e);
+      setAdStatus('ERROR', 'error');
+      flashHint('⚠️ 시작 실패: ' + (e.message || e));
+      autoDetect.enabled = false;
+      S.saveAutoDetect(autoDetect);
+    }
+  }
+
+  function stopAutoDetect() {
+    if (detectInterval) clearInterval(detectInterval);
+    detectInterval = null;
+    if (captureStream) {
+      try { captureStream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+      captureStream = null;
+      captureVideo = null;
+    }
+    autoDetect.enabled = false;
+    S.saveAutoDetect(autoDetect);
+    renderAutoDetectInfo();
+  }
+
+  function showDisplayPicker(displays) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      overlay.innerHTML = `
+        <div class="modal" role="dialog">
+          <h3>모니터 선택</h3>
+          <p>MP 영역을 캡처할 모니터를 선택하세요. 리니지가 실행 중인 모니터를 고르면 됩니다.</p>
+          <div class="display-grid">
+            ${displays.map((d) => `
+              <button class="display-card" data-id="${d.id}" type="button">
+                ${d.thumbnail ? `<img src="${d.thumbnail}" alt="" />` : ''}
+                <div class="display-label">${escapeHtml(d.label)}${d.primary ? ' <small>(주)</small>' : ''}</div>
+                <div class="display-bounds">${d.bounds.width}×${d.bounds.height} @ ${d.scaleFactor}x</div>
+              </button>
+            `).join('')}
+          </div>
+          <button class="ghost-btn" data-cancel type="button">취소</button>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+      const close = (val) => { try { document.body.removeChild(overlay); } catch (_) {} resolve(val); };
+      overlay.addEventListener('click', (e) => {
+        const card = e.target.closest('.display-card');
+        if (card) { close(parseInt(card.getAttribute('data-id'), 10)); return; }
+        if (e.target === overlay || e.target.hasAttribute('data-cancel')) close(null);
+      });
+      const onKey = (e) => { if (e.key === 'Escape') { close(null); document.removeEventListener('keydown', onKey); } };
+      document.addEventListener('keydown', onKey);
+    });
+  }
+
+  async function onPickRegion() {
+    if (!api || !api.listDisplays) {
+      flashHint('이 환경에서는 화면 캡처를 지원하지 않습니다.');
+      return;
+    }
+    const wasOn = autoDetect.enabled;
+    if (wasOn) stopAutoDetect();
+    try {
+      const displays = await api.listDisplays();
+      if (!displays || !displays.length) {
+        flashHint('⚠️ 디스플레이를 찾을 수 없습니다.');
+        return;
+      }
+      let displayId = displays.length === 1 ? displays[0].id : await showDisplayPicker(displays);
+      if (displayId == null) return;
+      const selected = displays.find((d) => d.id === displayId);
+      if (!selected || !selected.sourceId) {
+        flashHint('⚠️ 모니터 캡처 소스를 가져올 수 없습니다.');
+        return;
+      }
+      const result = await api.startRegionSelect(displayId);
+      if (!result || !result.region) return;
+      autoDetect.sourceId = selected.sourceId;
+      autoDetect.displayId = displayId;
+      autoDetect.displayLabel = selected.label;
+      autoDetect.region = result.region;
+      autoDetect.scaleFactor = result.scaleFactor || selected.scaleFactor || 1;
+      S.saveAutoDetect(autoDetect);
+      renderAutoDetectInfo();
+      flashHint('✅ 영역 지정 완료');
+      if (wasOn) startAutoDetect();
+    } catch (e) {
+      console.error('onPickRegion failed', e);
+      flashHint('⚠️ 영역 지정 실패: ' + (e.message || e));
+    }
+  }
+
+  async function toggleAutoDetect() {
+    if (autoDetect.enabled) stopAutoDetect();
+    else await startAutoDetect();
+  }
+
   // ========== Items (사냥 획득 아이템 판매 계산) ==========
   function itemSubtotal(it) {
     const qty = Math.max(0, Math.floor(Number(it.qty) || 0));
@@ -1212,6 +1506,10 @@
     if (dom.btnItemsReset) dom.btnItemsReset.addEventListener('click', onItemsReset);
     if (dom.btnItemsApply) dom.btnItemsApply.addEventListener('click', onItemsApplyToAdena);
 
+    // Auto-detect
+    if (dom.btnAdRegion) dom.btnAdRegion.addEventListener('click', onPickRegion);
+    if (dom.btnAdToggle) dom.btnAdToggle.addEventListener('click', toggleAutoDetect);
+
     // Hotkeys
     document.querySelectorAll('.hotkey-row').forEach((row) => {
       const name = row.getAttribute('data-hk');
@@ -1340,9 +1638,14 @@
     updateQuickPctActive();
     renderAll();
     renderTracker();
+    renderAutoDetectInfo();
     applyGlobalHotkeys();
     // 초기 스냅샷 (undo 기준점)
     setTimeout(() => pushUndoImmediate(), 100);
+    // 자동 감지 자동 재개 (이전 세션에서 ON 상태였으면)
+    if (autoDetect.enabled && autoDetect.region && autoDetect.sourceId) {
+      setTimeout(() => startAutoDetect().catch(() => {}), 500);
+    }
 
     // 전역 드래그&드롭 차단 — 숫자 입력 값이 드래그로 이동되는 것 방지
     window.addEventListener('dragstart', (e) => {

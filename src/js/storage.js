@@ -10,6 +10,7 @@
   const TRACKER_KEY = 'lmp.tracker.v1';
   const HOTKEY_KEY = 'lmp.hotkeys.v1';
   const ITEMS_KEY = 'lmp.items.v1';
+  const AUTO_DETECT_KEY = 'lmp.autoDetect.v1';
 
   const DEFAULT_HOTKEYS = {
     alwaysOnTop: { accel: 'F1', enabled: true, scope: 'global', label: '항상 위' },
@@ -96,6 +97,23 @@
   }
   function defaultHotkeys() { return JSON.parse(JSON.stringify(DEFAULT_HOTKEYS)); }
 
+  // ===== Auto-detect (MP 자동 감지) =====
+  function loadAutoDetect() {
+    return safeParse(localStorage.getItem(AUTO_DETECT_KEY), {
+      enabled: false,
+      sourceId: null,
+      displayId: null,
+      displayLabel: null,
+      region: null,           // { x, y, width, height } — 디스플레이 좌표
+      confidenceThreshold: 50,
+      intervalMs: 1000,
+      preprocess: true        // 그레이스케일+threshold 전처리
+    });
+  }
+  function saveAutoDetect(s) {
+    try { localStorage.setItem(AUTO_DETECT_KEY, JSON.stringify(s)); } catch (_) {}
+  }
+
   // ===== Items (사냥 획득 아이템) =====
   function loadItems() {
     const stored = safeParse(localStorage.getItem(ITEMS_KEY), null);
@@ -113,6 +131,7 @@
     loadLast, saveLast,
     loadTracker, saveTracker,
     loadHotkeys, saveHotkeys, defaultHotkeys,
-    loadItems, saveItems, defaultItems
+    loadItems, saveItems, defaultItems,
+    loadAutoDetect, saveAutoDetect
   };
 })(window);

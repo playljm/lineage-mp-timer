@@ -7,7 +7,8 @@ const {
   ipcMain,
   Notification,
   globalShortcut,
-  screen
+  screen,
+  desktopCapturer
 } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -332,4 +333,82 @@ ipcMain.handle('app:get-version', () => {
 ipcMain.handle('app:quit', () => {
   isQuitting = true;
   app.quit();
+});
+
+// ========== MP Auto-detect (Display + Region select) ==========
+let overlayWindow = null;
+
+ipcMain.handle('app:list-displays', async () => {
+  try {
+    const displays = screen.getAllDisplays();
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: 320, height: 200 }
+    });
+    return displays.map((d, i) => {
+      let src = sources.find((s) => String(s.display_id) === String(d.id));
+      if (!src && sources[i]) src = sources[i];
+      return {
+        id: d.id,
+        label: d.label || `모니터 ${i + 1}`,
+        primary: d.bounds.x === 0 && d.bounds.y === 0,
+        bounds: d.bounds,
+        scaleFactor: d.scaleFactor || 1,
+        sourceId: src && src.id ? src.id : null,
+        thumbnail: src && src.thumbnail ? src.thumbnail.toDataURL() : null
+      };
+    });
+  } catch (e) {
+    console.error('list-displays failed', e);
+    return [];
+  }
+});
+
+ipcMain.handle('app:start-region-select', async (_, displayId) => {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    try { overlayWindow.close(); } catch (_) {}
+    overlayWindow = null;
+  }
+  const target = screen.getAllDisplays().find((d) => d.id === displayId) || screen.getPrimaryDisplay();
+  overlayWindow = new BrowserWindow({
+    x: target.bounds.x,
+    y: target.bounds.y,
+    width: target.bounds.width,
+    height: target.bounds.height,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    movable: false,
+    fullscreenable: false,
+    hasShadow: false,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: path.join(__dirname, 'overlay-preload.js')
+    }
+  });
+  overlayWindow.setIgnoreMouseEvents(false);
+  overlayWindow.loadFile(path.join(__dirname, 'overlay.html'));
+  overlayWindow.once('ready-to-show', () => {
+    overlayWindow && overlayWindow.show();
+    overlayWindow && overlayWindow.focus();
+  });
+
+  return new Promise((resolve) => {
+    const onSelected = (_e, region) => { cleanup(); resolve({ region, displayId: target.id, displayBounds: target.bounds, scaleFactor: target.scaleFactor || 1 }); };
+    const onCancel = () => { cleanup(); resolve(null); };
+    function cleanup() {
+      ipcMain.removeListener('overlay:region-selected', onSelected);
+      ipcMain.removeListener('overlay:cancelled', onCancel);
+      if (overlayWindow && !overlayWindow.isDestroyed()) {
+        try { overlayWindow.close(); } catch (_) {}
+      }
+      overlayWindow = null;
+    }
+    ipcMain.once('overlay:region-selected', onSelected);
+    ipcMain.once('overlay:cancelled', onCancel);
+  });
 });

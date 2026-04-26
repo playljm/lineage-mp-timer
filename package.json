@@ -49,5 +49,8 @@
     "portable": {
       "artifactName": "LineageMPTimer-portable-${version}.exe"
     }
+  },
+  "dependencies": {
+    "tesseract.js": "^7.0.0"
   }
 }

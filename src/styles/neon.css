@@ -657,6 +657,162 @@ body {
 
 .preset-actions button:hover { background: var(--neon-soft); }
 
+/* ========== Auto-detect (MP OCR) ========== */
+.auto-detect-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.ad-btn {
+  flex: 1;
+  margin-top: 0;
+}
+.ad-btn.primary-ghost {
+  border-color: var(--neon-dim);
+  color: var(--neon);
+  background: linear-gradient(180deg, var(--neon-soft), rgba(0,0,0,0));
+}
+.ad-btn.primary-ghost:hover {
+  background: var(--neon-soft);
+  box-shadow: 0 0 6px var(--neon-soft);
+}
+.ad-status-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  padding: 2px 10px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.4);
+  color: var(--muted);
+  border: 1px solid var(--border-strong);
+}
+.ad-status-badge.on {
+  color: var(--neon);
+  border-color: var(--neon);
+  background: var(--neon-soft);
+  box-shadow: 0 0 6px var(--neon-soft);
+  animation: pulse 1.6s infinite;
+}
+.ad-status-badge.error {
+  color: var(--red);
+  border-color: var(--red);
+  background: rgba(255, 51, 85, 0.1);
+}
+.ad-info {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.25);
+  border-left: 2px solid var(--border-strong);
+  border-radius: 2px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+.ad-info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 3px 0;
+  border-bottom: 1px dashed transparent;
+}
+.ad-info-row + .ad-info-row { border-top: 1px dashed var(--border); }
+.ad-info-label {
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+#ad-display, #ad-region-info, #ad-last {
+  color: var(--neon);
+  font-weight: 600;
+  text-align: right;
+  word-break: break-all;
+}
+
+/* ========== Display Picker Modal ========== */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 10, 0.85);
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  backdrop-filter: blur(4px);
+}
+.modal {
+  background: var(--bg-panel);
+  border: 1px solid var(--neon);
+  border-radius: var(--radius);
+  box-shadow: 0 0 32px var(--neon-soft);
+  padding: 18px;
+  max-width: 720px;
+  width: 100%;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+.modal h3 {
+  color: var(--neon);
+  font-size: 14px;
+  letter-spacing: 0.15em;
+  margin-bottom: 6px;
+}
+.modal p {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.6;
+  margin-bottom: 14px;
+}
+.display-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.display-card {
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: var(--font-mono);
+  text-align: left;
+  color: var(--text);
+}
+.display-card:hover {
+  border-color: var(--neon);
+  box-shadow: 0 0 12px var(--neon-soft);
+  transform: translateY(-2px);
+}
+.display-card img {
+  width: 100%;
+  height: auto;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  margin-bottom: 6px;
+  display: block;
+  background: #000;
+}
+.display-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--neon);
+  margin-bottom: 2px;
+}
+.display-label small {
+  color: var(--amber);
+  font-weight: 400;
+  margin-left: 4px;
+}
+.display-bounds {
+  font-size: 10px;
+  color: var(--muted);
+}
+
 /* ========== ITEM DROPS (사냥 획득) ========== */
 .items-header, .item-row {
   display: grid;

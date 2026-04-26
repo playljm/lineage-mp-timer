@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('api', {
   getGlobalHotkeys: () => ipcRenderer.invoke('app:get-global-hotkeys'),
   resetWindowSize: () => ipcRenderer.invoke('app:reset-window-size'),
   getVersion: () => ipcRenderer.invoke('app:get-version'),
+  listDisplays: () => ipcRenderer.invoke('app:list-displays'),
+  startRegionSelect: (displayId) => ipcRenderer.invoke('app:start-region-select', displayId),
   quit: () => ipcRenderer.invoke('app:quit'),
   onAlwaysOnTopChanged: (cb) => {
     ipcRenderer.on('always-on-top-changed', (_, value) => {

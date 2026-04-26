@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <title>MP 영역 선택</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        width: 100vw;
+        height: 100vh;
+        background: rgba(5, 8, 10, 0.4);
+        cursor: crosshair;
+        user-select: none;
+        overflow: hidden;
+        font-family: 'JetBrains Mono', 'Nanum Gothic Coding', Consolas, monospace;
+      }
+      #info {
+        position: fixed;
+        top: 24px;
+        left: 50%;
+        transform: translateX(-50%);
+        color: #00ff9f;
+        font-size: 16px;
+        font-weight: 700;
+        background: rgba(5, 8, 10, 0.92);
+        padding: 12px 20px;
+        border-radius: 8px;
+        border: 1px solid #00ff9f;
+        box-shadow: 0 0 20px rgba(0, 255, 159, 0.4);
+        pointer-events: none;
+        z-index: 100;
+        letter-spacing: 0.05em;
+      }
+      #info small {
+        color: #9dc4b3;
+        font-size: 12px;
+        font-weight: 400;
+        margin-left: 8px;
+      }
+      #selection {
+        position: fixed;
+        border: 2px solid #00ff9f;
+        background: rgba(0, 255, 159, 0.12);
+        box-shadow: 0 0 12px rgba(0, 255, 159, 0.6),
+                    inset 0 0 12px rgba(0, 255, 159, 0.2);
+        pointer-events: none;
+        display: none;
+      }
+      #coords {
+        position: absolute;
+        bottom: -28px;
+        right: 0;
+        background: rgba(5, 8, 10, 0.92);
+        color: #00ff9f;
+        font-size: 11px;
+        padding: 3px 10px;
+        border-radius: 3px;
+        white-space: nowrap;
+        border: 1px solid #00ff9f;
+      }
+      #cross-h, #cross-v {
+        position: fixed;
+        background: rgba(0, 255, 159, 0.3);
+        pointer-events: none;
+        display: none;
+      }
+      #cross-h { left: 0; right: 0; height: 1px; }
+      #cross-v { top: 0; bottom: 0; width: 1px; }
+    </style>
+  </head>
+  <body>
+    <div id="info">📷 MP 영역을 드래그로 선택하세요 <small>· Esc 취소</small></div>
+    <div id="cross-h"></div>
+    <div id="cross-v"></div>
+    <div id="selection"><div id="coords">0×0</div></div>
+    <script>
+      let startX = 0, startY = 0, isDragging = false;
+      const sel = document.getElementById('selection');
+      const coords = document.getElementById('coords');
+      const crossH = document.getElementById('cross-h');
+      const crossV = document.getElementById('cross-v');
+
+      document.addEventListener('mousemove', (e) => {
+        if (!isDragging) {
+          crossH.style.display = 'block';
+          crossV.style.display = 'block';
+          crossH.style.top = e.clientY + 'px';
+          crossV.style.left = e.clientX + 'px';
+          return;
+        }
+        const x = Math.min(e.clientX, startX);
+        const y = Math.min(e.clientY, startY);
+        const w = Math.abs(e.clientX - startX);
+        const h = Math.abs(e.clientY - startY);
+        sel.style.left = x + 'px';
+        sel.style.top = y + 'px';
+        sel.style.width = w + 'px';
+        sel.style.height = h + 'px';
+        coords.textContent = w + '×' + h + ' px';
+      });
+
+      document.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        startX = e.clientX;
+        startY = e.clientY;
+        isDragging = true;
+        crossH.style.display = 'none';
+        crossV.style.display = 'none';
+        sel.style.display = 'block';
+        sel.style.left = startX + 'px';
+        sel.style.top = startY + 'px';
+        sel.style.width = '0px';
+        sel.style.height = '0px';
+      });
+
+      document.addEventListener('mouseup', (e) => {
+        if (!isDragging) return;
+        isDragging = false;
+        const x = Math.min(e.clientX, startX);
+        const y = Math.min(e.clientY, startY);
+        const w = Math.abs(e.clientX - startX);
+        const h = Math.abs(e.clientY - startY);
+        if (w >= 8 && h >= 8) {
+          window.overlayApi.confirm({ x, y, width: w, height: h });
+        } else {
+          sel.style.display = 'none';
+        }
+      });
+
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') window.overlayApi.cancel();
+      });
+    </script>
+  </body>
+</html>
