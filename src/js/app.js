@@ -1053,10 +1053,23 @@
     const res = await w.recognize(canvas);
     const text = ((res && res.data && res.data.text) || '').trim();
     const confidence = (res && res.data && res.data.confidence) || 0;
-    // "50/327" 패턴
-    const m = text.match(/(\d{1,5})\s*\/\s*(\d{1,5})/);
+
+    // 1순위: 슬래시/파이프/콜론 구분자
+    let m = text.match(/(\d{1,5})\s*[\/\\|:]\s*(\d{1,5})/);
+    // 2순위: 슬래시 인식 못한 경우 — 두 숫자가 비숫자로 구분된 패턴
+    if (!m) m = text.match(/(\d{1,5})[^\d]+(\d{1,5})/);
+    // 3순위: 텍스트 안의 첫 두 숫자
+    if (!m) {
+      const nums = text.match(/\d{1,5}/g);
+      if (nums && nums.length >= 2) m = [null, nums[0], nums[1]];
+    }
     if (!m) return { text, confidence, parsed: null };
-    return { text, confidence, parsed: { cur: parseInt(m[1], 10), max: parseInt(m[2], 10) } };
+    const cur = parseInt(m[1], 10);
+    const max = parseInt(m[2], 10);
+    if (!Number.isFinite(cur) || !Number.isFinite(max)) {
+      return { text, confidence, parsed: null };
+    }
+    return { text, confidence, parsed: { cur, max } };
   }
 
   async function ocrExpRegion() {
@@ -1086,31 +1099,43 @@
     return { text, confidence, parsed };
   }
 
+  // Sanity check: confidence가 신뢰성 낮을 때 결과 자체로 검증
+  function isValidMpParsed(p) {
+    return p && Number.isFinite(p.cur) && Number.isFinite(p.max)
+      && p.cur >= 0 && p.max > 0 && p.max <= 99999 && p.cur <= p.max;
+  }
+  function isValidExpParsed(p) {
+    return p && Number.isFinite(p.exp) && p.exp >= 0 && p.exp <= 100;
+  }
+
   async function runDetectionTick() {
     if (detectionRunning) return; // 이전 틱 진행 중이면 스킵
     detectionRunning = true;
-    const threshold = autoDetect.confidenceThreshold || 50;
+    const threshold = (typeof autoDetect.confidenceThreshold === 'number') ? autoDetect.confidenceThreshold : 0;
     try {
       // MP 영역
       if (autoDetect.mpRegion) {
         try {
           const r = await ocrMpRegion();
           if (r) {
-            if (r.parsed && r.confidence >= threshold) {
+            const validParsed = isValidMpParsed(r.parsed);
+            const passConfidence = r.confidence >= threshold;
+            if (validParsed && passConfidence) {
               const { cur, max } = r.parsed;
-              if (max > 0 && cur <= max && max <= 99999) {
-                const prevCur = parseInt(dom.inCurMp.value, 10) || 0;
-                const prevMax = parseInt(dom.inMaxMp.value, 10) || 0;
-                let changed = false;
-                if (cur !== prevCur) { dom.inCurMp.value = cur; changed = true; }
-                if (max !== prevMax) { dom.inMaxMp.value = max; changed = true; }
-                if (changed) {
-                  if (mpState.running) onConfigChangedWhileRunning();
-                  else renderAll();
-                  saveLast();
-                }
+              const prevCur = parseInt(dom.inCurMp.value, 10) || 0;
+              const prevMax = parseInt(dom.inMaxMp.value, 10) || 0;
+              let changed = false;
+              if (cur !== prevCur) { dom.inCurMp.value = cur; changed = true; }
+              if (max !== prevMax) { dom.inMaxMp.value = max; changed = true; }
+              if (changed) {
+                if (mpState.running) onConfigChangedWhileRunning();
+                else renderAll();
+                saveLast();
               }
-              dom.adMpLast.textContent = `${r.parsed.cur}/${r.parsed.max} · ${Math.round(r.confidence)}%`;
+              const confLabel = r.confidence > 0 ? ` · ${Math.round(r.confidence)}%` : '';
+              dom.adMpLast.textContent = `✅ ${cur}/${max}${confLabel}`;
+            } else if (r.parsed && !validParsed) {
+              dom.adMpLast.textContent = `🟡 ${r.parsed.cur}/${r.parsed.max} (범위 벗어남)`;
             } else if (r.parsed) {
               dom.adMpLast.textContent = `🟡 ${r.parsed.cur}/${r.parsed.max} · ${Math.round(r.confidence)}% (낮음)`;
             } else {
@@ -1126,7 +1151,9 @@
         try {
           const r = await ocrExpRegion();
           if (r) {
-            if (r.parsed && r.confidence >= threshold) {
+            const validParsed = isValidExpParsed(r.parsed);
+            const passConfidence = r.confidence >= threshold;
+            if (validParsed && passConfidence) {
               const exp = r.parsed.exp;
               const prev = parseExpPct(dom.trkExpNow.value);
               if (Math.abs(exp - prev) > 0.0001) {
@@ -1134,7 +1161,10 @@
                 renderTracker();
                 saveTrackerCurrent();
               }
-              dom.adExpLast.textContent = `${formatExpPct(exp)}% · ${Math.round(r.confidence)}%`;
+              const confLabel = r.confidence > 0 ? ` · ${Math.round(r.confidence)}%` : '';
+              dom.adExpLast.textContent = `✅ ${formatExpPct(exp)}%${confLabel}`;
+            } else if (r.parsed && !validParsed) {
+              dom.adExpLast.textContent = `🟡 ${formatExpPct(r.parsed.exp)}% (범위 벗어남)`;
             } else if (r.parsed) {
               dom.adExpLast.textContent = `🟡 ${formatExpPct(r.parsed.exp)}% · ${Math.round(r.confidence)}% (낮음)`;
             } else {
@@ -1146,7 +1176,6 @@
         }
       }
     } catch (e) {
-      const msg = (e && e.message) || String(e);
       console.error('[AutoDetect] tick error:', e);
     } finally {
       detectionRunning = false;

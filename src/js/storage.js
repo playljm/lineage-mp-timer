@@ -106,7 +106,7 @@
       displayId: null,
       displayLabel: null,
       scaleFactor: 1,
-      confidenceThreshold: 50,
+      confidenceThreshold: 0,  // Tesseract.js v5는 confidence가 0으로 떨어지는 케이스 많음 → 결과 sanity check로 대체
       intervalMs: 1000,
       preprocess: true,        // 그레이스케일+threshold 전처리
       mpRegion: null,          // { x, y, width, height }
