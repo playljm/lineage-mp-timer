@@ -86,8 +86,8 @@
   // OCR / Capture state
   let ocrWorker = null;
   let ocrInitPromise = null;
-  let captureStream = null;
-  let captureVideo = null;
+  // sourceId별 stream/video 관리 — 듀얼 모니터에 영역이 분산된 경우 지원
+  const captureStreams = new Map(); // sourceId → { stream, video }
   let detectInterval = null;
   let detectionRunning = false;
   const EXP_DELAY_MIN = 500;
@@ -835,11 +835,21 @@
   }
 
   function formatRegion(r) {
-    return r ? `${r.x}, ${r.y} · ${r.width}×${r.height}` : '미지정';
+    if (!r) return '미지정';
+    const mon = r.displayLabel ? `[${r.displayLabel}] ` : '';
+    return `${mon}${r.x}, ${r.y} · ${r.width}×${r.height}`;
   }
   function renderAutoDetectInfo() {
     if (!dom.adDisplay) return;
-    dom.adDisplay.textContent = autoDetect.displayLabel || '미지정';
+    // 모니터 표시: 두 영역 monitor 다른지 표시
+    const mpMon = autoDetect.mpRegion && autoDetect.mpRegion.displayLabel;
+    const expMon = autoDetect.expRegion && autoDetect.expRegion.displayLabel;
+    let monText = '미지정';
+    if (mpMon && expMon) {
+      monText = (mpMon === expMon) ? mpMon : `MP=${mpMon} / EXP=${expMon}`;
+    } else if (mpMon) monText = mpMon;
+    else if (expMon) monText = expMon;
+    dom.adDisplay.textContent = monText;
     if (dom.adMpRegionInfo) dom.adMpRegionInfo.textContent = formatRegion(autoDetect.mpRegion);
     if (dom.adExpRegionInfo) dom.adExpRegionInfo.textContent = formatRegion(autoDetect.expRegion);
     if (dom.btnAdToggle) {
@@ -930,19 +940,17 @@
     return ocrInitPromise;
   }
 
-  async function setupCaptureStream() {
-    if (captureStream) {
-      try { captureStream.getTracks().forEach((t) => t.stop()); } catch (_) {}
-      captureStream = null;
-      captureVideo = null;
-    }
-    if (!autoDetect.sourceId) throw new Error('소스 미지정');
+  async function getCaptureStreamFor(sourceId) {
+    if (!sourceId) throw new Error('소스 ID 없음');
+    const cached = captureStreams.get(sourceId);
+    if (cached) return cached;
+    console.log('[Capture] 새 스트림 시작:', sourceId);
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: {
         mandatory: {
           chromeMediaSource: 'desktop',
-          chromeMediaSourceId: autoDetect.sourceId,
+          chromeMediaSourceId: sourceId,
           minWidth: 1, maxWidth: 4096,
           minHeight: 1, maxHeight: 2160
         }
@@ -954,13 +962,40 @@
     video.autoplay = true;
     video.playsInline = true;
     await new Promise((res, rej) => {
-      const t = setTimeout(() => rej(new Error('video timeout')), 5000);
+      const t = setTimeout(() => rej(new Error('video timeout (' + sourceId + ')')), 5000);
       video.onloadedmetadata = () => { clearTimeout(t); res(); };
       video.onerror = (e) => { clearTimeout(t); rej(e); };
     });
     try { await video.play(); } catch (_) {}
-    captureStream = stream;
-    captureVideo = video;
+    const entry = { stream, video };
+    captureStreams.set(sourceId, entry);
+    return entry;
+  }
+
+  function stopAllCaptureStreams() {
+    captureStreams.forEach(({ stream }) => {
+      try { stream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+    });
+    captureStreams.clear();
+  }
+
+  async function setupCaptureStreams() {
+    // 사용 중인 모든 sourceId의 스트림 준비
+    const sourceIds = new Set();
+    if (autoDetect.mpRegion && autoDetect.mpRegion.sourceId) sourceIds.add(autoDetect.mpRegion.sourceId);
+    if (autoDetect.expRegion && autoDetect.expRegion.sourceId) sourceIds.add(autoDetect.expRegion.sourceId);
+    if (sourceIds.size === 0) throw new Error('지정된 영역의 sourceId가 없습니다');
+    // 사용 안 하는 stream 정리
+    Array.from(captureStreams.keys()).forEach((sid) => {
+      if (!sourceIds.has(sid)) {
+        const cap = captureStreams.get(sid);
+        try { cap.stream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+        captureStreams.delete(sid);
+      }
+    });
+    for (const sid of sourceIds) {
+      await getCaptureStreamFor(sid);
+    }
   }
 
   function preprocessCanvas(canvas) {
@@ -985,8 +1020,12 @@
   }
 
   function captureRegionToCanvas(region) {
-    if (!captureVideo || !region) return null;
-    const scale = autoDetect.scaleFactor || 1;
+    if (!region) return null;
+    const cap = captureStreams.get(region.sourceId);
+    if (!cap || !cap.video) {
+      throw new Error('해당 영역의 캡처 스트림이 없습니다. (sourceId: ' + region.sourceId + ')');
+    }
+    const scale = region.scaleFactor || 1;
     const sx = Math.max(0, Math.round(region.x * scale));
     const sy = Math.max(0, Math.round(region.y * scale));
     const sw = Math.max(1, Math.round(region.width * scale));
@@ -998,7 +1037,7 @@
     const ctx = canvas.getContext('2d');
     ctx.imageSmoothingEnabled = false;
     try {
-      ctx.drawImage(captureVideo, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(cap.video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
     } catch (e) {
       throw new Error('캡처 실패: ' + e.message);
     }
@@ -1115,7 +1154,9 @@
   }
 
   async function startAutoDetect() {
-    if ((!autoDetect.mpRegion && !autoDetect.expRegion) || !autoDetect.sourceId) {
+    const hasMp = !!(autoDetect.mpRegion && autoDetect.mpRegion.sourceId);
+    const hasExp = !!(autoDetect.expRegion && autoDetect.expRegion.sourceId);
+    if (!hasMp && !hasExp) {
       flashHint('먼저 [📷 MP 영역] 또는 [📷 경험치 영역]을 지정하세요.');
       return;
     }
@@ -1123,10 +1164,10 @@
     if (dom.adInitStatus) dom.adInitStatus.textContent = '⏳ 캡처 스트림 준비 중...';
     try {
       console.log('[AutoDetect] 시작 시도', {
-        sourceId: autoDetect.sourceId, mpRegion: autoDetect.mpRegion, expRegion: autoDetect.expRegion
+        mpRegion: autoDetect.mpRegion, expRegion: autoDetect.expRegion
       });
-      await setupCaptureStream();
-      console.log('[AutoDetect] capture stream OK');
+      await setupCaptureStreams();
+      console.log('[AutoDetect] capture streams OK, count=', captureStreams.size);
       if (dom.adInitStatus) dom.adInitStatus.textContent = '⏳ OCR 워커 초기화...';
       await initOcrWorker();
       console.log('[AutoDetect] OCR worker OK');
@@ -1157,24 +1198,22 @@
   function stopAutoDetect() {
     if (detectInterval) clearInterval(detectInterval);
     detectInterval = null;
-    if (captureStream) {
-      try { captureStream.getTracks().forEach((t) => t.stop()); } catch (_) {}
-      captureStream = null;
-      captureVideo = null;
-    }
+    stopAllCaptureStreams();
     autoDetect.enabled = false;
     S.saveAutoDetect(autoDetect);
     renderAutoDetectInfo();
   }
 
-  function showDisplayPicker(displays) {
+  function showDisplayPicker(displays, kind) {
+    const labelByKind = kind === 'exp' ? '경험치' : (kind === 'mp' ? 'MP' : '');
+    const title = labelByKind ? `${labelByKind} 영역 — 모니터 선택` : '모니터 선택';
     return new Promise((resolve) => {
       const overlay = document.createElement('div');
       overlay.className = 'modal-overlay';
       overlay.innerHTML = `
         <div class="modal" role="dialog">
-          <h3>모니터 선택</h3>
-          <p>MP 영역을 캡처할 모니터를 선택하세요. 리니지가 실행 중인 모니터를 고르면 됩니다.</p>
+          <h3>${escapeHtml(title)}</h3>
+          <p>${labelByKind ? labelByKind + ' 영역이' : '영역이'} 위치한 모니터를 선택하세요. 듀얼 모니터에서 영역마다 다른 모니터를 지정할 수 있습니다.</p>
           <div class="display-grid">
             ${displays.map((d) => `
               <button class="display-card" data-id="${d.id}" type="button">
@@ -1212,12 +1251,12 @@
         flashHint('⚠️ 디스플레이를 찾을 수 없습니다.');
         return;
       }
-      // 이미 모니터가 지정되어 있고 sourceId가 같으면 모니터 선택 생략
+      // 영역 지정 시 매번 모니터 picker 표시 (1개면 자동) — 듀얼 모니터 분산 영역 지원
       let displayId;
-      if (autoDetect.displayId && displays.find((d) => d.id === autoDetect.displayId)) {
-        displayId = autoDetect.displayId;
+      if (displays.length === 1) {
+        displayId = displays[0].id;
       } else {
-        displayId = displays.length === 1 ? displays[0].id : await showDisplayPicker(displays);
+        displayId = await showDisplayPicker(displays, kind);
       }
       if (displayId == null) return;
       const selected = displays.find((d) => d.id === displayId);
@@ -1227,15 +1266,27 @@
       }
       const result = await api.startRegionSelect(displayId);
       if (!result || !result.region) return;
+      // 영역 데이터에 sourceId/displayId/scaleFactor 포함 → 영역마다 다른 모니터 가능
+      const regionData = {
+        x: result.region.x,
+        y: result.region.y,
+        width: result.region.width,
+        height: result.region.height,
+        sourceId: selected.sourceId,
+        displayId: displayId,
+        displayLabel: selected.label,
+        scaleFactor: result.scaleFactor || selected.scaleFactor || 1
+      };
+      // 마지막 사용 모니터(legacy 호환용)도 함께 저장
       autoDetect.sourceId = selected.sourceId;
       autoDetect.displayId = displayId;
       autoDetect.displayLabel = selected.label;
-      autoDetect.scaleFactor = result.scaleFactor || selected.scaleFactor || 1;
-      if (kind === 'exp') autoDetect.expRegion = result.region;
-      else autoDetect.mpRegion = result.region;
+      autoDetect.scaleFactor = regionData.scaleFactor;
+      if (kind === 'exp') autoDetect.expRegion = regionData;
+      else autoDetect.mpRegion = regionData;
       S.saveAutoDetect(autoDetect);
       renderAutoDetectInfo();
-      flashHint(`✅ ${kind === 'exp' ? '경험치' : 'MP'} 영역 지정 완료`);
+      flashHint(`✅ ${kind === 'exp' ? '경험치' : 'MP'} 영역 지정 완료 (${selected.label})`);
       if (wasOn) startAutoDetect();
     } catch (e) {
       console.error('onPickRegion failed', e);
@@ -1791,7 +1842,9 @@
     // 초기 스냅샷 (undo 기준점)
     setTimeout(() => pushUndoImmediate(), 100);
     // 자동 감지 자동 재개 (이전 세션에서 ON 상태였으면)
-    if (autoDetect.enabled && (autoDetect.mpRegion || autoDetect.expRegion) && autoDetect.sourceId) {
+    const hasAnyRegion = (autoDetect.mpRegion && autoDetect.mpRegion.sourceId) ||
+                         (autoDetect.expRegion && autoDetect.expRegion.sourceId);
+    if (autoDetect.enabled && hasAnyRegion) {
       setTimeout(() => startAutoDetect().catch(() => {}), 500);
     }
 

@@ -118,6 +118,22 @@
       stored.mpRegion = stored.region;
       delete stored.region;
     }
+    // 마이그레이션: 영역에 sourceId/displayId/scaleFactor 흡수
+    const enrich = (r) => {
+      if (!r) return r;
+      if (!r.sourceId && stored.sourceId) {
+        return {
+          x: r.x, y: r.y, width: r.width, height: r.height,
+          sourceId: stored.sourceId,
+          displayId: stored.displayId,
+          displayLabel: stored.displayLabel,
+          scaleFactor: stored.scaleFactor || 1
+        };
+      }
+      return r;
+    };
+    if (stored.mpRegion) stored.mpRegion = enrich(stored.mpRegion);
+    if (stored.expRegion) stored.expRegion = enrich(stored.expRegion);
     return { ...defaults, ...stored };
   }
   function saveAutoDetect(s) {
