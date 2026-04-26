@@ -116,7 +116,8 @@
       mpRegion: null,          // { x, y, width, height, sourceId, displayId, displayLabel, scaleFactor }
       expRegion: null,
       levelRegion: null,
-      adenaRegion: null
+      adenaRegion: null,
+      levelOffset: 0           // OCR 결과 보정값 (사용자 수정 시 자동 학습)
     };
     if (!stored) return defaults;
     // 마이그레이션: 이전 'region' → 'mpRegion'

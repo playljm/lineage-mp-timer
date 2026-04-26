@@ -104,6 +104,9 @@
   const captureStreams = new Map(); // sourceId → { stream, video }
   let detectInterval = null;
   let detectionRunning = false;
+
+  // 마지막 OCR raw 값 (사용자 수정 시 offset 자동 학습용)
+  let lastRawOcrLevel = null;
   const EXP_DELAY_MIN = 500;
   const EXP_DELAY_MAX = 10000;
   const EXP_DELAY_DEFAULT = 3000;
@@ -1216,11 +1219,15 @@
     // 가장 많이 나온 결과의 confidence 평균
     const matched = valid.filter((r) => r.level === bestLevel);
     const avgConf = matched.reduce((s, r) => s + r.confidence, 0) / matched.length;
-    console.log('[OCR LEVEL] 다수결:', counts, '→ Lv.' + bestLevel + ' (count=' + bestCount + '/' + valid.length + ')');
+    // 보정 오프셋 적용 — 사용자가 수정 시 자동 학습된 차이값
+    const offset = parseInt(autoDetect.levelOffset, 10) || 0;
+    const corrected = bestLevel + offset;
+    lastRawOcrLevel = bestLevel;  // raw 값 저장 (사용자 수정 시 학습용)
+    console.log('[OCR LEVEL] 다수결:', counts, '→ raw Lv.' + bestLevel + ' (count=' + bestCount + '/' + valid.length + ') → 보정 +' + offset + ' = Lv.' + corrected);
     return {
       text: matched[0].text,
       confidence: avgConf,
-      parsed: { level: bestLevel, agreementCount: bestCount, totalAttempts: valid.length }
+      parsed: { level: corrected, raw: bestLevel, offset, agreementCount: bestCount, totalAttempts: valid.length }
     };
   }
 
@@ -1441,7 +1448,9 @@
                   renderTracker();
                   saveTrackerCurrent();
                 }
-                dom.adLevelLast.textContent = `✅ Lv.${lv} (${agreement}/${total} 일치)`;
+                const offsetLabel = r.parsed.offset ? ` ${r.parsed.offset > 0 ? '+' : ''}${r.parsed.offset}` : '';
+                const rawLabel = r.parsed.offset ? ` (raw=${r.parsed.raw}${offsetLabel})` : '';
+                dom.adLevelLast.textContent = `✅ Lv.${lv} (${agreement}/${total} 일치)${rawLabel}`;
               } else {
                 dom.adLevelLast.textContent = `🔄 Lv.${lv} (${agreement}/${total} — 재시도 중)`;
               }
@@ -2024,6 +2033,22 @@
       dom[k].addEventListener('input', () => { renderTracker(); saveTrackerCurrent(); pushUndo(); });
       dom[k].addEventListener('change', () => { renderTracker(); saveTrackerCurrent(); pushUndo(); });
     });
+
+    // 레벨 OCR 자동 학습: 사용자가 trkLevelNow를 직접 수정하면 OCR raw 값과 차이를 offset으로 저장
+    if (dom.trkLevelNow) {
+      dom.trkLevelNow.addEventListener('change', () => {
+        const userVal = parseInt(dom.trkLevelNow.value, 10);
+        if (Number.isFinite(userVal) && Number.isFinite(lastRawOcrLevel) && autoDetect.levelRegion) {
+          const newOffset = userVal - lastRawOcrLevel;
+          if (newOffset !== (autoDetect.levelOffset || 0) && Math.abs(newOffset) <= 9) {
+            autoDetect.levelOffset = newOffset;
+            S.saveAutoDetect(autoDetect);
+            console.log('[OCR LEVEL] 보정 자동 학습:', { userVal, raw: lastRawOcrLevel, offset: newOffset });
+            flashHint(`✅ 레벨 OCR 보정 학습: ${newOffset > 0 ? '+' : ''}${newOffset}`);
+          }
+        }
+      });
+    }
 
     // 경험치 % 자동 소수점 포맷 ("874564" → "87.4564")
     //   · input 이벤트: 700ms 디바운스 후 자동 변환 (타이핑 멈추면 자동 포맷)
