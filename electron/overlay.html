@@ -14,28 +14,36 @@
         overflow: hidden;
         font-family: 'JetBrains Mono', 'Nanum Gothic Coding', Consolas, monospace;
       }
+      body.adjust-mode {
+        cursor: default;
+      }
       #info {
         position: fixed;
         top: 24px;
         left: 50%;
         transform: translateX(-50%);
         color: #00ff9f;
-        font-size: 16px;
+        font-size: 14px;
         font-weight: 700;
-        background: rgba(5, 8, 10, 0.92);
-        padding: 12px 20px;
+        background: rgba(5, 8, 10, 0.94);
+        padding: 12px 18px;
         border-radius: 8px;
         border: 1px solid #00ff9f;
         box-shadow: 0 0 20px rgba(0, 255, 159, 0.4);
         pointer-events: none;
         z-index: 100;
-        letter-spacing: 0.05em;
+        letter-spacing: 0.04em;
+        line-height: 1.6;
+        max-width: 720px;
+        text-align: center;
       }
+      #info b { color: #ffd84a; }
       #info small {
         color: #9dc4b3;
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 400;
-        margin-left: 8px;
+        display: block;
+        margin-top: 4px;
       }
       #selection {
         position: fixed;
@@ -46,17 +54,29 @@
         pointer-events: none;
         display: none;
       }
+      #selection.adjust {
+        border-style: dashed;
+        border-color: #ffd84a;
+        background: rgba(255, 216, 74, 0.10);
+        box-shadow: 0 0 16px rgba(255, 216, 74, 0.6),
+                    inset 0 0 12px rgba(255, 216, 74, 0.2);
+      }
       #coords {
         position: absolute;
         bottom: -28px;
         right: 0;
-        background: rgba(5, 8, 10, 0.92);
+        background: rgba(5, 8, 10, 0.94);
         color: #00ff9f;
-        font-size: 11px;
-        padding: 3px 10px;
+        font-size: 12px;
+        font-weight: 700;
+        padding: 4px 10px;
         border-radius: 3px;
         white-space: nowrap;
         border: 1px solid #00ff9f;
+      }
+      #selection.adjust #coords {
+        color: #ffd84a;
+        border-color: #ffd84a;
       }
       #cross-h, #cross-v {
         position: fixed;
@@ -66,21 +86,84 @@
       }
       #cross-h { left: 0; right: 0; height: 1px; }
       #cross-v { top: 0; bottom: 0; width: 1px; }
+
+      /* 미세 조정 모드 핸들 (시각적 표시) */
+      .handle {
+        position: absolute;
+        width: 8px;
+        height: 8px;
+        background: #ffd84a;
+        border: 1px solid #000;
+        pointer-events: none;
+      }
+      .handle.tl { top: -5px; left: -5px; }
+      .handle.tr { top: -5px; right: -5px; }
+      .handle.bl { bottom: -5px; left: -5px; }
+      .handle.br { bottom: -5px; right: -5px; }
     </style>
   </head>
   <body>
-    <div id="info">📷 MP 영역을 드래그로 선택하세요 <small>· Esc 취소</small></div>
+    <div id="info">
+      <span id="info-msg">📷 MP 영역을 드래그로 선택하세요</span>
+      <small><b>Esc</b> 취소</small>
+    </div>
     <div id="cross-h"></div>
     <div id="cross-v"></div>
-    <div id="selection"><div id="coords">0×0</div></div>
+    <div id="selection">
+      <div id="coords">0×0</div>
+      <div class="handle tl"></div>
+      <div class="handle tr"></div>
+      <div class="handle bl"></div>
+      <div class="handle br"></div>
+    </div>
     <script>
       let startX = 0, startY = 0, isDragging = false;
+      let region = null; // {x, y, width, height} - 미세 조정 모드 중인 영역
       const sel = document.getElementById('selection');
       const coords = document.getElementById('coords');
       const crossH = document.getElementById('cross-h');
       const crossV = document.getElementById('cross-v');
+      const infoMsg = document.getElementById('info-msg');
+      const info = document.getElementById('info');
+
+      function setMessage(html, mode) {
+        info.innerHTML = html;
+      }
+
+      function applyRegion(r) {
+        sel.style.left = r.x + 'px';
+        sel.style.top = r.y + 'px';
+        sel.style.width = r.width + 'px';
+        sel.style.height = r.height + 'px';
+        coords.textContent = `${r.x}, ${r.y} · ${r.width}×${r.height}`;
+      }
+
+      function enterAdjustMode() {
+        document.body.classList.add('adjust-mode');
+        sel.classList.add('adjust');
+        crossH.style.display = 'none';
+        crossV.style.display = 'none';
+        info.innerHTML = `
+          🟡 <b>미세 조정 모드</b> &nbsp;|&nbsp; 영역: <b>${region.width}×${region.height}</b>
+          <small>
+            <b>화살표</b> 위치 이동 &nbsp;·&nbsp;
+            <b>Shift+화살표</b> 우/하 크기 조정 &nbsp;·&nbsp;
+            <b>Alt+화살표</b> 좌/상 크기 조정 &nbsp;·&nbsp;
+            <b>Enter</b> 확정 &nbsp;·&nbsp;
+            <b>Esc</b> 취소 &nbsp;·&nbsp;
+            드래그로 다시 그리기
+          </small>
+        `;
+      }
+
+      function exitAdjustMode() {
+        document.body.classList.remove('adjust-mode');
+        sel.classList.remove('adjust');
+        region = null;
+      }
 
       document.addEventListener('mousemove', (e) => {
+        if (region) return; // 미세 조정 모드에선 마우스 이동 추적 안 함
         if (!isDragging) {
           crossH.style.display = 'block';
           crossV.style.display = 'block';
@@ -92,25 +175,20 @@
         const y = Math.min(e.clientY, startY);
         const w = Math.abs(e.clientX - startX);
         const h = Math.abs(e.clientY - startY);
-        sel.style.left = x + 'px';
-        sel.style.top = y + 'px';
-        sel.style.width = w + 'px';
-        sel.style.height = h + 'px';
-        coords.textContent = w + '×' + h + ' px';
+        applyRegion({ x, y, width: w, height: h });
       });
 
       document.addEventListener('mousedown', (e) => {
         if (e.button !== 0) return;
+        // 미세 조정 모드에서 드래그 시작 → 새 영역 그리기
+        if (region) exitAdjustMode();
         startX = e.clientX;
         startY = e.clientY;
         isDragging = true;
         crossH.style.display = 'none';
         crossV.style.display = 'none';
         sel.style.display = 'block';
-        sel.style.left = startX + 'px';
-        sel.style.top = startY + 'px';
-        sel.style.width = '0px';
-        sel.style.height = '0px';
+        applyRegion({ x: startX, y: startY, width: 0, height: 0 });
       });
 
       document.addEventListener('mouseup', (e) => {
@@ -120,15 +198,59 @@
         const y = Math.min(e.clientY, startY);
         const w = Math.abs(e.clientX - startX);
         const h = Math.abs(e.clientY - startY);
-        if (w >= 8 && h >= 8) {
-          window.overlayApi.confirm({ x, y, width: w, height: h });
+        if (w >= 4 && h >= 4) {
+          region = { x, y, width: w, height: h };
+          applyRegion(region);
+          enterAdjustMode();
         } else {
           sel.style.display = 'none';
         }
       });
 
+      function adjust(dx, dy, resizeFromBR, resizeFromTL) {
+        if (!region) return;
+        if (resizeFromBR) {
+          // 오른쪽/아래 모서리에서 크기 조정
+          region.width = Math.max(2, region.width + dx);
+          region.height = Math.max(2, region.height + dy);
+        } else if (resizeFromTL) {
+          // 왼쪽/위 모서리에서 크기 조정 (위치 변경 + 크기 변경)
+          region.x += dx;
+          region.y += dy;
+          region.width = Math.max(2, region.width - dx);
+          region.height = Math.max(2, region.height - dy);
+        } else {
+          // 전체 이동
+          region.x += dx;
+          region.y += dy;
+        }
+        applyRegion(region);
+        // info 업데이트
+        info.querySelector('b').textContent = region.width + '×' + region.height;
+      }
+
       document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') window.overlayApi.cancel();
+        if (e.key === 'Escape') {
+          window.overlayApi.cancel();
+          return;
+        }
+        if (region) {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            window.overlayApi.confirm(region);
+            return;
+          }
+          // 화살표 키
+          let dx = 0, dy = 0;
+          const step = e.repeat ? 1 : 1; // 일정 1px
+          if (e.key === 'ArrowLeft') dx = -step;
+          else if (e.key === 'ArrowRight') dx = step;
+          else if (e.key === 'ArrowUp') dy = -step;
+          else if (e.key === 'ArrowDown') dy = step;
+          else return;
+          e.preventDefault();
+          adjust(dx, dy, e.shiftKey, e.altKey);
+        }
       });
     </script>
   </body>
