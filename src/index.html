@@ -161,8 +161,10 @@
           <br/>③ 슬래시 잘 인식되면 그대로 사용, 안 되면 INPUTS의 max를 자동 활용해 cur만 추출
         </p>
         <div class="auto-detect-actions">
-          <button id="btn-ad-mp-region" class="ghost-btn ad-btn">📷 MP 영역</button>
-          <button id="btn-ad-exp-region" class="ghost-btn ad-btn">📷 경험치 영역</button>
+          <button id="btn-ad-mp-region" class="ghost-btn ad-btn">📷 MP</button>
+          <button id="btn-ad-exp-region" class="ghost-btn ad-btn">📷 경험치</button>
+          <button id="btn-ad-level-region" class="ghost-btn ad-btn">📷 레벨</button>
+          <button id="btn-ad-adena-region" class="ghost-btn ad-btn">📷 아데나</button>
         </div>
         <div class="auto-detect-actions" style="margin-top: 6px;">
           <button id="btn-ad-toggle" class="ghost-btn ad-btn primary-ghost" style="flex: 1;">▶ 자동 감지 시작</button>
@@ -171,18 +173,30 @@
           <div class="ad-info-row"><span class="ad-info-label">모니터</span><span id="ad-display">미지정</span></div>
           <div class="ad-info-row"><span class="ad-info-label">MP 영역</span><span id="ad-mp-region-info">미지정</span></div>
           <div class="ad-info-row"><span class="ad-info-label">경험치 영역</span><span id="ad-exp-region-info">미지정</span></div>
+          <div class="ad-info-row"><span class="ad-info-label">레벨 영역</span><span id="ad-level-region-info">미지정</span></div>
+          <div class="ad-info-row"><span class="ad-info-label">아데나 영역</span><span id="ad-adena-region-info">미지정</span></div>
           <div class="ad-info-row"><span class="ad-info-label">최근 MP</span><span id="ad-mp-last">-</span></div>
           <div class="ad-info-row"><span class="ad-info-label">최근 경험치</span><span id="ad-exp-last">-</span></div>
+          <div class="ad-info-row"><span class="ad-info-label">최근 레벨</span><span id="ad-level-last">-</span></div>
+          <div class="ad-info-row"><span class="ad-info-label">최근 아데나</span><span id="ad-adena-last">-</span></div>
           <div class="ad-info-row"><span class="ad-info-label">초기화 진행</span><span id="ad-init-status">-</span></div>
         </div>
-        <div class="ad-preview-grid">
+        <div class="ad-preview-grid ad-preview-4">
           <div class="ad-preview-cell">
-            <span class="ad-preview-label">MP 캡처 미리보기</span>
+            <span class="ad-preview-label">MP</span>
             <div class="ad-preview-img-wrap"><img id="ad-mp-preview" alt="MP" /></div>
           </div>
           <div class="ad-preview-cell">
-            <span class="ad-preview-label">경험치 캡처 미리보기</span>
+            <span class="ad-preview-label">경험치</span>
             <div class="ad-preview-img-wrap"><img id="ad-exp-preview" alt="EXP" /></div>
+          </div>
+          <div class="ad-preview-cell">
+            <span class="ad-preview-label">레벨</span>
+            <div class="ad-preview-img-wrap"><img id="ad-level-preview" alt="LEVEL" /></div>
+          </div>
+          <div class="ad-preview-cell">
+            <span class="ad-preview-label">아데나</span>
+            <div class="ad-preview-img-wrap"><img id="ad-adena-preview" alt="ADENA" /></div>
           </div>
         </div>
         <div class="ad-options">

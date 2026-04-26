@@ -50,19 +50,27 @@
     btnItemsApply: $('btn-items-apply'),
     btnItemAdd: $('btn-item-add'),
     btnItemsReset: $('btn-items-reset'),
-    // auto-detect (MP + EXP)
+    // auto-detect (MP + EXP + LEVEL + ADENA)
     btnAdMpRegion: $('btn-ad-mp-region'),
     btnAdExpRegion: $('btn-ad-exp-region'),
+    btnAdLevelRegion: $('btn-ad-level-region'),
+    btnAdAdenaRegion: $('btn-ad-adena-region'),
     btnAdToggle: $('btn-ad-toggle'),
     adStatus: $('ad-status'),
     adDisplay: $('ad-display'),
     adMpRegionInfo: $('ad-mp-region-info'),
     adExpRegionInfo: $('ad-exp-region-info'),
+    adLevelRegionInfo: $('ad-level-region-info'),
+    adAdenaRegionInfo: $('ad-adena-region-info'),
     adMpLast: $('ad-mp-last'),
     adExpLast: $('ad-exp-last'),
+    adLevelLast: $('ad-level-last'),
+    adAdenaLast: $('ad-adena-last'),
     adInitStatus: $('ad-init-status'),
     adMpPreview: $('ad-mp-preview'),
     adExpPreview: $('ad-exp-preview'),
+    adLevelPreview: $('ad-level-preview'),
+    adAdenaPreview: $('ad-adena-preview'),
     chkAdAutoStart: $('chk-ad-auto-start'),
     chkAdAutoStartTracker: $('chk-ad-auto-start-tracker'),
     chkAdPreview: $('chk-ad-preview'),
@@ -847,17 +855,15 @@
   }
   function renderAutoDetectInfo() {
     if (!dom.adDisplay) return;
-    // 모니터 표시: 두 영역 monitor 다른지 표시
-    const mpMon = autoDetect.mpRegion && autoDetect.mpRegion.displayLabel;
-    const expMon = autoDetect.expRegion && autoDetect.expRegion.displayLabel;
-    let monText = '미지정';
-    if (mpMon && expMon) {
-      monText = (mpMon === expMon) ? mpMon : `MP=${mpMon} / EXP=${expMon}`;
-    } else if (mpMon) monText = mpMon;
-    else if (expMon) monText = expMon;
-    dom.adDisplay.textContent = monText;
+    // 모니터 표시: 모든 영역의 displayLabel 수집해서 unique 만들기
+    const labels = [];
+    [autoDetect.mpRegion, autoDetect.expRegion, autoDetect.levelRegion, autoDetect.adenaRegion]
+      .forEach((r) => { if (r && r.displayLabel && !labels.includes(r.displayLabel)) labels.push(r.displayLabel); });
+    dom.adDisplay.textContent = labels.length === 0 ? '미지정' : labels.join(' / ');
     if (dom.adMpRegionInfo) dom.adMpRegionInfo.textContent = formatRegion(autoDetect.mpRegion);
     if (dom.adExpRegionInfo) dom.adExpRegionInfo.textContent = formatRegion(autoDetect.expRegion);
+    if (dom.adLevelRegionInfo) dom.adLevelRegionInfo.textContent = formatRegion(autoDetect.levelRegion);
+    if (dom.adAdenaRegionInfo) dom.adAdenaRegionInfo.textContent = formatRegion(autoDetect.adenaRegion);
     if (dom.btnAdToggle) {
       dom.btnAdToggle.textContent = autoDetect.enabled
         ? '⏹ 자동 감지 중지'
@@ -988,8 +994,8 @@
   async function setupCaptureStreams() {
     // 사용 중인 모든 sourceId의 스트림 준비
     const sourceIds = new Set();
-    if (autoDetect.mpRegion && autoDetect.mpRegion.sourceId) sourceIds.add(autoDetect.mpRegion.sourceId);
-    if (autoDetect.expRegion && autoDetect.expRegion.sourceId) sourceIds.add(autoDetect.expRegion.sourceId);
+    [autoDetect.mpRegion, autoDetect.expRegion, autoDetect.levelRegion, autoDetect.adenaRegion]
+      .forEach((r) => { if (r && r.sourceId) sourceIds.add(r.sourceId); });
     if (sourceIds.size === 0) throw new Error('지정된 영역의 sourceId가 없습니다');
     // 사용 안 하는 stream 정리
     Array.from(captureStreams.keys()).forEach((sid) => {
@@ -1155,6 +1161,64 @@
       return { text, confidence, parsed: null };
     }
     return { text, confidence, parsed: { cur, max }, usedFallback };
+  }
+
+  async function ocrLevelRegion() {
+    if (!autoDetect.levelRegion) return null;
+    const canvas = captureRegionToCanvas(autoDetect.levelRegion);
+    if (!canvas) return null;
+    updatePreview(dom.adLevelPreview, canvas);
+    const w = await initOcrWorker();
+    try {
+      await w.setParameters({
+        tessedit_char_whitelist: '0123456789',
+        tessedit_pageseg_mode: '7',
+        load_system_dawg: '0', load_freq_dawg: '0',
+        load_unambig_dawg: '0', load_punc_dawg: '0',
+        load_number_dawg: '0', load_bigram_dawg: '0'
+      });
+    } catch (_) {}
+    const res = await w.recognize(canvas);
+    const text = ((res && res.data && res.data.text) || '').trim();
+    const rawConf = (res && res.data && res.data.confidence);
+    const confidence = Math.max(0, Number.isFinite(rawConf) ? rawConf : 0);
+    console.log('[OCR LEVEL] text=' + JSON.stringify(text) + ' conf=' + Math.round(confidence));
+    const digits = text.replace(/[^0-9]/g, '');
+    if (!digits) return { text, confidence, parsed: null };
+    const level = parseInt(digits, 10);
+    if (!Number.isFinite(level) || level < 1 || level > 99) {
+      return { text, confidence, parsed: null };
+    }
+    return { text, confidence, parsed: { level } };
+  }
+
+  async function ocrAdenaRegion() {
+    if (!autoDetect.adenaRegion) return null;
+    const canvas = captureRegionToCanvas(autoDetect.adenaRegion);
+    if (!canvas) return null;
+    updatePreview(dom.adAdenaPreview, canvas);
+    const w = await initOcrWorker();
+    try {
+      await w.setParameters({
+        tessedit_char_whitelist: '0123456789,',
+        tessedit_pageseg_mode: '7',
+        load_system_dawg: '0', load_freq_dawg: '0',
+        load_unambig_dawg: '0', load_punc_dawg: '0',
+        load_number_dawg: '0', load_bigram_dawg: '0'
+      });
+    } catch (_) {}
+    const res = await w.recognize(canvas);
+    const text = ((res && res.data && res.data.text) || '').trim();
+    const rawConf = (res && res.data && res.data.confidence);
+    const confidence = Math.max(0, Number.isFinite(rawConf) ? rawConf : 0);
+    console.log('[OCR ADENA] text=' + JSON.stringify(text) + ' conf=' + Math.round(confidence));
+    const digits = text.replace(/[^0-9]/g, '');
+    if (!digits) return { text, confidence, parsed: null };
+    const adena = parseInt(digits, 10);
+    if (!Number.isFinite(adena) || adena < 0 || adena > 9999999999) {
+      return { text, confidence, parsed: null };
+    }
+    return { text, confidence, parsed: { adena } };
   }
 
   async function ocrExpRegion() {
@@ -1327,10 +1391,90 @@
           dom.adExpLast.textContent = '⚠️ ' + (e.message || e);
         }
       }
+      // 레벨 영역
+      if (autoDetect.levelRegion) {
+        try {
+          const r = await ocrLevelRegion();
+          if (r) {
+            if (r.parsed) {
+              const lv = r.parsed.level;
+              const prev = parseInt(dom.trkLevelNow.value, 10) || 0;
+              if (lv !== prev) {
+                dom.trkLevelNow.value = lv;
+                renderTracker();
+                saveTrackerCurrent();
+              }
+              dom.adLevelLast.textContent = `✅ Lv.${lv}`;
+            } else {
+              dom.adLevelLast.textContent = `❌ "${(r.text || '???').slice(0, 20)}"`;
+            }
+          }
+        } catch (e) {
+          dom.adLevelLast.textContent = '⚠️ ' + (e.message || e);
+        }
+      }
+      // 아데나 영역
+      if (autoDetect.adenaRegion) {
+        try {
+          const r = await ocrAdenaRegion();
+          if (r) {
+            if (r.parsed) {
+              const ad = r.parsed.adena;
+              const prev = parseInt(dom.trkAdenaNow.value, 10) || 0;
+              if (ad !== prev) {
+                dom.trkAdenaNow.value = ad;
+                renderTracker();
+                saveTrackerCurrent();
+              }
+              dom.adAdenaLast.textContent = `✅ ${formatNumber(ad)}`;
+            } else {
+              dom.adAdenaLast.textContent = `❌ "${(r.text || '???').slice(0, 20)}"`;
+            }
+          }
+        } catch (e) {
+          dom.adAdenaLast.textContent = '⚠️ ' + (e.message || e);
+        }
+      }
     } catch (e) {
       console.error('[AutoDetect] tick error:', e);
     } finally {
       detectionRunning = false;
+    }
+  }
+
+  // 자동 감지 시작 시 한 번 OCR해서 시작값 자동 설정
+  async function applyInitialSnapshot() {
+    console.log('[AutoDetect] initial snapshot 시작');
+    try {
+      if (autoDetect.expRegion) {
+        const r = await ocrExpRegion();
+        if (r && r.parsed && isValidExpParsed(r.parsed)) {
+          const formatted = formatExpPct(r.parsed.exp);
+          dom.trkExpStart.value = formatted;
+          dom.trkExpNow.value = formatted;
+          console.log('[AutoDetect] EXP 시작값 설정:', formatted);
+        }
+      }
+      if (autoDetect.levelRegion) {
+        const r = await ocrLevelRegion();
+        if (r && r.parsed) {
+          dom.trkLevelStart.value = r.parsed.level;
+          dom.trkLevelNow.value = r.parsed.level;
+          console.log('[AutoDetect] LEVEL 시작값 설정:', r.parsed.level);
+        }
+      }
+      if (autoDetect.adenaRegion) {
+        const r = await ocrAdenaRegion();
+        if (r && r.parsed) {
+          dom.trkAdenaStart.value = r.parsed.adena;
+          dom.trkAdenaNow.value = r.parsed.adena;
+          console.log('[AutoDetect] ADENA 시작값 설정:', r.parsed.adena);
+        }
+      }
+      saveTrackerCurrent();
+      renderTracker();
+    } catch (e) {
+      console.warn('[AutoDetect] applyInitialSnapshot 실패:', e);
     }
   }
 
@@ -1355,6 +1499,16 @@
       autoDetect.enabled = true;
       S.saveAutoDetect(autoDetect);
       renderAutoDetectInfo();
+
+      // 자동 감지 시작 시 한 번 OCR로 모든 시작값 설정 + 트래커 자동 시작
+      if (autoDetect.autoStartTracker) {
+        if (dom.adInitStatus) dom.adInitStatus.textContent = '⏳ 시작값 자동 설정...';
+        await applyInitialSnapshot();
+        if (!tracker.active) {
+          try { startTracker(); console.log('[AutoDetect] 트래커 자동 시작'); } catch (_) {}
+        }
+      }
+
       if (detectInterval) clearInterval(detectInterval);
       detectInterval = setInterval(runDetectionTick, autoDetect.intervalMs || 1000);
       runDetectionTick();
@@ -1386,7 +1540,7 @@
   }
 
   function showDisplayPicker(displays, kind) {
-    const labelByKind = kind === 'exp' ? '경험치' : (kind === 'mp' ? 'MP' : '');
+    const labelByKind = kind === 'exp' ? '경험치' : kind === 'mp' ? 'MP' : kind === 'level' ? '레벨' : kind === 'adena' ? '아데나' : '';
     const title = labelByKind ? `${labelByKind} 영역 — 모니터 선택` : '모니터 선택';
     return new Promise((resolve) => {
       const overlay = document.createElement('div');
@@ -1464,10 +1618,13 @@
       autoDetect.displayLabel = selected.label;
       autoDetect.scaleFactor = regionData.scaleFactor;
       if (kind === 'exp') autoDetect.expRegion = regionData;
+      else if (kind === 'level') autoDetect.levelRegion = regionData;
+      else if (kind === 'adena') autoDetect.adenaRegion = regionData;
       else autoDetect.mpRegion = regionData;
       S.saveAutoDetect(autoDetect);
       renderAutoDetectInfo();
-      flashHint(`✅ ${kind === 'exp' ? '경험치' : 'MP'} 영역 지정 완료 (${selected.label})`);
+      const kindLabel = kind === 'exp' ? '경험치' : kind === 'level' ? '레벨' : kind === 'adena' ? '아데나' : 'MP';
+      flashHint(`✅ ${kindLabel} 영역 지정 완료 (${selected.label})`);
       if (wasOn) startAutoDetect();
     } catch (e) {
       console.error('onPickRegion failed', e);
@@ -1888,6 +2045,8 @@
     // Auto-detect
     if (dom.btnAdMpRegion) dom.btnAdMpRegion.addEventListener('click', () => onPickRegion('mp'));
     if (dom.btnAdExpRegion) dom.btnAdExpRegion.addEventListener('click', () => onPickRegion('exp'));
+    if (dom.btnAdLevelRegion) dom.btnAdLevelRegion.addEventListener('click', () => onPickRegion('level'));
+    if (dom.btnAdAdenaRegion) dom.btnAdAdenaRegion.addEventListener('click', () => onPickRegion('adena'));
     if (dom.btnAdToggle) dom.btnAdToggle.addEventListener('click', toggleAutoDetect);
     if (dom.chkAdAutoStart) {
       dom.chkAdAutoStart.checked = !!autoDetect.autoStart;
@@ -2057,7 +2216,9 @@
     setTimeout(() => pushUndoImmediate(), 100);
     // 자동 감지 자동 재개 (이전 세션에서 ON 상태였으면)
     const hasAnyRegion = (autoDetect.mpRegion && autoDetect.mpRegion.sourceId) ||
-                         (autoDetect.expRegion && autoDetect.expRegion.sourceId);
+                         (autoDetect.expRegion && autoDetect.expRegion.sourceId) ||
+                         (autoDetect.levelRegion && autoDetect.levelRegion.sourceId) ||
+                         (autoDetect.adenaRegion && autoDetect.adenaRegion.sourceId);
     if (autoDetect.enabled && hasAnyRegion) {
       setTimeout(() => startAutoDetect().catch(() => {}), 500);
     }
