@@ -105,6 +105,8 @@
   const captureStreams = new Map(); // sourceId → { stream, video }
   let detectInterval = null;
   let detectionRunning = false;
+  // 트래커 자동 시작이 in-flight 일 때 중복 트리거 방지 (RESET 후 재시작 포함)
+  let autoStartInProgress = false;
 
   // 마지막 OCR raw 값 (사용자 수정 시 offset 자동 학습용)
   let lastRawOcrLevel = null;
@@ -775,6 +777,32 @@
     renderTracker();
   }
   function resetTracker() {
+    // 자동 감지가 켜져있으면 "현재 시점부터 다시 카운트" 의미로 동작:
+    //   - 시작값 ← 현재 화면에 보이던 OCR 값
+    //   - 세션 시간 = 00:00:00 부터 다시
+    //   - tracker.active 유지 (재자동시작 경로를 안 거치므로 OCR 노이즈가 시작값으로 박히는 문제 원천 차단)
+    const autoDetectActive = !!(autoDetect && autoDetect.enabled &&
+      (autoDetect.expRegion || autoDetect.levelRegion || autoDetect.adenaRegion));
+
+    if (autoDetectActive) {
+      const cur = readTrackerInputs().current;
+      tracker = {
+        active: true,
+        startedAt: Date.now(),
+        start: { level: cur.level, exp: cur.exp, adena: cur.adena },
+        current: { level: cur.level, exp: cur.exp, adena: cur.adena }
+      };
+      S.saveTracker(tracker);
+      // 시작 칸 = 현재값으로 동기화 (현재 칸은 OCR이 다음 틱에 갱신)
+      dom.trkLevelStart.value = cur.level;
+      dom.trkExpStart.value = formatExpPct(cur.exp);
+      dom.trkAdenaStart.value = cur.adena;
+      setTrackerStatus('RUNNING', 'running');
+      renderTracker();
+      return;
+    }
+
+    // 자동 감지 OFF: 기존처럼 입력값을 모두 1/0 으로 초기화
     tracker = {
       active: false, startedAt: null,
       start: { level: 1, exp: 0, adena: 0 },
@@ -1021,19 +1049,23 @@
     const ctx = canvas.getContext('2d');
     const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const d = img.data;
-    // 그레이스케일 + threshold (반전 자동 결정)
+    // 1) 그레이스케일 + 평균 휘도 계산
     let sum = 0;
+    const N = d.length / 4;
     for (let i = 0; i < d.length; i += 4) {
       sum += (d[i] + d[i + 1] + d[i + 2]) / 3;
     }
-    const avg = sum / (d.length / 4);
-    // 평균 휘도가 어두우면 글자가 밝은 것 → 흰 배경 검은 글자로 반전
-    const invert = avg < 128;
+    const avg = sum / N;
+    const invert = avg < 128; // 어두운 배경이면 반전
+    // 2) 콘트라스트 스트레치 (가장자리 그라데이션 보존, 글자 모양 부드럽게 유지)
+    //    분포 5-95 percentile 대신 단순한 80-180 → 0-255 스트레치
+    const lo = 60, hi = 200;
+    const range = hi - lo;
     for (let i = 0; i < d.length; i += 4) {
-      const v = (d[i] + d[i + 1] + d[i + 2]) / 3;
-      let bw = v > 128 ? 255 : 0;
-      if (invert) bw = 255 - bw;
-      d[i] = bw; d[i + 1] = bw; d[i + 2] = bw;
+      let v = (d[i] + d[i + 1] + d[i + 2]) / 3;
+      if (invert) v = 255 - v;
+      v = Math.max(0, Math.min(255, ((v - lo) * 255) / range));
+      d[i] = v; d[i + 1] = v; d[i + 2] = v;
     }
     ctx.putImageData(img, 0, 0);
   }
@@ -1366,12 +1398,26 @@
               const { cur, max } = r.parsed;
               const prevCur = parseInt(dom.inCurMp.value, 10) || 0;
               const prevMax = parseInt(dom.inMaxMp.value, 10) || 0;
-              let changed = false;
-              if (cur !== prevCur) { dom.inCurMp.value = cur; changed = true; }
-              if (max !== prevMax) { dom.inMaxMp.value = max; changed = true; }
-              if (changed) {
-                if (mpState.running) onConfigChangedWhileRunning();
-                else renderAll();
+              let curChanged = false, maxChanged = false;
+              if (cur !== prevCur) { dom.inCurMp.value = cur; curChanged = true; }
+              if (max !== prevMax) { dom.inMaxMp.value = max; maxChanged = true; }
+              if (curChanged || maxChanged) {
+                if (mpState.running) {
+                  if (curChanged) {
+                    // OCR이 실제 MP를 잡았으니 시뮬레이션 baseline 자체를 리셋
+                    // (기존엔 시뮬값이 매 틱 입력 필드를 덮어쓰면서 OCR이 무시되어 알람이 앞서갔음)
+                    mpState.startMp = cur;
+                    mpState.accumulatedMp = 0;
+                    mpState.segmentStartAt = Date.now();
+                    mpState.prevConfigSnapshot = cloneCfg(readMpConfig());
+                    tickMp();
+                  } else {
+                    // maxMp만 변경된 경우 — 회복량/누적 영향 없음, target만 갱신
+                    onConfigChangedWhileRunning();
+                  }
+                } else {
+                  renderAll();
+                }
                 saveLast();
               }
               // 자동 START — idle/done 상태이고 cur < target이면 타이머 시작 (매 틱 체크)
@@ -1420,10 +1466,20 @@
                 renderTracker();
                 saveTrackerCurrent();
               }
-              // 트래커 자동 시작: 트래커 비활성 + 첫 인식이면 시작값으로 설정 + START
-              if (autoDetect.autoStartTracker && !tracker.active) {
-                dom.trkExpStart.value = formatExpPct(exp);
-                try { startTracker(); } catch (_) {}
+              // 트래커 자동 시작: 트래커 비활성(idle 또는 RESET 직후) + 자동시작 옵션 ON
+              // applyInitialSnapshot으로 모든 영역(LEVEL/EXP/ADENA) 시작값 잡힌 뒤 startTracker
+              if (autoDetect.autoStartTracker && !tracker.active && !autoStartInProgress) {
+                autoStartInProgress = true;
+                (async () => {
+                  try {
+                    await applyInitialSnapshot();
+                    if (!tracker.active) {
+                      try { startTracker(); console.log('[AutoDetect] 트래커 자동 시작 (재시작 포함)'); } catch (_) {}
+                    }
+                  } finally {
+                    autoStartInProgress = false;
+                  }
+                })();
               }
               const confLabel = r.confidence > 0 ? ` · ${Math.round(r.confidence)}%` : '';
               dom.adExpLast.textContent = `✅ ${formatExpPct(exp)}%${confLabel}`;
@@ -1502,39 +1558,68 @@
     }
   }
 
-  // 자동 감지 시작 시 한 번 OCR해서 시작값 자동 설정
+  // 자동 감지 시작 시 OCR해서 시작값 자동 설정
+  // 첫 캡처 프레임이 노이즈/PSM 다수결 미통과로 실패할 수 있어 retry
   async function applyInitialSnapshot() {
     console.log('[AutoDetect] initial snapshot 시작');
-    try {
-      if (autoDetect.expRegion) {
-        const r = await ocrExpRegion();
-        if (r && r.parsed && isValidExpParsed(r.parsed)) {
-          const formatted = formatExpPct(r.parsed.exp);
-          dom.trkExpStart.value = formatted;
-          dom.trkExpNow.value = formatted;
-          console.log('[AutoDetect] EXP 시작값 설정:', formatted);
+    let needExp = !!autoDetect.expRegion;
+    let needLevel = !!autoDetect.levelRegion;
+    let needAdena = !!autoDetect.adenaRegion;
+    const MAX_ITERS = 5;
+    const RETRY_DELAY_MS = 800;
+
+    for (let i = 0; i < MAX_ITERS; i++) {
+      try {
+        if (needExp) {
+          const r = await ocrExpRegion();
+          if (r && r.parsed && isValidExpParsed(r.parsed)) {
+            const formatted = formatExpPct(r.parsed.exp);
+            dom.trkExpStart.value = formatted;
+            dom.trkExpNow.value = formatted;
+            console.log('[AutoDetect] EXP 시작값 설정 (iter ' + (i+1) + '):', formatted);
+            needExp = false;
+          }
         }
-      }
-      if (autoDetect.levelRegion) {
-        const r = await ocrLevelRegion();
-        if (r && r.parsed) {
-          dom.trkLevelStart.value = r.parsed.level;
-          dom.trkLevelNow.value = r.parsed.level;
-          console.log('[AutoDetect] LEVEL 시작값 설정:', r.parsed.level);
+        if (needLevel) {
+          const r = await ocrLevelRegion();
+          // 다수결 통과한 값만 신뢰 (단발 OCR noise 거름)
+          if (r && r.parsed && (r.parsed.agreementCount || 1) >= 2) {
+            dom.trkLevelStart.value = r.parsed.level;
+            dom.trkLevelNow.value = r.parsed.level;
+            console.log('[AutoDetect] LEVEL 시작값 설정 (iter ' + (i+1) + '):', r.parsed.level);
+            needLevel = false;
+          }
         }
-      }
-      if (autoDetect.adenaRegion) {
-        const r = await ocrAdenaRegion();
-        if (r && r.parsed) {
-          dom.trkAdenaStart.value = r.parsed.adena;
-          dom.trkAdenaNow.value = r.parsed.adena;
-          console.log('[AutoDetect] ADENA 시작값 설정:', r.parsed.adena);
+        if (needAdena) {
+          const r = await ocrAdenaRegion();
+          if (r && r.parsed) {
+            dom.trkAdenaStart.value = r.parsed.adena;
+            dom.trkAdenaNow.value = r.parsed.adena;
+            console.log('[AutoDetect] ADENA 시작값 설정 (iter ' + (i+1) + '):', r.parsed.adena);
+            needAdena = false;
+          }
         }
+        saveTrackerCurrent();
+        renderTracker();
+
+        // 모든 영역 잡혔으면 조기 리턴
+        if (!needExp && !needLevel && !needAdena) {
+          console.log('[AutoDetect] initial snapshot 완료 (' + (i+1) + '회 시도)');
+          return;
+        }
+        if (dom.adInitStatus) {
+          const remaining = [needExp && 'EXP', needLevel && 'LEVEL', needAdena && 'ADENA'].filter(Boolean).join(',');
+          dom.adInitStatus.textContent = `⏳ 시작값 자동 설정... (${remaining} 재시도 ${i+1}/${MAX_ITERS})`;
+        }
+        if (i < MAX_ITERS - 1) {
+          await new Promise((res) => setTimeout(res, RETRY_DELAY_MS));
+        }
+      } catch (e) {
+        console.warn('[AutoDetect] applyInitialSnapshot iter ' + i + ' 실패:', e);
       }
-      saveTrackerCurrent();
-      renderTracker();
-    } catch (e) {
-      console.warn('[AutoDetect] applyInitialSnapshot 실패:', e);
+    }
+    if (needExp || needLevel || needAdena) {
+      console.warn('[AutoDetect] 일부 시작값 설정 실패 (기본값 유지):', { exp: needExp, level: needLevel, adena: needAdena });
     }
   }
 

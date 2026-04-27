@@ -13,6 +13,10 @@ const {
 const path = require('node:path');
 const fs = require('node:fs');
 
+// dev / packaged 모두 같은 userData 디렉토리 사용 → localStorage / window-bounds 공유
+// (없으면 dev는 %APPDATA%\lineage-mp-timer, packaged는 %APPDATA%\LineageMPTimer 로 분리됨)
+try { app.setName('LineageMPTimer'); } catch (_) {}
+
 let mainWindow = null;
 let tray = null;
 let isQuitting = false;
@@ -342,19 +346,35 @@ ipcMain.handle('app:open-devtools', () => {
 });
 
 ipcMain.handle('app:get-resource-paths', () => {
-  // 패키징된 앱: process.resourcesPath/tesseract/...
-  // dev (npm start): 인터넷 CDN 사용 (null 반환)
-  if (!app.isPackaged) return null;
+  // 패키징: process.resourcesPath/tesseract/  (extraResources)
+  // dev:    node_modules + build/tessdata 에서 직접 로드 (CDN 차단 환경 대응)
   try {
     const { pathToFileURL } = require('node:url');
-    const base = process.resourcesPath;
     const toUrl = (p) => pathToFileURL(p).href;
-    const tessBase = path.join(base, 'tesseract');
-    if (!fs.existsSync(tessBase)) return null;
+
+    if (app.isPackaged) {
+      const tessBase = path.join(process.resourcesPath, 'tesseract');
+      if (!fs.existsSync(tessBase)) return null;
+      return {
+        workerPath: toUrl(path.join(tessBase, 'worker.min.js')),
+        corePath: toUrl(path.join(tessBase, 'core')),
+        langPath: toUrl(path.join(tessBase, 'tessdata'))
+      };
+    }
+
+    // dev 모드: 프로젝트 루트의 node_modules / build 디렉토리 사용
+    const projectRoot = app.getAppPath();
+    const workerPath = path.join(projectRoot, 'node_modules', 'tesseract.js', 'dist', 'worker.min.js');
+    const corePath = path.join(projectRoot, 'node_modules', 'tesseract.js-core');
+    const langPath = path.join(projectRoot, 'build', 'tessdata');
+    if (!fs.existsSync(workerPath) || !fs.existsSync(corePath) || !fs.existsSync(langPath)) {
+      console.warn('[get-resource-paths] dev local files missing, fallback to CDN');
+      return null;
+    }
     return {
-      workerPath: toUrl(path.join(tessBase, 'worker.min.js')),
-      corePath: toUrl(path.join(tessBase, 'core')),
-      langPath: toUrl(path.join(tessBase, 'tessdata'))
+      workerPath: toUrl(workerPath),
+      corePath: toUrl(corePath),
+      langPath: toUrl(langPath)
     };
   } catch (e) {
     console.error('get-resource-paths failed', e);
@@ -397,6 +417,42 @@ ipcMain.handle('app:start-region-select', async (_, displayId) => {
     overlayWindow = null;
   }
   const target = screen.getAllDisplays().find((d) => d.id === displayId) || screen.getPrimaryDisplay();
+  // overlay loupe용 sourceId 미리 조회
+  // 1순위: display_id 매칭   2순위: physical 해상도(thumbnail size) 매칭   3순위: 인덱스 fallback
+  let loupeSourceId = '';
+  try {
+    // thumbnail을 monitor 해상도만큼 크게 요청 → thumbnail.getSize()로 physical 해상도 얻음
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: 4096, height: 4096 }
+    });
+
+    // 1순위: display_id 매칭 (Electron이 빈 문자열 줄 수 있어 truthy 체크)
+    let src = sources.find((s) => s.display_id && String(s.display_id) === String(target.id));
+
+    // 2순위: physical 해상도(monitor 실제 픽셀 크기) 매칭
+    if (!src) {
+      const sf = target.scaleFactor || 1;
+      const targetW = Math.round(target.bounds.width * sf);
+      const targetH = Math.round(target.bounds.height * sf);
+      src = sources.find((s) => {
+        try {
+          const sz = s.thumbnail && s.thumbnail.getSize ? s.thumbnail.getSize() : { width: 0, height: 0 };
+          return Math.abs(sz.width - targetW) <= 2 && Math.abs(sz.height - targetH) <= 2;
+        } catch (_) { return false; }
+      });
+      if (src) console.log('[loupe] matched by resolution:', targetW + 'x' + targetH, '→', src.name);
+    }
+
+    // 3순위: 인덱스 fallback (위 둘 다 실패)
+    if (!src) {
+      const idx = screen.getAllDisplays().findIndex((d) => d.id === target.id);
+      src = sources[idx] || sources[0];
+      console.warn('[loupe] using index fallback:', idx, '/', sources.length, '— may show wrong monitor');
+    }
+    if (src && src.id) loupeSourceId = src.id;
+  } catch (e) { console.error('[loupe] sourceId resolve failed:', e); }
+
   overlayWindow = new BrowserWindow({
     x: target.bounds.x,
     y: target.bounds.y,
@@ -414,7 +470,8 @@ ipcMain.handle('app:start-region-select', async (_, displayId) => {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      preload: path.join(__dirname, 'overlay-preload.js')
+      preload: path.join(__dirname, 'overlay-preload.js'),
+      additionalArguments: ['--loupe-source-id=' + loupeSourceId]
     }
   });
   overlayWindow.setIgnoreMouseEvents(false);
