@@ -199,6 +199,15 @@
         const sourceId = window.overlayApi && window.overlayApi.getLoupeSourceId
           ? window.overlayApi.getLoupeSourceId()
           : '';
+        const expected = (window.overlayApi && window.overlayApi.getLoupeExpected)
+          ? window.overlayApi.getLoupeExpected() : { w: 0, h: 0 };
+        console.log('[Loupe] start', {
+          sourceId,
+          expected,
+          windowInner: { w: window.innerWidth, h: window.innerHeight },
+          devicePixelRatio: window.devicePixelRatio,
+          screen: { w: screen.width, h: screen.height }
+        });
         if (!sourceId) {
           console.warn('[Loupe] sourceId 없음, 비활성');
           return;
@@ -216,7 +225,31 @@
             }
           });
           video.srcObject = stream;
-          await new Promise((res) => { video.onloadedmetadata = res; });
+          await new Promise((res) => {
+            video.onloadedmetadata = () => {
+              const actualW = video.videoWidth;
+              const actualH = video.videoHeight;
+              console.log('[Loupe] video metadata', {
+                videoSize: { w: actualW, h: actualH },
+                expected,
+                ratio: { x: expected.w ? actualW / expected.w : null, y: expected.h ? actualH / expected.h : null },
+                vsWindow: { x: actualW / window.innerWidth, y: actualH / window.innerHeight }
+              });
+              if (expected.w > 0 && expected.h > 0) {
+                const dW = Math.abs(actualW - expected.w);
+                const dH = Math.abs(actualH - expected.h);
+                if (dW > 10 || dH > 10) {
+                  // 매칭된 source가 다른 모니터(또는 일부 영역)를 비추는 상황 → 사용자에게 명시
+                  console.error('[Loupe] !! source size mismatch — actual', { actualW, actualH }, 'expected', expected);
+                  const infoEl = document.getElementById('info-msg');
+                  if (infoEl) {
+                    infoEl.innerHTML = '⚠️ <b>루페 좌표 어긋남</b> · 캡처 source 매칭 실패 (video=' + actualW + '×' + actualH + ', expected=' + expected.w + '×' + expected.h + ') — 영역 지정 시 게임 화면을 직접 보고 잡아주세요';
+                  }
+                }
+              }
+              res();
+            };
+          });
           await video.play();
           videoReady = true;
           loupeContainer.style.display = 'block';
@@ -227,15 +260,18 @@
       }
 
       function renderLoupe() {
-        if (!videoReady) {
+        if (!videoReady || !video.videoWidth || !video.videoHeight) {
           requestAnimationFrame(renderLoupe);
           return;
         }
         // 비디오 해상도 vs 윈도우 해상도 비율 — 듀얼 모니터·DPI 고려
-        const vw = video.videoWidth || window.innerWidth;
-        const vh = video.videoHeight || window.innerHeight;
-        const sx = (mouseX / window.innerWidth) * vw - SRC_W / 2;
-        const sy = (mouseY / window.innerHeight) * vh - SRC_H / 2;
+        const vw = video.videoWidth;
+        const vh = video.videoHeight;
+        const ww = window.innerWidth || 1;
+        const wh = window.innerHeight || 1;
+        // mouseX/Y는 logical(window) px, video는 physical px → 비율로 변환
+        const sx = (mouseX / ww) * vw - SRC_W / 2;
+        const sy = (mouseY / wh) * vh - SRC_H / 2;
         const sxClamped = Math.max(0, Math.min(vw - SRC_W, sx));
         const syClamped = Math.max(0, Math.min(vh - SRC_H, sy));
         lctx.imageSmoothingEnabled = false;

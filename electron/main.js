@@ -453,6 +453,11 @@ ipcMain.handle('app:start-region-select', async (_, displayId) => {
     if (src && src.id) loupeSourceId = src.id;
   } catch (e) { console.error('[loupe] sourceId resolve failed:', e); }
 
+  // expected video size — 매칭된 source의 monitor physical 해상도
+  const sf = target.scaleFactor || 1;
+  const expectedW = Math.round(target.bounds.width * sf);
+  const expectedH = Math.round(target.bounds.height * sf);
+
   overlayWindow = new BrowserWindow({
     x: target.bounds.x,
     y: target.bounds.y,
@@ -471,7 +476,14 @@ ipcMain.handle('app:start-region-select', async (_, displayId) => {
       contextIsolation: true,
       nodeIntegration: false,
       preload: path.join(__dirname, 'overlay-preload.js'),
-      additionalArguments: ['--loupe-source-id=' + loupeSourceId]
+      additionalArguments: [
+        '--loupe-source-id=' + loupeSourceId,
+        '--loupe-expected-w=' + expectedW,
+        '--loupe-expected-h=' + expectedH,
+        '--loupe-display-x=' + target.bounds.x,
+        '--loupe-display-y=' + target.bounds.y,
+        '--loupe-scale=' + sf
+      ]
     }
   });
   overlayWindow.setIgnoreMouseEvents(false);

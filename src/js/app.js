@@ -1057,9 +1057,8 @@
     }
     const avg = sum / N;
     const invert = avg < 128; // 어두운 배경이면 반전
-    // 2) 콘트라스트 스트레치 (가장자리 그라데이션 보존, 글자 모양 부드럽게 유지)
-    //    분포 5-95 percentile 대신 단순한 80-180 → 0-255 스트레치
-    const lo = 60, hi = 200;
+    // 2) 콘트라스트 스트레치 (80~180 → 0~255 — 더 strict하게 글자 가장자리 또렷)
+    const lo = 80, hi = 180;
     const range = hi - lo;
     for (let i = 0; i < d.length; i += 4) {
       let v = (d[i] + d[i + 1] + d[i + 2]) / 3;
@@ -1068,6 +1067,37 @@
       d[i] = v; d[i + 1] = v; d[i + 2] = v;
     }
     ctx.putImageData(img, 0, 0);
+    // 3) Sharpening — 3x3 Laplacian unsharp mask로 글자 가장자리 강조
+    //    4↔9, 7↔1 같은 글리프 헷갈림에 효과적 (열린 위 vs 닫힌 위 차이가 더 명확)
+    applySharpenKernel(canvas);
+  }
+
+  function applySharpenKernel(canvas) {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    const src = ctx.getImageData(0, 0, w, h);
+    const dst = ctx.createImageData(w, h);
+    const sd = src.data, dd = dst.data;
+    // 3x3 Laplacian sharpen kernel: center=5, neighbors=-1 (sum=1 → 평균 휘도 보존)
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const i = (y * w + x) * 4;
+        const top = ((y - 1) * w + x) * 4;
+        const bot = ((y + 1) * w + x) * 4;
+        const lft = (y * w + (x - 1)) * 4;
+        const rgt = (y * w + (x + 1)) * 4;
+        const v = sd[i] * 5 - sd[top] - sd[bot] - sd[lft] - sd[rgt];
+        const c = Math.max(0, Math.min(255, v));
+        dd[i] = c; dd[i + 1] = c; dd[i + 2] = c; dd[i + 3] = 255;
+      }
+    }
+    // 가장자리 픽셀은 원본 복사 (kernel 미적용)
+    for (let i = 0; i < dd.length; i += 4) {
+      if (dd[i + 3] !== 255) {
+        dd[i] = sd[i]; dd[i + 1] = sd[i + 1]; dd[i + 2] = sd[i + 2]; dd[i + 3] = 255;
+      }
+    }
+    ctx.putImageData(dst, 0, 0);
   }
 
   function captureRegionToCanvas(region) {
@@ -1081,8 +1111,8 @@
     const sy = Math.max(0, Math.round(region.y * scale));
     const sw = Math.max(1, Math.round(region.width * scale));
     const sh = Math.max(1, Math.round(region.height * scale));
-    // 업스케일 5x — Tesseract OCR 정확도 개선 (큰 글자에 더 강함)
-    const upscale = 5;
+    // 업스케일 12x — 글리프 헷갈림(4↔9 등) 구분을 위해 더 크게
+    const upscale = 12;
     const canvas = document.createElement('canvas');
     canvas.width = sw * upscale;
     canvas.height = sh * upscale;
@@ -1114,92 +1144,103 @@
     if (!canvas) return null;
     updatePreview(dom.adMpPreview, canvas);
     const w = await initOcrWorker();
-    // MP 전용: 슬래시 + 숫자만 (점 제외) + 사전 추측 OFF (숫자 시퀀스 정확도 ↑)
-    try {
-      await w.setParameters({
-        tessedit_char_whitelist: '0123456789/',
-        tessedit_pageseg_mode: '7',
-        load_system_dawg: '0',
-        load_freq_dawg: '0',
-        load_unambig_dawg: '0',
-        load_punc_dawg: '0',
-        load_number_dawg: '0',
-        load_bigram_dawg: '0'
-      });
-    } catch (_) {}
-    const res = await w.recognize(canvas);
-    const text = ((res && res.data && res.data.text) || '').trim();
-    const rawConf = (res && res.data && res.data.confidence);
-    // Tesseract.js v5: confidence가 -1로 나오는 케이스 있음 → 0으로 보정
-    const confidence = Math.max(0, Number.isFinite(rawConf) ? rawConf : 0);
-    console.log('[OCR MP] text=' + JSON.stringify(text) + ' conf=' + Math.round(confidence) + ' rawConf=' + rawConf);
 
     // INPUTS에 입력된 max MP — 슬래시 인식 실패 시 폴백으로 활용
     const userMax = parseInt(dom.inMaxMp.value, 10) || 0;
 
-    // 1순위: 슬래시/파이프/콜론 구분자
-    let m = text.match(/(\d{1,5})\s*[\/\\|:]\s*(\d{1,5})/);
-    // 2순위: 두 숫자가 비숫자로 구분된 패턴
-    if (!m) m = text.match(/(\d{1,5})[^\d]+(\d{1,5})/);
-    // 3순위: 텍스트 안의 첫 두 숫자
-    if (!m) {
-      const nums = text.match(/\d{1,5}/g);
-      if (nums && nums.length >= 2) m = [null, nums[0], nums[1]];
-    }
-
-    let cur, max;
-    let usedFallback = false;
-    if (m) {
-      cur = parseInt(m[1], 10);
-      max = parseInt(m[2], 10);
-    }
-
-    // 1순위 결과가 sanity check 통과 못 하면(cur>max 등) fallback4 시도
-    const initialValid = m && Number.isFinite(cur) && Number.isFinite(max)
-      && cur <= max && max > 0 && max <= 99999;
-
-    if (!initialValid && userMax > 0) {
-      const digits = text.replace(/[^0-9]/g, '');
-      if (digits) {
-        const maxLen = String(userMax).length;
-        let tryCur = NaN;
-        if (digits.length === maxLen) {
-          tryCur = parseInt(digits, 10);
-        } else if (digits.length > maxLen && digits.length <= maxLen * 2 + 1) {
-          // 끝에서 max 자릿수 떼어내고 앞부분을 cur로
-          tryCur = parseInt(digits.slice(0, digits.length - maxLen), 10);
-          // 만약 cur > max면 한 자리 더 떼어내 재시도 (OCR이 끝에 노이즈 한 자리 추가한 케이스)
-          if (Number.isFinite(tryCur) && tryCur > userMax && digits.length > maxLen + 1) {
-            const retry = parseInt(digits.slice(0, digits.length - maxLen - 1), 10);
-            if (Number.isFinite(retry) && retry <= userMax) {
-              tryCur = retry;
-              console.log('[OCR MP fallback4 retry] 끝 노이즈 한 자리 추가 떼기:', digits, '→ cur=' + tryCur);
-            }
-          }
-        } else if (digits.length > 0 && digits.length < maxLen) {
-          tryCur = parseInt(digits, 10);
-        }
-
-        if (Number.isFinite(tryCur) && tryCur >= 0 && tryCur <= userMax) {
-          cur = tryCur;
-          max = userMax;
-          usedFallback = true;
-          console.log('[OCR MP fallback4]', { initialValid, digits, cur, max, userMax });
-        } else {
-          // fallback도 invalid → null 반환 (일관성 검증에 들어가지 않게)
-          return { text, confidence, parsed: null };
-        }
-      } else if (!initialValid) {
-        return { text, confidence, parsed: null };
+    // 단일 텍스트 결과를 (cur, max, fallback) 튜플로 파싱
+    const parseMpText = (text) => {
+      let m = text.match(/(\d{1,5})\s*[\/\\|:]\s*(\d{1,5})/);
+      if (!m) m = text.match(/(\d{1,5})[^\d]+(\d{1,5})/);
+      if (!m) {
+        const nums = text.match(/\d{1,5}/g);
+        if (nums && nums.length >= 2) m = [null, nums[0], nums[1]];
       }
-    } else if (!initialValid && userMax === 0) {
-      console.log('[OCR MP] 1순위 invalid, INPUTS의 max 입력 시 자동 복구 가능');
+      let cur = NaN, max = NaN, fb = false;
+      if (m) { cur = parseInt(m[1], 10); max = parseInt(m[2], 10); }
+      const initialValid = m && Number.isFinite(cur) && Number.isFinite(max)
+        && cur <= max && max > 0 && max <= 99999;
+      if (!initialValid && userMax > 0) {
+        const digits = text.replace(/[^0-9]/g, '');
+        if (digits) {
+          const maxLen = String(userMax).length;
+          let tryCur = NaN;
+          if (digits.length === maxLen) {
+            tryCur = parseInt(digits, 10);
+          } else if (digits.length > maxLen && digits.length <= maxLen * 2 + 1) {
+            tryCur = parseInt(digits.slice(0, digits.length - maxLen), 10);
+            if (Number.isFinite(tryCur) && tryCur > userMax && digits.length > maxLen + 1) {
+              const retry = parseInt(digits.slice(0, digits.length - maxLen - 1), 10);
+              if (Number.isFinite(retry) && retry <= userMax) tryCur = retry;
+            }
+          } else if (digits.length > 0 && digits.length < maxLen) {
+            tryCur = parseInt(digits, 10);
+          }
+          if (Number.isFinite(tryCur) && tryCur >= 0 && tryCur <= userMax) {
+            cur = tryCur; max = userMax; fb = true;
+          } else { return { cur: NaN, max: NaN, fb: false }; }
+        }
+      }
+      if (!Number.isFinite(cur) || !Number.isFinite(max)) return { cur: NaN, max: NaN, fb: false };
+      return { cur, max, fb };
+    };
+
+    // PSM 7 (single line) + 13 (raw line) 다수결 — slash 패턴이라 PSM 8(single word)은 제외
+    const psmModes = ['7', '13'];
+    const results = [];
+    for (const psm of psmModes) {
+      try {
+        await w.setParameters({
+          tessedit_char_whitelist: '0123456789/',
+          tessedit_pageseg_mode: psm,
+          load_system_dawg: '0', load_freq_dawg: '0',
+          load_unambig_dawg: '0', load_punc_dawg: '0',
+          load_number_dawg: '0', load_bigram_dawg: '0'
+        });
+        const res = await w.recognize(canvas);
+        const text = ((res && res.data && res.data.text) || '').trim();
+        const rawConf = (res && res.data && res.data.confidence);
+        const confidence = Math.max(0, Number.isFinite(rawConf) ? rawConf : 0);
+        const p = parseMpText(text);
+        results.push({ psm, text, confidence, ...p });
+        console.log('[OCR MP psm=' + psm + '] text=' + JSON.stringify(text) + ' conf=' + Math.round(confidence) + ' cur=' + p.cur + ' max=' + p.max + (p.fb ? ' (fallback)' : ''));
+      } catch (e) {
+        console.warn('[OCR MP psm=' + psm + '] failed:', e);
+      }
     }
 
-    if (!Number.isFinite(cur) || !Number.isFinite(max)) {
-      return { text, confidence, parsed: null };
+    if (results.length === 0) return null;
+    const valid = results.filter((r) => Number.isFinite(r.cur) && Number.isFinite(r.max));
+    if (valid.length === 0) {
+      return { text: results[0].text, confidence: results[0].confidence, parsed: null };
     }
-    return { text, confidence, parsed: { cur, max }, usedFallback };
+    // 다수결: (cur,max) 튜플 매칭 — PSM 두 개 모두 일치(2/2)해야 채택
+    const counts = {};
+    valid.forEach((r) => {
+      const key = r.cur + '/' + r.max;
+      counts[key] = (counts[key] || 0) + 1;
+    });
+    let bestKey = valid[0].cur + '/' + valid[0].max;
+    let bestCount = 0;
+    for (const [k, cnt] of Object.entries(counts)) {
+      if (cnt > bestCount) { bestCount = cnt; bestKey = k; }
+    }
+    // PSM 2개 둘 다 일치할 때만 채택 — 한쪽만 보면 stability 통과해 박힐 위험
+    if (bestCount < 2) {
+      console.log('[OCR MP] 다수결 미충족 (PSM마다 결과 다름):', counts, '→ skip');
+      return { text: results[0].text, confidence: results[0].confidence, parsed: null };
+    }
+    const [bestCur, bestMax] = bestKey.split('/').map((s) => parseInt(s, 10));
+    const matched = valid.filter((r) => r.cur === bestCur && r.max === bestMax);
+    const avgConf = matched.reduce((s, r) => s + r.confidence, 0) / matched.length;
+    const usedFallback = matched.some((r) => r.fb);
+    console.log('[OCR MP] 다수결:', counts, '→ ' + bestKey + ' (' + bestCount + '/' + valid.length + ')');
+    return {
+      text: matched[0].text,
+      confidence: avgConf,
+      parsed: { cur: bestCur, max: bestMax, agreementCount: bestCount, totalAttempts: valid.length },
+      usedFallback
+    };
   }
 
   // 다중 PSM 시도해서 가장 빈도 높은 결과 선택 — 단일 숫자 인식에 효과적
@@ -1280,27 +1321,58 @@
     if (!canvas) return null;
     updatePreview(dom.adAdenaPreview, canvas);
     const w = await initOcrWorker();
-    try {
-      await w.setParameters({
-        tessedit_char_whitelist: '0123456789,',
-        tessedit_pageseg_mode: '7',
-        load_system_dawg: '0', load_freq_dawg: '0',
-        load_unambig_dawg: '0', load_punc_dawg: '0',
-        load_number_dawg: '0', load_bigram_dawg: '0'
-      });
-    } catch (_) {}
-    const res = await w.recognize(canvas);
-    const text = ((res && res.data && res.data.text) || '').trim();
-    const rawConf = (res && res.data && res.data.confidence);
-    const confidence = Math.max(0, Number.isFinite(rawConf) ? rawConf : 0);
-    console.log('[OCR ADENA] text=' + JSON.stringify(text) + ' conf=' + Math.round(confidence));
-    const digits = text.replace(/[^0-9]/g, '');
-    if (!digits) return { text, confidence, parsed: null };
-    const adena = parseInt(digits, 10);
-    if (!Number.isFinite(adena) || adena < 0 || adena > 9999999999) {
-      return { text, confidence, parsed: null };
+
+    // PSM 7/8/13 다수결 — 글리프 유사 숫자(4↔9 등) 헷갈림 차단
+    const psmModes = ['7', '8', '13'];
+    const results = [];
+    for (const psm of psmModes) {
+      try {
+        await w.setParameters({
+          tessedit_char_whitelist: '0123456789,',
+          tessedit_pageseg_mode: psm,
+          load_system_dawg: '0', load_freq_dawg: '0',
+          load_unambig_dawg: '0', load_punc_dawg: '0',
+          load_number_dawg: '0', load_bigram_dawg: '0'
+        });
+        const res = await w.recognize(canvas);
+        const text = ((res && res.data && res.data.text) || '').trim();
+        const rawConf = (res && res.data && res.data.confidence);
+        const confidence = Math.max(0, Number.isFinite(rawConf) ? rawConf : 0);
+        const digits = text.replace(/[^0-9]/g, '');
+        const adena = digits ? parseInt(digits, 10) : NaN;
+        results.push({ psm, text, confidence, adena });
+        console.log('[OCR ADENA psm=' + psm + '] text=' + JSON.stringify(text) + ' conf=' + Math.round(confidence) + ' adena=' + adena);
+      } catch (e) {
+        console.warn('[OCR ADENA psm=' + psm + '] failed:', e);
+      }
     }
-    return { text, confidence, parsed: { adena } };
+
+    if (results.length === 0) return null;
+    const valid = results.filter((r) => Number.isFinite(r.adena) && r.adena >= 0 && r.adena <= 9999999999);
+    if (valid.length === 0) {
+      return { text: results[0].text, confidence: results[0].confidence, parsed: null };
+    }
+    // 다수결: 같은 adena 값을 카운트
+    const counts = {};
+    valid.forEach((r) => { counts[r.adena] = (counts[r.adena] || 0) + 1; });
+    let bestAdena = valid[0].adena;
+    let bestCount = 0;
+    for (const [v, cnt] of Object.entries(counts)) {
+      if (cnt > bestCount) { bestCount = cnt; bestAdena = parseInt(v, 10); }
+    }
+    // 2/3 미달이면 parsed null로 → 다음 틱 재시도 (stability check 자연스럽게 미통과)
+    if (bestCount < 2) {
+      console.log('[OCR ADENA] 다수결 약함 (PSM마다 결과 다름):', counts, '→ skip');
+      return { text: results[0].text, confidence: results[0].confidence, parsed: null };
+    }
+    const matched = valid.filter((r) => r.adena === bestAdena);
+    const avgConf = matched.reduce((s, r) => s + r.confidence, 0) / matched.length;
+    console.log('[OCR ADENA] 다수결:', counts, '→ adena=' + bestAdena + ' (' + bestCount + '/' + valid.length + ')');
+    return {
+      text: matched[0].text,
+      confidence: avgConf,
+      parsed: { adena: bestAdena, agreementCount: bestCount, totalAttempts: valid.length }
+    };
   }
 
   async function ocrExpRegion() {
@@ -1309,41 +1381,83 @@
     if (!canvas) return null;
     updatePreview(dom.adExpPreview, canvas);
     const w = await initOcrWorker();
-    // EXP 전용: 점 + 숫자만 (슬래시 제외) + 사전 추측 OFF
-    try {
-      await w.setParameters({
-        tessedit_char_whitelist: '0123456789.',
-        tessedit_pageseg_mode: '7',
-        load_system_dawg: '0',
-        load_freq_dawg: '0',
-        load_unambig_dawg: '0',
-        load_punc_dawg: '0',
-        load_number_dawg: '0',
-        load_bigram_dawg: '0'
-      });
-    } catch (_) {}
-    const res = await w.recognize(canvas);
-    const text = ((res && res.data && res.data.text) || '').trim();
-    const rawConf = (res && res.data && res.data.confidence);
-    const confidence = Math.max(0, Number.isFinite(rawConf) ? rawConf : 0);
-    console.log('[OCR EXP] text=' + JSON.stringify(text) + ' conf=' + Math.round(confidence) + ' rawConf=' + rawConf);
-    // "87.4321" 또는 "87.4321%" — 첫 소수 패턴 또는 정수 (5자리 이상이면 87.4321 형태로 변환)
-    let parsed = null;
-    const decMatch = text.match(/(\d{1,3})\s*\.\s*(\d{1,4})/);
-    if (decMatch) {
-      const intPart = parseInt(decMatch[1], 10);
-      const decPart = decMatch[2].padEnd(4, '0').slice(0, 4);
-      const n = parseFloat(intPart + '.' + decPart);
-      if (Number.isFinite(n) && n >= 0 && n <= 100) parsed = { exp: n };
-    } else {
-      // 점이 인식 안 됐을 가능성 → 5자리 이상 정수면 마지막 4자리를 소수부로 (parseExpPct 로직)
-      const intOnly = text.replace(/[^0-9]/g, '');
-      if (intOnly && intOnly.length >= 4) {
-        const n = parseExpPct(intOnly);
-        if (n >= 0 && n <= 100) parsed = { exp: n };
+
+    // PSM 7/8/13 다수결 — 글리프 유사 숫자(7↔8 등) 헷갈림 차단
+    const psmModes = ['7', '8', '13'];
+    const parseExpText = (text) => {
+      const decMatch = text.match(/(\d{1,3})\s*\.\s*(\d{1,4})/);
+      if (decMatch) {
+        const intPart = parseInt(decMatch[1], 10);
+        const decPart = decMatch[2].padEnd(4, '0').slice(0, 4);
+        const n = parseFloat(intPart + '.' + decPart);
+        if (Number.isFinite(n) && n >= 0 && n <= 100) return n;
+      } else {
+        // 점이 인식 안 됐을 가능성 → 5자리 이상 정수면 마지막 4자리를 소수부로
+        const intOnly = text.replace(/[^0-9]/g, '');
+        if (intOnly && intOnly.length >= 4) {
+          const n = parseExpPct(intOnly);
+          if (n >= 0 && n <= 100) return n;
+        }
+      }
+      return NaN;
+    };
+
+    const results = [];
+    for (const psm of psmModes) {
+      try {
+        await w.setParameters({
+          tessedit_char_whitelist: '0123456789.',
+          tessedit_pageseg_mode: psm,
+          load_system_dawg: '0', load_freq_dawg: '0',
+          load_unambig_dawg: '0', load_punc_dawg: '0',
+          load_number_dawg: '0', load_bigram_dawg: '0'
+        });
+        const res = await w.recognize(canvas);
+        const text = ((res && res.data && res.data.text) || '').trim();
+        const rawConf = (res && res.data && res.data.confidence);
+        const confidence = Math.max(0, Number.isFinite(rawConf) ? rawConf : 0);
+        const exp = parseExpText(text);
+        results.push({ psm, text, confidence, exp });
+        console.log('[OCR EXP psm=' + psm + '] text=' + JSON.stringify(text) + ' conf=' + Math.round(confidence) + ' exp=' + exp);
+      } catch (e) {
+        console.warn('[OCR EXP psm=' + psm + '] failed:', e);
       }
     }
-    return { text, confidence, parsed };
+
+    if (results.length === 0) return null;
+    const valid = results.filter((r) => Number.isFinite(r.exp) && r.exp >= 0 && r.exp <= 100);
+    if (valid.length === 0) {
+      return { text: results[0].text, confidence: results[0].confidence, parsed: null };
+    }
+
+    // 다수결: 정수부 + 소수 1자리(0~999)로 grouping (소수 4자리 정확매칭은 매번 노이즈 1자리 다름)
+    // 예: 27.1100과 27.1101은 같은 그룹 27.1, 27.11과 28.9는 다른 그룹
+    const keyOf = (e) => Math.round(e * 10) / 10;
+    const counts = {};
+    valid.forEach((r) => {
+      const k = keyOf(r.exp);
+      counts[k] = (counts[k] || 0) + 1;
+    });
+    let bestKey = keyOf(valid[0].exp);
+    let bestCount = 0;
+    for (const [k, cnt] of Object.entries(counts)) {
+      if (cnt > bestCount) { bestCount = cnt; bestKey = parseFloat(k); }
+    }
+    if (bestCount < 2) {
+      console.log('[OCR EXP] 다수결 약함 (PSM마다 결과 다름):', counts, '→ skip');
+      return { text: results[0].text, confidence: results[0].confidence, parsed: null };
+    }
+    // 매칭된 결과 중 confidence 높은 것의 정확한 소수 4자리 값 채택
+    const matched = valid.filter((r) => keyOf(r.exp) === bestKey);
+    matched.sort((a, b) => b.confidence - a.confidence);
+    const finalExp = matched[0].exp;
+    const avgConf = matched.reduce((s, r) => s + r.confidence, 0) / matched.length;
+    console.log('[OCR EXP] 다수결:', counts, '→ exp=' + finalExp + ' (key=' + bestKey + ' ' + bestCount + '/' + valid.length + ')');
+    return {
+      text: matched[0].text,
+      confidence: avgConf,
+      parsed: { exp: finalExp, agreementCount: bestCount, totalAttempts: valid.length }
+    };
   }
 
   // Sanity check: confidence가 신뢰성 낮을 때 결과 자체로 검증
@@ -1361,6 +1475,10 @@
   let mpStableCount = 0;
   let expStableLast = null;    // 'exp'
   let expStableCount = 0;
+  let levelStableLast = null;  // 마지막 OCR 레벨 (stability tracking)
+  let levelStableCount = 0;
+  let adenaStableLast = null;  // 마지막 OCR 아데나
+  let adenaStableCount = 0;
 
   function getStabilityRequired() {
     const v = autoDetect.stabilityRequired;
@@ -1434,7 +1552,7 @@
             } else if (r.parsed && !validParsed) {
               dom.adMpLast.textContent = `🟡 ${r.parsed.cur}/${r.parsed.max} (범위 벗어남)`;
             } else if (r.parsed && validParsed && !stab.stable) {
-              dom.adMpLast.textContent = `🔄 ${r.parsed.cur}/${r.parsed.max} (검증 ${mpStableCount}/${STABILITY_REQUIRED})`;
+              dom.adMpLast.textContent = `🔄 ${r.parsed.cur}/${r.parsed.max} (검증 ${mpStableCount}/${getStabilityRequired() || 3})`;
             } else if (r.parsed) {
               dom.adMpLast.textContent = `🟡 ${r.parsed.cur}/${r.parsed.max} · ${Math.round(r.confidence)}% (낮음)`;
             } else {
@@ -1452,13 +1570,25 @@
           if (r) {
             const validParsed = isValidExpParsed(r.parsed);
             const passConfidence = r.confidence >= threshold;
-            // 경험치는 천천히 변하므로 안정성 검증 (소수 4자리까지 같은지 비교)
-            const expKey = validParsed ? r.parsed.exp.toFixed(4) : null;
+            // Stability key를 "정수 + 소수 1자리"로 grouping → 정상 사냥(소수 끝자리만 변함)에서도 count 누적,
+            // mis-read 점프(54→59)는 다른 그룹이라 자연스럽게 reset
+            const expKey = validParsed ? (Math.round(r.parsed.exp * 10) / 10).toFixed(1) : null;
             const stabExp = checkStability(expKey, expStableLast, expStableCount);
             expStableLast = stabExp.lastKey;
             expStableCount = stabExp.count;
-            console.log('[OCR EXP decision]', { parsed: r.parsed, validParsed, conf: r.confidence, threshold, passConfidence, stableCount: expStableCount, stable: stabExp.stable });
-            if (validParsed && passConfidence && stabExp.stable) {
+            // Plausibility: 이전 ±3%p 초과 점프는 strict (단, -50%p 이상 음수 변화는 레벨업 점프로 허용)
+            // 첫 인식(prev ≤ 0)도 strict 처리 — 자동감지 시작 시 잘못된 첫 인식이 박히지 않게
+            const prevExpForJump = parseExpPct(dom.trkExpNow.value);
+            const expDelta = (validParsed && Number.isFinite(prevExpForJump)) ? (r.parsed.exp - prevExpForJump) : 0;
+            const isLevelUpJump = expDelta < -50;
+            const isFirstExp = !(prevExpForJump > 0);
+            const isExpJump = !isLevelUpJump && (isFirstExp || Math.abs(expDelta) > 3);
+            const userStable = getStabilityRequired() || 3;
+            // 5회 = OCR이 일관되게 다른 값 잡으면 빨리 escape (잘못된 anchor에서 빠져나오기)
+            const requiredExpStable = isExpJump ? 5 : Math.max(1, userStable);
+            const passPlausibility = expStableCount >= requiredExpStable;
+            console.log('[OCR EXP decision]', { parsed: r.parsed, validParsed, conf: r.confidence, threshold, passConfidence, stableCount: expStableCount, requiredExpStable, isExpJump, expDelta });
+            if (validParsed && passConfidence && passPlausibility) {
               const exp = r.parsed.exp;
               const prev = parseExpPct(dom.trkExpNow.value);
               if (Math.abs(exp - prev) > 0.0001) {
@@ -1485,8 +1615,9 @@
               dom.adExpLast.textContent = `✅ ${formatExpPct(exp)}%${confLabel}`;
             } else if (r.parsed && !validParsed) {
               dom.adExpLast.textContent = `🟡 ${formatExpPct(r.parsed.exp)}% (범위 벗어남)`;
-            } else if (r.parsed && validParsed && !stabExp.stable) {
-              dom.adExpLast.textContent = `🔄 ${formatExpPct(r.parsed.exp)}% (검증 ${expStableCount}/${STABILITY_REQUIRED})`;
+            } else if (r.parsed && validParsed && !passPlausibility) {
+              const jumpHint = isExpJump ? ' 🚧 점프' : '';
+              dom.adExpLast.textContent = `🔄 ${formatExpPct(r.parsed.exp)}% (검증 ${expStableCount}/${requiredExpStable})${jumpHint}`;
             } else if (r.parsed) {
               dom.adExpLast.textContent = `🟡 ${formatExpPct(r.parsed.exp)}% · ${Math.round(r.confidence)}% (낮음)`;
             } else {
@@ -1497,7 +1628,7 @@
           dom.adExpLast.textContent = '⚠️ ' + (e.message || e);
         }
       }
-      // 레벨 영역 — 다수결 결과만 입력 (단발 오류 거름)
+      // 레벨 영역 — 다수결 + stability + plausibility (이전 ±2 초과 점프는 5회 동일 요구)
       if (autoDetect.levelRegion) {
         try {
           const r = await ocrLevelRegion();
@@ -1506,20 +1637,36 @@
               const lv = r.parsed.level;
               const agreement = r.parsed.agreementCount || 1;
               const total = r.parsed.totalAttempts || 1;
-              // 다수결이 충분하지 않으면 (PSM 3개 중 1개만 동의) 입력 안 함 → 다음 틱에서 재시도
-              const isHighConfidence = agreement >= 2;  // 3개 중 2개 이상 같아야
+              const isHighConfidence = agreement >= 2;  // PSM 3개 중 2개 이상 일치
               if (isHighConfidence) {
+                // Stability tracking
+                if (lv === levelStableLast) levelStableCount++;
+                else { levelStableLast = lv; levelStableCount = 1; }
+                // Plausibility: 이전 입력값 대비 큰 점프(±2 초과)면 5회 동일 요구
+                // 첫 인식(prev ≤ 1, default값)도 strict — 잘못된 첫 인식 박히는 것 방지
+                // 5회 = OCR이 일관되게 다른 값 잡으면 빨리 escape (잘못된 anchor에서 빠져나오기)
                 const prev = parseInt(dom.trkLevelNow.value, 10) || 0;
-                if (lv !== prev) {
-                  dom.trkLevelNow.value = lv;
-                  renderTracker();
-                  saveTrackerCurrent();
-                }
+                const isFirstLv = !(prev > 1);
+                const isJump = isFirstLv || Math.abs(lv - prev) > 2;
+                const requiredStable = isJump ? 5 : 3;
                 const offsetLabel = r.parsed.offset ? ` ${r.parsed.offset > 0 ? '+' : ''}${r.parsed.offset}` : '';
                 const rawLabel = r.parsed.offset ? ` (raw=${r.parsed.raw}${offsetLabel})` : '';
-                dom.adLevelLast.textContent = `✅ Lv.${lv} (${agreement}/${total} 일치)${rawLabel}`;
+
+                if (levelStableCount >= requiredStable) {
+                  if (lv !== prev) {
+                    dom.trkLevelNow.value = lv;
+                    renderTracker();
+                    saveTrackerCurrent();
+                  }
+                  const stableLabel = levelStableCount > 1 ? ` ×${levelStableCount}` : '';
+                  dom.adLevelLast.textContent = `✅ Lv.${lv} (${agreement}/${total} 일치)${stableLabel}${rawLabel}`;
+                } else {
+                  const jumpHint = isJump ? ' 🚧 점프' : '';
+                  dom.adLevelLast.textContent = `🔄 Lv.${lv} (${agreement}/${total} · 검증 ${levelStableCount}/${requiredStable})${jumpHint}`;
+                  console.log('[OCR LEVEL plausibility]', { lv, prev, isJump, levelStableCount, requiredStable });
+                }
               } else {
-                dom.adLevelLast.textContent = `🔄 Lv.${lv} (${agreement}/${total} — 재시도 중)`;
+                dom.adLevelLast.textContent = `🔄 Lv.${lv} (${agreement}/${total} — 다수결 미달)`;
               }
             } else {
               dom.adLevelLast.textContent = `❌ "${(r.text || '???').slice(0, 20)}"`;
@@ -1529,7 +1676,7 @@
           dom.adLevelLast.textContent = '⚠️ ' + (e.message || e);
         }
       }
-      // 아데나 영역
+      // 아데나 영역 — 다수결 + stability + plausibility (큰 점프 시 5회 동일 요구)
       if (autoDetect.adenaRegion) {
         try {
           const r = await ocrAdenaRegion();
@@ -1537,12 +1684,30 @@
             if (r.parsed) {
               const ad = r.parsed.adena;
               const prev = parseInt(dom.trkAdenaNow.value, 10) || 0;
-              if (ad !== prev) {
-                dom.trkAdenaNow.value = ad;
-                renderTracker();
-                saveTrackerCurrent();
+              // Stability tracking
+              if (ad === adenaStableLast) adenaStableCount++;
+              else { adenaStableLast = ad; adenaStableCount = 1; }
+              // Plausibility: 이전 대비 ±100k 또는 ±20% 초과 점프 시 5회 strict
+              // 첫 인식(prev ≤ 0)도 strict — 잘못된 첫 인식 박히는 것 방지
+              // 5회 = OCR이 일관되게 다른 값 잡으면 빨리 escape
+              const diff = Math.abs(ad - prev);
+              const isFirstAd = !(prev > 0);
+              const isJump = isFirstAd || diff > 100000 || diff > prev * 0.2;
+              const requiredStable = isJump ? 5 : 3;
+
+              if (adenaStableCount >= requiredStable) {
+                if (ad !== prev) {
+                  dom.trkAdenaNow.value = ad;
+                  renderTracker();
+                  saveTrackerCurrent();
+                }
+                const stableLabel = adenaStableCount > 1 ? ` ×${adenaStableCount}` : '';
+                dom.adAdenaLast.textContent = `✅ ${formatNumber(ad)}${stableLabel}`;
+              } else {
+                const jumpHint = isJump ? ' 🚧 점프' : '';
+                dom.adAdenaLast.textContent = `🔄 ${formatNumber(ad)} (검증 ${adenaStableCount}/${requiredStable})${jumpHint}`;
+                console.log('[OCR ADENA plausibility]', { ad, prev, diff, isJump, adenaStableCount, requiredStable });
               }
-              dom.adAdenaLast.textContent = `✅ ${formatNumber(ad)}`;
             } else {
               dom.adAdenaLast.textContent = `❌ "${(r.text || '???').slice(0, 20)}"`;
             }
