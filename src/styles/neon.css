@@ -1421,3 +1421,117 @@ body.state-done .stat-value.huge {
 .inputs .grid3 {
   grid-template-columns: 1.4fr 1.4fr 1fr;
 }
+
+/* ====================================================== */
+/* 요약 바 — 어느 탭이든 항상 보이는 핵심 라이브 값       */
+/* ====================================================== */
+.summary-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  background: linear-gradient(90deg, var(--bg-panel-alt), var(--bg-panel));
+  border-bottom: 1px solid var(--border);
+  font-family: 'JetBrains Mono', 'Share Tech Mono', monospace;
+  font-size: 12px;
+  flex-wrap: wrap;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.summary-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.summary-label {
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.summary-value {
+  color: var(--neon);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.summary-pct {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.summary-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+}
+
+/* ====================================================== */
+/* 탭 네비게이션                                           */
+/* ====================================================== */
+.tab-bar {
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px 0 8px;
+  background: var(--bg-panel-alt);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 38px; /* summary-bar 높이만큼 */
+  z-index: 99;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tab-bar::-webkit-scrollbar { display: none; }
+
+.tab-btn {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  color: var(--text-dim);
+  font-family: 'Noto Sans KR', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+.tab-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.02);
+}
+.tab-btn.active {
+  color: var(--neon);
+  background: var(--bg-panel);
+  border-color: var(--border-strong);
+  border-bottom-color: var(--bg-panel);
+  margin-bottom: -1px;
+  box-shadow: 0 -2px 8px var(--bg-glow-1);
+}
+
+/* ====================================================== */
+/* 탭 페인 — 활성 탭만 표시                                */
+/* ====================================================== */
+.tab-pane {
+  display: none;
+  animation: tab-fade-in 0.2s ease-out;
+}
+.tab-pane.active {
+  display: block;
+}
+@keyframes tab-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* 탭 내부 패널 간격 */
+.tab-pane > .panel {
+  margin-bottom: 12px;
+}
+.tab-pane > .panel:last-child {
+  margin-bottom: 0;
+}

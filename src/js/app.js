@@ -75,7 +75,25 @@
     chkAdAutoStartTracker: $('chk-ad-auto-start-tracker'),
     chkAdPreview: $('chk-ad-preview'),
     selAdStability: $('sel-ad-stability'),
-    inAdLevelOffset: $('in-ad-level-offset')
+    inAdLevelOffset: $('in-ad-level-offset'),
+    // Paddle 비교 테스트 버튼
+    btnPaddleSelftest: $('btn-paddle-selftest'),
+    btnPaddleTestExp: $('btn-paddle-test-exp'),
+    btnPaddleTestMp: $('btn-paddle-test-mp'),
+    btnPaddleTestLevel: $('btn-paddle-test-level'),
+    btnPaddleTestAdena: $('btn-paddle-test-adena'),
+    paddleTestResult: $('paddle-test-result'),
+    paddleDebugInfo: $('paddle-debug-info'),
+    btnPaddleDebugCopy: $('btn-paddle-debug-copy'),
+    paddleDebugCopied: $('paddle-debug-copied'),
+    // 탭 + 요약 바
+    tabBar: $('tab-bar'),
+    summaryBar: $('summary-bar'),
+    summaryMp: $('summary-mp'),
+    summaryMpPct: $('summary-mp-pct'),
+    summaryRemaining: $('summary-remaining'),
+    summaryExpRate: $('summary-exp-rate'),
+    summaryAdenaRate: $('summary-adena-rate')
   };
 
   const THEMES = ['green', 'cyan', 'pink', 'yellow', 'purple', 'red'];
@@ -1124,6 +1142,40 @@
       throw new Error('캡처 실패: ' + e.message);
     }
     if (autoDetect.preprocess !== false) preprocessCanvas(canvas);
+    return canvas;
+  }
+
+  /**
+   * paddle 같은 자연 이미지 OCR용 — sharpening/contrast 등 가공 없이
+   * 적당히 업스케일만 한 raw 캡처를 반환. paddle은 텍스트 검출 단계가 있어
+   * 가공된 이미지에서 텍스트 영역 자체를 놓침.
+   * @param {object} region {x, y, width, height, sourceId, scaleFactor}
+   * @param {number} [upscale=4] 업스케일 배수 (paddle 입력 32×320 권장 → 자연 보간)
+   */
+  function captureRegionToRawCanvas(region, upscale) {
+    if (!region) return null;
+    const cap = captureStreams.get(region.sourceId);
+    if (!cap || !cap.video) {
+      throw new Error('해당 영역의 캡처 스트림이 없습니다. (sourceId: ' + region.sourceId + ')');
+    }
+    const scale = region.scaleFactor || 1;
+    const sx = Math.max(0, Math.round(region.x * scale));
+    const sy = Math.max(0, Math.round(region.y * scale));
+    const sw = Math.max(1, Math.round(region.width * scale));
+    const sh = Math.max(1, Math.round(region.height * scale));
+    const ups = upscale && upscale > 0 ? upscale : 4;
+    const canvas = document.createElement('canvas');
+    canvas.width = sw * ups;
+    canvas.height = sh * ups;
+    const ctx = canvas.getContext('2d');
+    // 자연 보간 (paddle은 nearest-neighbor 픽셀화된 이미지에 약함)
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    try {
+      ctx.drawImage(cap.video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    } catch (e) {
+      throw new Error('캡처 실패: ' + e.message);
+    }
     return canvas;
   }
 
@@ -2379,6 +2431,276 @@
     if (dom.btnAdLevelRegion) dom.btnAdLevelRegion.addEventListener('click', () => onPickRegion('level'));
     if (dom.btnAdAdenaRegion) dom.btnAdAdenaRegion.addEventListener('click', () => onPickRegion('adena'));
     if (dom.btnAdToggle) dom.btnAdToggle.addEventListener('click', toggleAutoDetect);
+
+    // Paddle 비교 테스트: 한 번 캡처해서 paddle로 인식 → 결과 표시
+    async function runPaddleTest(regionKey, label) {
+      const region = autoDetect[regionKey];
+      if (!region) {
+        if (dom.paddleTestResult) dom.paddleTestResult.textContent = '⚠️ ' + label + ' 영역 미지정';
+        return;
+      }
+      const Paddle = window.MpPaddle;
+      if (!Paddle) {
+        if (dom.paddleTestResult) dom.paddleTestResult.textContent = '❌ paddle-ocr.js 미로드';
+        return;
+      }
+      try {
+        if (dom.paddleTestResult) dom.paddleTestResult.textContent = '⏳ Paddle init... (첫 실행 시 ~30MB CDN 다운로드)';
+        if (region.sourceId) await getCaptureStreamFor(region.sourceId);
+        if (dom.paddleTestResult) dom.paddleTestResult.textContent = '⏳ Paddle 인식 중...';
+        await Paddle.init();
+        // paddle은 자연 이미지를 기대 → tesseract용 가공된 canvas 대신 raw 캡처를 여러 배수로 시도
+        // 가공된 이미지(콘트라스트·sharpening)에선 paddle 검출기가 텍스트 영역을 못 찾는 경우 빈번
+        const variants = [
+          { name: '1x raw',  canvas: captureRegionToRawCanvas(region, 1) },
+          { name: '2x raw',  canvas: captureRegionToRawCanvas(region, 2) },
+          { name: '4x raw',  canvas: captureRegionToRawCanvas(region, 4) },
+          { name: '8x raw',  canvas: captureRegionToRawCanvas(region, 8) },
+          { name: 'preprocessed (tesseract용)', canvas: captureRegionToCanvas(region) }
+        ];
+        const results = [];
+        for (const v of variants) {
+          if (!v.canvas) continue;
+          const t0 = Date.now();
+          try {
+            const r = await Paddle.recognize(v.canvas);
+            const elapsed = Date.now() - t0;
+            results.push({ variant: v.name, text: r.text, elapsed, raw: r.raw });
+            console.log('[Paddle Test ' + label + ' / ' + v.name + ']', { text: r.text, elapsed, raw: r.raw });
+          } catch (err) {
+            results.push({ variant: v.name, text: '(error: ' + err.message + ')', elapsed: 0 });
+            console.warn('[Paddle Test ' + label + ' / ' + v.name + '] failed:', err);
+          }
+        }
+        if (dom.paddleTestResult) {
+          const hit = results.find((r) => r.text && r.text.trim().length > 0);
+          if (hit) {
+            dom.paddleTestResult.textContent = '✅ ' + label + ' [' + hit.variant + ']: "' + hit.text + '" (' + hit.elapsed + 'ms) · 디버그 펼쳐 모든 변형 보기';
+          } else {
+            dom.paddleTestResult.textContent = '⚠️ 모든 변형 빈 결과 → 자가진단(🩺) 먼저 실행 권장. 디버그 정보로 paddle 응답 구조 확인.';
+          }
+        }
+        // 디버그 정보를 UI에 출력 (콘솔 안 봐도 알 수 있게)
+        if (dom.paddleDebugInfo) {
+          const debug = {
+            label,
+            results: results.map((r) => ({
+              variant: r.variant,
+              text: r.text,
+              elapsed: r.elapsed,
+              rawKeys: r.raw ? Object.keys(r.raw) : null,
+              rawSample: r.raw ? JSON.stringify(r.raw).slice(0, 500) : null
+            }))
+          };
+          dom.paddleDebugInfo.textContent = JSON.stringify(debug, null, 2);
+        }
+      } catch (e) {
+        console.error('[Paddle Test] error:', e);
+        if (dom.paddleTestResult) dom.paddleTestResult.textContent = '❌ ' + (e.message || String(e));
+      }
+    }
+    if (dom.btnPaddleTestExp) dom.btnPaddleTestExp.addEventListener('click', () => runPaddleTest('expRegion', 'EXP'));
+    if (dom.btnPaddleTestMp) dom.btnPaddleTestMp.addEventListener('click', () => runPaddleTest('mpRegion', 'MP'));
+    if (dom.btnPaddleTestLevel) dom.btnPaddleTestLevel.addEventListener('click', () => runPaddleTest('levelRegion', 'LEVEL'));
+    if (dom.btnPaddleTestAdena) dom.btnPaddleTestAdena.addEventListener('click', () => runPaddleTest('adenaRegion', 'ADENA'));
+
+    // Paddle 자가진단: 합성 캔버스("12345")로 paddle이 동작하는지 검증
+    // 결과:
+    //   "12345" 인식됨 → paddle 작동, 우리 캡처가 문제
+    //   빈 결과 → paddle init/모델 로드 실패 (CDN 차단 or WebGL 문제)
+    //   에러 → init 자체가 실패한 것
+    async function runPaddleSelftest() {
+      const Paddle = window.MpPaddle;
+      const setDebug = (obj) => {
+        if (dom.paddleDebugInfo) {
+          dom.paddleDebugInfo.textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
+          // 자가진단 시 디버그 영역 자동 펼침
+          const details = dom.paddleDebugInfo.parentElement;
+          if (details && details.tagName.toLowerCase() === 'details') details.open = true;
+        }
+      };
+      if (!Paddle) {
+        if (dom.paddleTestResult) dom.paddleTestResult.textContent = '❌ paddle-ocr.js 미로드';
+        setDebug('window.MpPaddle 없음');
+        return;
+      }
+      const diag = { steps: [] };
+      try {
+        // 1) Baidu CDN 직접 fetch — 네트워크/CSP/방화벽 확인
+        if (dom.paddleTestResult) dom.paddleTestResult.textContent = '⏳ CDN 도달성 확인 중...';
+        const cdnUrls = [
+          'https://paddlejs.bj.bcebos.com/models/fuse/ocr/ch_PP-OCRv2_det_fuse_activation/model.json',
+          'https://paddlejs.bj.bcebos.com/models/fuse/ocr/ch_PP-OCRv2_rec_fuse_activation/model.json'
+        ];
+        for (const url of cdnUrls) {
+          const t0 = Date.now();
+          try {
+            const r = await fetch(url, { method: 'GET', cache: 'no-cache' });
+            const elapsed = Date.now() - t0;
+            diag.steps.push({ url, status: r.status, ok: r.ok, elapsed, size: r.headers.get('content-length') });
+          } catch (err) {
+            diag.steps.push({ url, error: err.message || String(err), elapsed: Date.now() - t0 });
+          }
+        }
+        setDebug(diag);
+        const cdnOk = diag.steps.every((s) => s.ok);
+        if (!cdnOk) {
+          if (dom.paddleTestResult) {
+            dom.paddleTestResult.textContent = '❌ CDN 차단됨 — 모델 다운로드 불가. paddle 사용 불가능 (디버그 펼쳐 확인)';
+          }
+          return;
+        }
+
+        if (dom.paddleTestResult) dom.paddleTestResult.textContent = '⏳ paddle init... (CDN 도달 OK, 모델 로드 중)';
+        const initT0 = Date.now();
+        await Paddle.init();
+        const initElapsed = Date.now() - initT0;
+        // 합성 캔버스 — 1024×128, 흰 배경에 검은 "12345 ABC"
+        const synth = document.createElement('canvas');
+        synth.width = 1024; synth.height = 128;
+        const sctx = synth.getContext('2d');
+        sctx.fillStyle = '#fff';
+        sctx.fillRect(0, 0, synth.width, synth.height);
+        sctx.fillStyle = '#000';
+        sctx.font = 'bold 80px Arial, sans-serif';
+        sctx.textBaseline = 'middle';
+        sctx.fillText('12345 ABC', 60, 64);
+
+        // paddle 검출기/인식기 둘 다 별도로 시험 — canvas vs HTMLImageElement vs detect-only
+        if (dom.paddleTestResult) dom.paddleTestResult.textContent = '⏳ 다양한 입력 형태 시험 중...';
+
+        // Canvas → data URL → Image element (HTMLImageElement는 paddle이 기대하는 입력 형태일 가능성)
+        const dataUrl = synth.toDataURL('image/png');
+        const imgEl = await new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = () => reject(new Error('Image load 실패'));
+          img.src = dataUrl;
+        });
+
+        // 더 큰 합성 이미지 (paddle 검출기가 작은 텍스트 무시할 가능성)
+        const bigSynth = document.createElement('canvas');
+        bigSynth.width = 1280; bigSynth.height = 480;
+        const bctx = bigSynth.getContext('2d');
+        bctx.fillStyle = '#fff';
+        bctx.fillRect(0, 0, bigSynth.width, bigSynth.height);
+        bctx.fillStyle = '#000';
+        bctx.font = 'bold 200px Arial, sans-serif';
+        bctx.textBaseline = 'middle';
+        bctx.fillText('12345 ABC', 100, 240);
+        const bigImg = await new Promise((resolve) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.src = bigSynth.toDataURL('image/png');
+        });
+
+        const variants = [
+          { name: 'canvas (1024×128)', input: synth, fn: 'recognize' },
+          { name: 'HTMLImageElement (1024×128)', input: imgEl, fn: 'recognize' },
+          { name: 'canvas (1280×480 큰글자)', input: bigSynth, fn: 'recognize' },
+          { name: 'HTMLImageElement (1280×480 큰글자)', input: bigImg, fn: 'recognize' },
+          { name: 'detect 함수 (canvas 1280×480)', input: bigSynth, fn: 'detect' },
+          { name: 'detect 함수 (Image 1280×480)', input: bigImg, fn: 'detect' }
+        ];
+        const attempts = [];
+        let finalText = '';
+        const ocrApi = window.paddlejs.ocr;
+        for (const v of variants) {
+          if (dom.paddleTestResult) dom.paddleTestResult.textContent = '⏳ ' + v.name + '...';
+          const t0 = Date.now();
+          let res = null;
+          let err = null;
+          try {
+            if (v.fn === 'detect') {
+              res = await ocrApi.detect(v.input);
+            } else {
+              // Paddle wrapper 우회 — 직접 ocr.recognize 호출
+              res = await ocrApi.recognize(v.input);
+            }
+          } catch (e) {
+            err = e.message || String(e);
+          }
+          const elapsed = Date.now() - t0;
+          // detect는 points만, recognize는 {text, points}
+          let textPreview = '';
+          if (res) {
+            if (Array.isArray(res.text)) textPreview = res.text.join(' ');
+            else if (typeof res.text === 'string') textPreview = res.text;
+            else if (Array.isArray(res)) textPreview = '[배열 길이=' + res.length + ']';
+          }
+          attempts.push({
+            variant: v.name,
+            fn: v.fn,
+            elapsed,
+            text: textPreview,
+            error: err,
+            rawSample: res ? JSON.stringify(res).slice(0, 400) : null
+          });
+          if (textPreview && textPreview.trim().length > 0) {
+            if (!finalText) finalText = textPreview;
+          }
+        }
+
+        const debug = {
+          phase: 'self-test',
+          cdnReachability: diag.steps,
+          initElapsed,
+          attempts,
+          finalText,
+          paddleGlobalKeys: window.paddlejs ? Object.keys(window.paddlejs) : null,
+          paddleOcrKeys: (window.paddlejs && window.paddlejs.ocr) ? Object.keys(window.paddlejs.ocr) : null,
+          paddleOcrInitType: (window.paddlejs && window.paddlejs.ocr && typeof window.paddlejs.ocr.init) || null,
+          paddleOcrRecognizeType: (window.paddlejs && window.paddlejs.ocr && typeof window.paddlejs.ocr.recognize) || null,
+          paddleOcrDetectType: (window.paddlejs && window.paddlejs.ocr && typeof window.paddlejs.ocr.detect) || null
+        };
+        setDebug(debug);
+        const successAttempt = attempts.find((a) => a.text && a.text.length > 0);
+        if (successAttempt) {
+          if (dom.paddleTestResult) {
+            dom.paddleTestResult.textContent = '✅ "' + successAttempt.variant + '" 변형에서 작동: "' + successAttempt.text + '" → 이 입력 형태 사용하면 됨';
+          }
+        } else {
+          if (dom.paddleTestResult) {
+            dom.paddleTestResult.textContent = '❌ 6가지 변형 모두 빈 결과 → paddle 모델/검출 자체 문제 (디버그의 attempts 확인)';
+          }
+        }
+      } catch (e) {
+        console.error('[Paddle Selftest] error:', e);
+        if (dom.paddleTestResult) dom.paddleTestResult.textContent = '❌ 자가진단 에러: ' + (e.message || String(e));
+        setDebug({ error: e.message || String(e), stack: e.stack });
+      }
+    }
+    if (dom.btnPaddleSelftest) dom.btnPaddleSelftest.addEventListener('click', runPaddleSelftest);
+
+    // 디버그 정보 클립보드 복사
+    if (dom.btnPaddleDebugCopy) {
+      dom.btnPaddleDebugCopy.addEventListener('click', async () => {
+        const text = dom.paddleDebugInfo ? dom.paddleDebugInfo.textContent : '';
+        if (!text) {
+          if (dom.paddleDebugCopied) dom.paddleDebugCopied.textContent = '복사할 내용 없음';
+          return;
+        }
+        try {
+          await navigator.clipboard.writeText(text);
+          if (dom.paddleDebugCopied) {
+            dom.paddleDebugCopied.textContent = '✅ 클립보드 복사됨';
+            setTimeout(() => { if (dom.paddleDebugCopied) dom.paddleDebugCopied.textContent = ''; }, 2000);
+          }
+        } catch (e) {
+          // fallback: select the pre, user can Ctrl+C
+          try {
+            const range = document.createRange();
+            range.selectNodeContents(dom.paddleDebugInfo);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+            if (dom.paddleDebugCopied) dom.paddleDebugCopied.textContent = '⚠️ 자동 복사 실패 — 영역 선택됨, Ctrl+C 누르세요';
+          } catch (err2) {
+            if (dom.paddleDebugCopied) dom.paddleDebugCopied.textContent = '❌ 복사 실패: ' + (err2.message || err2);
+          }
+        }
+      });
+    }
     if (dom.chkAdAutoStart) {
       dom.chkAdAutoStart.checked = !!autoDetect.autoStart;
       dom.chkAdAutoStart.addEventListener('change', () => {
@@ -2537,6 +2859,55 @@
     } catch (_) { /* ignore */ }
   }
 
+  // ========== Tabs + Summary Bar ==========
+  const TAB_KEY = 'lmp.activeTab.v1';
+  function activateTab(tabId) {
+    if (!tabId) tabId = 'main';
+    const buttons = document.querySelectorAll('.tab-btn');
+    const panes = document.querySelectorAll('.tab-pane');
+    let matched = false;
+    buttons.forEach((b) => {
+      const isActive = b.getAttribute('data-tab') === tabId;
+      b.classList.toggle('active', isActive);
+      b.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      if (isActive) matched = true;
+    });
+    panes.forEach((p) => {
+      p.classList.toggle('active', p.getAttribute('data-tab-content') === tabId);
+    });
+    if (matched) {
+      try { localStorage.setItem(TAB_KEY, tabId); } catch (_) {}
+    }
+  }
+  function bindTabs() {
+    document.querySelectorAll('.tab-btn').forEach((btn) => {
+      btn.addEventListener('click', () => activateTab(btn.getAttribute('data-tab')));
+    });
+    let saved = null;
+    try { saved = localStorage.getItem(TAB_KEY); } catch (_) {}
+    activateTab(saved || 'main');
+  }
+
+  // 핵심 라이브 값을 어느 탭에서든 항상 보이게 — DOM에서 직접 읽어 mirror
+  function updateSummaryBar() {
+    if (!dom.summaryBar) return;
+    if (dom.summaryMp && dom.mpCurrent && dom.mpMax) {
+      dom.summaryMp.textContent = `${dom.mpCurrent.textContent}/${dom.mpMax.textContent}`;
+    }
+    if (dom.summaryMpPct && dom.mpPercent) {
+      dom.summaryMpPct.textContent = dom.mpPercent.textContent;
+    }
+    if (dom.summaryRemaining && dom.timeRemaining) {
+      dom.summaryRemaining.textContent = dom.timeRemaining.textContent;
+    }
+    if (dom.summaryExpRate && dom.trkExpRate) {
+      dom.summaryExpRate.textContent = dom.trkExpRate.textContent;
+    }
+    if (dom.summaryAdenaRate && dom.trkAdenaRate) {
+      dom.summaryAdenaRate.textContent = dom.trkAdenaRate.textContent;
+    }
+  }
+
   // ========== Init ==========
   function init() {
     restoreSettings();
@@ -2573,9 +2944,12 @@
     });
     window.addEventListener('dragover', (e) => e.preventDefault());
     window.addEventListener('drop', (e) => e.preventDefault());
+    bindTabs();
+    updateSummaryBar();
     setInterval(() => {
       if (!mpState.running) renderAll();
       renderTracker();
+      updateSummaryBar();
     }, 1000);
   }
 

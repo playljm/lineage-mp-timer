@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta http-equiv="Content-Security-Policy"
-      content="default-src 'self' file:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self' blob: file: https://cdn.jsdelivr.net; worker-src 'self' blob: file: https://cdn.jsdelivr.net; connect-src 'self' blob: data: file: https://tessdata.projectnaptha.com https://cdn.jsdelivr.net; img-src 'self' blob: data: file:; media-src 'self' blob: mediastream:;" />
+      content="default-src 'self' file:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self' 'unsafe-eval' blob: file: https://cdn.jsdelivr.net; worker-src 'self' blob: file: https://cdn.jsdelivr.net; connect-src 'self' blob: data: file: https://tessdata.projectnaptha.com https://cdn.jsdelivr.net https://paddlejs.bj.bcebos.com https://paddleocr.bj.bcebos.com; img-src 'self' blob: data: file:; media-src 'self' blob: mediastream:;" />
     <title>Lineage MP Timer</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -30,405 +30,480 @@
       </div>
     </header>
 
+    <!-- 항상 보이는 요약 바 (어느 탭이든 핵심 라이브 값 표시) -->
+    <div class="summary-bar" id="summary-bar">
+      <div class="summary-item">
+        <span class="summary-label">MP</span>
+        <span class="summary-value" id="summary-mp">0/0</span>
+        <span class="summary-pct" id="summary-mp-pct">0%</span>
+      </div>
+      <div class="summary-divider"></div>
+      <div class="summary-item">
+        <span class="summary-label">⏱</span>
+        <span class="summary-value" id="summary-remaining">--:--:--</span>
+      </div>
+      <div class="summary-divider"></div>
+      <div class="summary-item">
+        <span class="summary-label">📈 EXP/H</span>
+        <span class="summary-value" id="summary-exp-rate">+0%/h</span>
+      </div>
+      <div class="summary-divider"></div>
+      <div class="summary-item">
+        <span class="summary-label">💰 ADENA/H</span>
+        <span class="summary-value" id="summary-adena-rate">+0/h</span>
+      </div>
+    </div>
+
+    <!-- 탭 네비게이션 -->
+    <nav class="tab-bar" role="tablist" id="tab-bar">
+      <button class="tab-btn active" data-tab="main" role="tab" type="button">🏠 메인</button>
+      <button class="tab-btn" data-tab="inputs" role="tab" type="button">✏️ 입력</button>
+      <button class="tab-btn" data-tab="ocr" role="tab" type="button">🔍 OCR · 아이템</button>
+      <button class="tab-btn" data-tab="settings" role="tab" type="button">⚙️ 설정</button>
+    </nav>
+
     <main class="content">
-      <!-- MP 게이지 -->
-      <section class="panel gauge">
-        <div class="row between baseline">
-          <span class="label">MP</span>
-          <span class="mp-value">
-            <span id="mp-current">0</span>
-            <span class="sep">/</span>
-            <span id="mp-max">0</span>
-            <span class="mp-percent" id="mp-percent">0%</span>
-          </span>
-        </div>
-        <div class="bar" aria-hidden="true">
-          <div class="bar-fill" id="bar-fill"></div>
-          <div class="bar-scan"></div>
-        </div>
-      </section>
+      <!-- ============================================== -->
+      <!-- 탭: 메인 — 실시간 모니터링 (MP / 카운트다운 / 트래커 / 컨트롤) -->
+      <!-- ============================================== -->
+      <div class="tab-pane active" data-tab-content="main" role="tabpanel">
 
-      <!-- 카운트다운 -->
-      <section class="panel countdown" id="countdown-panel">
-        <div class="row countdown-row">
-          <div class="stat">
-            <span class="stat-label">⏱ REMAINING</span>
-            <span class="stat-value huge" id="time-remaining">--:--:--</span>
+        <!-- MP 게이지 -->
+        <section class="panel gauge">
+          <div class="row between baseline">
+            <span class="label">MP</span>
+            <span class="mp-value">
+              <span id="mp-current">0</span>
+              <span class="sep">/</span>
+              <span id="mp-max">0</span>
+              <span class="mp-percent" id="mp-percent">0%</span>
+            </span>
           </div>
-          <div class="stat">
-            <span class="stat-label">⌛ COMPLETE AT</span>
-            <span class="stat-value" id="time-complete">--:--:--</span>
+          <div class="bar" aria-hidden="true">
+            <div class="bar-fill" id="bar-fill"></div>
+            <div class="bar-scan"></div>
           </div>
-        </div>
-        <div class="row">
-          <div class="stat">
-            <span class="stat-label">⚡ PER TICK</span>
-            <span class="stat-value" id="tick-recovery">+0 MP / 16s</span>
-          </div>
-          <div class="stat">
-            <span class="stat-label">◉ STATUS</span>
-            <span class="stat-value" id="run-status">IDLE</span>
-          </div>
-        </div>
-        <div class="breakdown" id="breakdown"></div>
-      </section>
+        </section>
 
-      <!-- 입력 -->
-      <section class="panel inputs">
-        <h3 class="panel-title">INPUTS</h3>
-        <div class="grid3">
-          <label class="field">
-            <span>현재 MP</span>
-            <input id="in-cur-mp" type="number" min="0" step="1" value="50" />
-          </label>
-          <label class="field">
-            <span>최대 MP</span>
-            <input id="in-max-mp" type="number" min="1" step="1" value="327" />
-          </label>
-          <label class="field">
-            <span>WIS</span>
-            <input id="in-wis" type="number" min="1" max="50" step="1" value="15" />
-          </label>
-        </div>
-
-        <label class="field" style="margin-bottom: 12px;">
-          <span>🎯 목표 MP % <small style="color:var(--muted);text-transform:none;letter-spacing:0;">— 이 % 도달 시 알림</small></span>
-          <div class="input-with-buttons">
-            <input id="in-target-pct" type="number" min="1" max="100" step="1" value="100" />
-            <div class="quick-pct">
-              <button type="button" data-pct="50">50</button>
-              <button type="button" data-pct="80">80</button>
-              <button type="button" data-pct="100">100</button>
+        <!-- 카운트다운 -->
+        <section class="panel countdown" id="countdown-panel">
+          <div class="row countdown-row">
+            <div class="stat">
+              <span class="stat-label">⏱ REMAINING</span>
+              <span class="stat-value huge" id="time-remaining">--:--:--</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">⌛ COMPLETE AT</span>
+              <span class="stat-value" id="time-complete">--:--:--</span>
             </div>
           </div>
-        </label>
-
-        <h3 class="panel-title">BUFFS</h3>
-        <div class="buffs">
-          <label class="chk">
-            <input type="checkbox" id="chk-potion" checked />
-            <span>파란물약 <small>(+max(1, WIS-10))</small></span>
-          </label>
-          <label class="chk">
-            <input type="checkbox" id="chk-meditation" checked />
-            <span>메디테이션 <small>(+5, 정지 전용)</small></span>
-          </label>
-          <label class="chk">
-            <input type="checkbox" id="chk-staff" />
-            <span>수정 지팡이 <small>(+10)</small></span>
-          </label>
-        </div>
-
-        <h3 class="panel-title">LOCATION / STATE</h3>
-        <div class="grid2">
-          <label class="field">
-            <span>위치</span>
-            <select id="in-location">
-              <option value="field">일반 필드 (0)</option>
-              <option value="tavern" selected>여관 (+2)</option>
-              <option value="dungeon">법사 30Q 던전 (-3)</option>
-              <option value="custom">직접 입력 (+N)</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>상태</span>
-            <select id="in-state">
-              <option value="standing" selected>정지 (x1, 16s)</option>
-              <option value="moving">이동 (x2, 32s)</option>
-              <option value="combat">전투 (x4, 64s)</option>
-              <option value="blocked">회복 불가 (배고픔/과중)</option>
-            </select>
-          </label>
-        </div>
-
-        <label class="field" id="custom-location-wrap" style="display:none; margin-top:10px;">
-          <span>위치 보너스 직접 입력 (MP/틱)</span>
-          <input id="in-location-custom" type="number" min="-20" max="50" step="1" value="0" />
-        </label>
-      </section>
-
-      <!-- MP / 경험치 자동 감지 (OCR) -->
-      <section class="panel auto-detect">
-        <div class="row between baseline">
-          <h3 class="panel-title inline">🔍 MP·경험치 자동 감지 (OCR)</h3>
-          <span class="ad-status-badge" id="ad-status">OFF</span>
-        </div>
-        <p class="panel-help muted small">
-          리니지 화면에서 <b>MP 영역</b>과 <b>경험치 영역</b>(예: <code>87.4321%</code>)을 각각 드래그로 지정하면, 1초 주기로 자동 인식해 입력칸에 반영됩니다.
-          <br/>💡 <b>가장 정확한 방법</b>:
-          <br/>① INPUTS에 <b>최대 MP를 미리 입력</b> (예: 217)
-          <br/>② MP 영역은 <b>현재 MP 숫자만 좁게</b> 캡처 (슬래시 없어도 OK, 예: <code>150</code>만)
-          <br/>③ 슬래시 잘 인식되면 그대로 사용, 안 되면 INPUTS의 max를 자동 활용해 cur만 추출
-        </p>
-        <div class="auto-detect-actions">
-          <button id="btn-ad-mp-region" class="ghost-btn ad-btn">📷 MP</button>
-          <button id="btn-ad-exp-region" class="ghost-btn ad-btn">📷 경험치</button>
-          <button id="btn-ad-level-region" class="ghost-btn ad-btn">📷 레벨</button>
-          <button id="btn-ad-adena-region" class="ghost-btn ad-btn">📷 아데나</button>
-        </div>
-        <div class="auto-detect-actions" style="margin-top: 6px;">
-          <button id="btn-ad-toggle" class="ghost-btn ad-btn primary-ghost" style="flex: 1;">▶ 자동 감지 시작</button>
-        </div>
-        <div class="ad-info" id="ad-info">
-          <div class="ad-info-row"><span class="ad-info-label">모니터</span><span id="ad-display">미지정</span></div>
-          <div class="ad-info-row"><span class="ad-info-label">MP 영역</span><span id="ad-mp-region-info">미지정</span></div>
-          <div class="ad-info-row"><span class="ad-info-label">경험치 영역</span><span id="ad-exp-region-info">미지정</span></div>
-          <div class="ad-info-row"><span class="ad-info-label">레벨 영역</span><span id="ad-level-region-info">미지정</span></div>
-          <div class="ad-info-row"><span class="ad-info-label">아데나 영역</span><span id="ad-adena-region-info">미지정</span></div>
-          <div class="ad-info-row"><span class="ad-info-label">최근 MP</span><span id="ad-mp-last">-</span></div>
-          <div class="ad-info-row"><span class="ad-info-label">최근 경험치</span><span id="ad-exp-last">-</span></div>
-          <div class="ad-info-row"><span class="ad-info-label">최근 레벨</span><span id="ad-level-last">-</span></div>
-          <div class="ad-info-row"><span class="ad-info-label">최근 아데나</span><span id="ad-adena-last">-</span></div>
-          <div class="ad-info-row"><span class="ad-info-label">초기화 진행</span><span id="ad-init-status">-</span></div>
-        </div>
-        <div class="ad-preview-grid ad-preview-4">
-          <div class="ad-preview-cell">
-            <span class="ad-preview-label">MP</span>
-            <div class="ad-preview-img-wrap"><img id="ad-mp-preview" alt="MP" /></div>
+          <div class="row">
+            <div class="stat">
+              <span class="stat-label">⚡ PER TICK</span>
+              <span class="stat-value" id="tick-recovery">+0 MP / 16s</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">◉ STATUS</span>
+              <span class="stat-value" id="run-status">IDLE</span>
+            </div>
           </div>
-          <div class="ad-preview-cell">
-            <span class="ad-preview-label">경험치</span>
-            <div class="ad-preview-img-wrap"><img id="ad-exp-preview" alt="EXP" /></div>
-          </div>
-          <div class="ad-preview-cell">
-            <span class="ad-preview-label">레벨</span>
-            <div class="ad-preview-img-wrap"><img id="ad-level-preview" alt="LEVEL" /></div>
-          </div>
-          <div class="ad-preview-cell">
-            <span class="ad-preview-label">아데나</span>
-            <div class="ad-preview-img-wrap"><img id="ad-adena-preview" alt="ADENA" /></div>
-          </div>
-        </div>
-        <div class="ad-options">
-          <label class="chk inline">
-            <input type="checkbox" id="chk-ad-auto-start" />
-            <span>인식 후 타이머 자동 시작</span>
-          </label>
-          <label class="chk inline">
-            <input type="checkbox" id="chk-ad-auto-start-tracker" />
-            <span>첫 경험치 인식 시 트래커 자동 시작</span>
-          </label>
-          <label class="chk inline">
-            <input type="checkbox" id="chk-ad-preview" checked />
-            <span>캡처 미리보기 표시</span>
-          </label>
-          <label class="field inline-field">
-            <span style="font-size:10px;">검증 횟수</span>
-            <select id="sel-ad-stability" style="font-size:11px; padding:2px 6px;">
-              <option value="0">0회 (즉시 입력)</option>
-              <option value="1" selected>1회</option>
-              <option value="2">2회 연속 (안정 우선)</option>
-            </select>
-          </label>
-          <label class="field inline-field" title="OCR 결과에 더할 오프셋 (-9~+9). OCR이 25로 인식하는데 실제 26이면 +1.">
-            <span style="font-size:10px;">레벨 보정</span>
-            <input id="in-ad-level-offset" type="number" min="-9" max="9" step="1" value="0" style="font-size:11px; padding:2px 6px; width: 56px;" />
-          </label>
-        </div>
-      </section>
+          <div class="breakdown" id="breakdown"></div>
+        </section>
 
-      <!-- 컨트롤 -->
-      <section class="panel controls">
-        <button id="btn-start" class="primary">▶ START</button>
-        <button id="btn-pause">⏸ PAUSE</button>
-        <button id="btn-reset">↺ RESET</button>
-      </section>
+        <!-- 컨트롤 -->
+        <section class="panel controls">
+          <button id="btn-start" class="primary">▶ START</button>
+          <button id="btn-pause">⏸ PAUSE</button>
+          <button id="btn-reset">↺ RESET</button>
+        </section>
 
-      <!-- 사냥 획득 아이템 판매 계산 -->
-      <section class="panel items">
-        <div class="row between baseline">
-          <h3 class="panel-title inline">ITEM DROPS · 사냥 획득 아이템 판매</h3>
-          <button id="btn-items-apply" class="primary-small" title="합계를 현재 아데나에 더하고 수량 리셋">💰 아데나에 더하기</button>
-        </div>
-        <p class="panel-help muted small">
-          판매 가격과 드랍 수량을 입력하면 <b>합계가 자동 계산</b>됩니다. 아이템 이름·가격도 직접 수정 가능.
-        </p>
-        <div class="items-header">
-          <span>아이템</span>
-          <span>수량</span>
-          <span>단가</span>
-          <span>소계</span>
-          <span></span>
-        </div>
-        <div class="items-list" id="items-list"></div>
-        <div class="items-footer">
-          <button id="btn-item-add" class="ghost-btn">＋ 아이템 추가</button>
-          <button id="btn-items-reset" class="ghost-btn">↺ 수량 리셋</button>
-          <div class="items-total">
-            <span class="stat-label">합계</span>
-            <span id="items-total-value">0</span>
-            <span class="items-unit">원</span>
+        <!-- 세션 트래커 -->
+        <section class="panel tracker">
+          <div class="row between baseline">
+            <h3 class="panel-title inline">SESSION TRACKER · 경험치 / 아데나</h3>
+            <span class="muted small" id="tracker-status">IDLE</span>
           </div>
-        </div>
-      </section>
 
-      <!-- 프리셋 -->
-      <section class="panel presets">
-        <div class="row between baseline">
-          <h3 class="panel-title inline" title="현재 설정을 이름으로 저장하고 원클릭으로 불러옵니다">PRESETS <span class="help-icon" title="도움말">ⓘ</span></h3>
-          <div class="preset-actions">
-            <input id="preset-name" type="text" placeholder="예: 마법사 사냥" maxlength="20" title="프리셋에 붙일 이름" />
-            <button id="btn-preset-save" title="현재 설정을 이 이름으로 저장 (이미 있으면 덮어쓰기)">💾 SAVE</button>
+          <div class="tracker-grid">
+            <div class="tracker-row header">
+              <span></span>
+              <span>시작</span>
+              <span>현재</span>
+              <span>증가량</span>
+            </div>
+
+            <div class="tracker-row">
+              <span class="tracker-label">레벨</span>
+              <input id="track-level-start" type="number" min="1" max="99" step="1" value="1" />
+              <input id="track-level-now" type="number" min="1" max="99" step="1" value="1" />
+              <span id="track-level-diff" class="tracker-diff">+0</span>
+            </div>
+
+            <div class="tracker-row">
+              <span class="tracker-label">경험치 %</span>
+              <input id="track-exp-start" type="text" inputmode="decimal" data-exp-pct value="0.0000" placeholder="874564 → 87.4564" title="소수점 없이 874564 입력 → 87.4564 자동 변환 (점 직접 입력도 가능)" />
+              <input id="track-exp-now" type="text" inputmode="decimal" data-exp-pct value="0.0000" placeholder="874564 → 87.4564" title="소수점 없이 숫자만 입력해도 자동 변환" />
+              <span id="track-exp-diff" class="tracker-diff">+0.0000%</span>
+            </div>
+
+            <div class="tracker-row">
+              <span class="tracker-label">아데나</span>
+              <input id="track-adena-start" type="number" min="0" step="1" value="0" />
+              <input id="track-adena-now" type="number" min="0" step="1" value="0" />
+              <span id="track-adena-diff" class="tracker-diff">+0</span>
+            </div>
           </div>
-        </div>
-        <p class="panel-help muted small">
-          저장되는 값: <b>최대 MP · WIS · 버프 · 위치/보너스 · 상태 · 목표 %</b><br/>
-          활용 예: <code>"법사 여관"</code>, <code>"명상만"</code>, <code>"전투중"</code>, <code>"다크엘프 50%"</code> 등 캐릭터·상황별 빠른 전환
-        </p>
-        <div class="preset-list" id="preset-list">
-          <span class="muted">저장된 프리셋이 없습니다.</span>
-        </div>
-      </section>
 
-      <!-- 세션 트래커 -->
-      <section class="panel tracker">
-        <div class="row between baseline">
-          <h3 class="panel-title inline">SESSION TRACKER · 경험치 / 아데나</h3>
-          <span class="muted small" id="tracker-status">IDLE</span>
-        </div>
+          <div class="tracker-stats">
+            <div class="stat">
+              <span class="stat-label">⏱ SESSION</span>
+              <span class="stat-value" id="tracker-time">00:00:00</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">📈 EXP / H</span>
+              <span class="stat-value" id="tracker-exp-rate">+0%/h</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">💰 ADENA / H</span>
+              <span class="stat-value" id="tracker-adena-rate">+0/h</span>
+            </div>
+          </div>
 
-        <div class="tracker-grid">
-          <div class="tracker-row header">
+          <div class="tracker-actions">
+            <button id="btn-tracker-start" class="primary">⏵ START</button>
+            <button id="btn-tracker-stop">■ STOP</button>
+            <button id="btn-tracker-reset">↺ RESET</button>
+            <button id="btn-tracker-snapshot" title="현재값을 시작값으로 복사">📸 SNAP</button>
+          </div>
+        </section>
+      </div>
+
+      <!-- ============================================== -->
+      <!-- 탭: 입력 — INPUTS / BUFFS / LOCATION / PRESETS -->
+      <!-- ============================================== -->
+      <div class="tab-pane" data-tab-content="inputs" role="tabpanel">
+
+        <!-- 입력 -->
+        <section class="panel inputs">
+          <h3 class="panel-title">INPUTS</h3>
+          <div class="grid3">
+            <label class="field">
+              <span>현재 MP</span>
+              <input id="in-cur-mp" type="number" min="0" step="1" value="50" />
+            </label>
+            <label class="field">
+              <span>최대 MP</span>
+              <input id="in-max-mp" type="number" min="1" step="1" value="327" />
+            </label>
+            <label class="field">
+              <span>WIS</span>
+              <input id="in-wis" type="number" min="1" max="50" step="1" value="15" />
+            </label>
+          </div>
+
+          <label class="field" style="margin-bottom: 12px;">
+            <span>🎯 목표 MP % <small style="color:var(--muted);text-transform:none;letter-spacing:0;">— 이 % 도달 시 알림</small></span>
+            <div class="input-with-buttons">
+              <input id="in-target-pct" type="number" min="1" max="100" step="1" value="100" />
+              <div class="quick-pct">
+                <button type="button" data-pct="50">50</button>
+                <button type="button" data-pct="80">80</button>
+                <button type="button" data-pct="100">100</button>
+              </div>
+            </div>
+          </label>
+
+          <h3 class="panel-title">BUFFS</h3>
+          <div class="buffs">
+            <label class="chk">
+              <input type="checkbox" id="chk-potion" checked />
+              <span>파란물약 <small>(+max(1, WIS-10))</small></span>
+            </label>
+            <label class="chk">
+              <input type="checkbox" id="chk-meditation" checked />
+              <span>메디테이션 <small>(+5, 정지 전용)</small></span>
+            </label>
+            <label class="chk">
+              <input type="checkbox" id="chk-staff" />
+              <span>수정 지팡이 <small>(+10)</small></span>
+            </label>
+          </div>
+
+          <h3 class="panel-title">LOCATION / STATE</h3>
+          <div class="grid2">
+            <label class="field">
+              <span>위치</span>
+              <select id="in-location">
+                <option value="field">일반 필드 (0)</option>
+                <option value="tavern" selected>여관 (+2)</option>
+                <option value="dungeon">법사 30Q 던전 (-3)</option>
+                <option value="custom">직접 입력 (+N)</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>상태</span>
+              <select id="in-state">
+                <option value="standing" selected>정지 (x1, 16s)</option>
+                <option value="moving">이동 (x2, 32s)</option>
+                <option value="combat">전투 (x4, 64s)</option>
+                <option value="blocked">회복 불가 (배고픔/과중)</option>
+              </select>
+            </label>
+          </div>
+
+          <label class="field" id="custom-location-wrap" style="display:none; margin-top:10px;">
+            <span>위치 보너스 직접 입력 (MP/틱)</span>
+            <input id="in-location-custom" type="number" min="-20" max="50" step="1" value="0" />
+          </label>
+        </section>
+
+        <!-- 프리셋 -->
+        <section class="panel presets">
+          <div class="row between baseline">
+            <h3 class="panel-title inline" title="현재 설정을 이름으로 저장하고 원클릭으로 불러옵니다">PRESETS <span class="help-icon" title="도움말">ⓘ</span></h3>
+            <div class="preset-actions">
+              <input id="preset-name" type="text" placeholder="예: 마법사 사냥" maxlength="20" title="프리셋에 붙일 이름" />
+              <button id="btn-preset-save" title="현재 설정을 이 이름으로 저장 (이미 있으면 덮어쓰기)">💾 SAVE</button>
+            </div>
+          </div>
+          <p class="panel-help muted small">
+            저장되는 값: <b>최대 MP · WIS · 버프 · 위치/보너스 · 상태 · 목표 %</b><br/>
+            활용 예: <code>"법사 여관"</code>, <code>"명상만"</code>, <code>"전투중"</code>, <code>"다크엘프 50%"</code> 등 캐릭터·상황별 빠른 전환
+          </p>
+          <div class="preset-list" id="preset-list">
+            <span class="muted">저장된 프리셋이 없습니다.</span>
+          </div>
+        </section>
+      </div>
+
+      <!-- ============================================== -->
+      <!-- 탭: OCR · 아이템 — 자동감지 / 아이템 드롭 -->
+      <!-- ============================================== -->
+      <div class="tab-pane" data-tab-content="ocr" role="tabpanel">
+
+        <!-- MP / 경험치 자동 감지 (OCR) -->
+        <section class="panel auto-detect">
+          <div class="row between baseline">
+            <h3 class="panel-title inline">🔍 MP·경험치 자동 감지 (OCR)</h3>
+            <span class="ad-status-badge" id="ad-status">OFF</span>
+          </div>
+          <p class="panel-help muted small">
+            리니지 화면에서 <b>MP 영역</b>과 <b>경험치 영역</b>(예: <code>87.4321%</code>)을 각각 드래그로 지정하면, 1초 주기로 자동 인식해 입력칸에 반영됩니다.
+            <br/>💡 <b>가장 정확한 방법</b>:
+            <br/>① INPUTS에 <b>최대 MP를 미리 입력</b> (예: 217)
+            <br/>② MP 영역은 <b>현재 MP 숫자만 좁게</b> 캡처 (슬래시 없어도 OK, 예: <code>150</code>만)
+            <br/>③ 슬래시 잘 인식되면 그대로 사용, 안 되면 INPUTS의 max를 자동 활용해 cur만 추출
+          </p>
+          <div class="auto-detect-actions">
+            <button id="btn-ad-mp-region" class="ghost-btn ad-btn">📷 MP</button>
+            <button id="btn-ad-exp-region" class="ghost-btn ad-btn">📷 경험치</button>
+            <button id="btn-ad-level-region" class="ghost-btn ad-btn">📷 레벨</button>
+            <button id="btn-ad-adena-region" class="ghost-btn ad-btn">📷 아데나</button>
+          </div>
+          <div class="auto-detect-actions" style="margin-top: 6px;">
+            <button id="btn-paddle-selftest" class="ghost-btn ad-btn" title="합성 이미지로 paddle 자체 동작 검증">🩺 Paddle 자가진단</button>
+            <button id="btn-paddle-test-exp" class="ghost-btn ad-btn" title="현재 경험치 영역을 PaddleOCR로 한 번 인식 (tesseract 대비 비교)">🧪 Paddle (EXP)</button>
+            <button id="btn-paddle-test-mp" class="ghost-btn ad-btn" title="현재 MP 영역을 PaddleOCR로 한 번 인식">🧪 Paddle (MP)</button>
+            <button id="btn-paddle-test-level" class="ghost-btn ad-btn" title="현재 레벨 영역을 PaddleOCR로 한 번 인식">🧪 Paddle (LEVEL)</button>
+            <button id="btn-paddle-test-adena" class="ghost-btn ad-btn" title="현재 아데나 영역을 PaddleOCR로 한 번 인식">🧪 Paddle (ADENA)</button>
+          </div>
+          <div class="ad-info-row" style="margin-top: 6px;">
+            <span class="ad-info-label">Paddle 결과</span>
+            <span id="paddle-test-result" style="font-family: monospace;">대기</span>
+          </div>
+          <details style="margin-top: 6px; font-size: 11px;">
+            <summary style="cursor:pointer; color: var(--text-dim);">🔬 디버그 정보 (paddle response 원본)</summary>
+            <div style="margin-top: 6px; display:flex; gap:6px;">
+              <button type="button" id="btn-paddle-debug-copy" class="ghost-btn" style="font-size:11px;padding:4px 10px;">📋 디버그 복사</button>
+              <span id="paddle-debug-copied" style="font-size:11px;color:var(--text-dim);align-self:center;"></span>
+            </div>
+            <pre id="paddle-debug-info" style="margin: 6px 0 0; padding: 8px; background: var(--bg-panel-alt); border: 1px solid var(--border); border-radius: 4px; max-height: 300px; overflow: auto; white-space: pre-wrap; word-break: break-all; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--text-dim); user-select: text; -webkit-user-select: text;">테스트 버튼 클릭 시 표시</pre>
+          </details>
+          <div class="auto-detect-actions" style="margin-top: 6px;">
+            <button id="btn-ad-toggle" class="ghost-btn ad-btn primary-ghost" style="flex: 1;">▶ 자동 감지 시작</button>
+          </div>
+          <div class="ad-info" id="ad-info">
+            <div class="ad-info-row"><span class="ad-info-label">모니터</span><span id="ad-display">미지정</span></div>
+            <div class="ad-info-row"><span class="ad-info-label">MP 영역</span><span id="ad-mp-region-info">미지정</span></div>
+            <div class="ad-info-row"><span class="ad-info-label">경험치 영역</span><span id="ad-exp-region-info">미지정</span></div>
+            <div class="ad-info-row"><span class="ad-info-label">레벨 영역</span><span id="ad-level-region-info">미지정</span></div>
+            <div class="ad-info-row"><span class="ad-info-label">아데나 영역</span><span id="ad-adena-region-info">미지정</span></div>
+            <div class="ad-info-row"><span class="ad-info-label">최근 MP</span><span id="ad-mp-last">-</span></div>
+            <div class="ad-info-row"><span class="ad-info-label">최근 경험치</span><span id="ad-exp-last">-</span></div>
+            <div class="ad-info-row"><span class="ad-info-label">최근 레벨</span><span id="ad-level-last">-</span></div>
+            <div class="ad-info-row"><span class="ad-info-label">최근 아데나</span><span id="ad-adena-last">-</span></div>
+            <div class="ad-info-row"><span class="ad-info-label">초기화 진행</span><span id="ad-init-status">-</span></div>
+          </div>
+          <div class="ad-preview-grid ad-preview-4">
+            <div class="ad-preview-cell">
+              <span class="ad-preview-label">MP</span>
+              <div class="ad-preview-img-wrap"><img id="ad-mp-preview" alt="MP" /></div>
+            </div>
+            <div class="ad-preview-cell">
+              <span class="ad-preview-label">경험치</span>
+              <div class="ad-preview-img-wrap"><img id="ad-exp-preview" alt="EXP" /></div>
+            </div>
+            <div class="ad-preview-cell">
+              <span class="ad-preview-label">레벨</span>
+              <div class="ad-preview-img-wrap"><img id="ad-level-preview" alt="LEVEL" /></div>
+            </div>
+            <div class="ad-preview-cell">
+              <span class="ad-preview-label">아데나</span>
+              <div class="ad-preview-img-wrap"><img id="ad-adena-preview" alt="ADENA" /></div>
+            </div>
+          </div>
+          <div class="ad-options">
+            <label class="chk inline">
+              <input type="checkbox" id="chk-ad-auto-start" />
+              <span>인식 후 타이머 자동 시작</span>
+            </label>
+            <label class="chk inline">
+              <input type="checkbox" id="chk-ad-auto-start-tracker" />
+              <span>첫 경험치 인식 시 트래커 자동 시작</span>
+            </label>
+            <label class="chk inline">
+              <input type="checkbox" id="chk-ad-preview" checked />
+              <span>캡처 미리보기 표시</span>
+            </label>
+            <label class="field inline-field">
+              <span style="font-size:10px;">검증 횟수</span>
+              <select id="sel-ad-stability" style="font-size:11px; padding:2px 6px;">
+                <option value="0">0회 (즉시 입력)</option>
+                <option value="1" selected>1회</option>
+                <option value="2">2회 연속 (안정 우선)</option>
+              </select>
+            </label>
+            <label class="field inline-field" title="OCR 결과에 더할 오프셋 (-9~+9). OCR이 25로 인식하는데 실제 26이면 +1.">
+              <span style="font-size:10px;">레벨 보정</span>
+              <input id="in-ad-level-offset" type="number" min="-9" max="9" step="1" value="0" style="font-size:11px; padding:2px 6px; width: 56px;" />
+            </label>
+          </div>
+        </section>
+
+        <!-- 사냥 획득 아이템 판매 계산 -->
+        <section class="panel items">
+          <div class="row between baseline">
+            <h3 class="panel-title inline">ITEM DROPS · 사냥 획득 아이템 판매</h3>
+            <button id="btn-items-apply" class="primary-small" title="합계를 현재 아데나에 더하고 수량 리셋">💰 아데나에 더하기</button>
+          </div>
+          <p class="panel-help muted small">
+            판매 가격과 드랍 수량을 입력하면 <b>합계가 자동 계산</b>됩니다. 아이템 이름·가격도 직접 수정 가능.
+          </p>
+          <div class="items-header">
+            <span>아이템</span>
+            <span>수량</span>
+            <span>단가</span>
+            <span>소계</span>
             <span></span>
-            <span>시작</span>
-            <span>현재</span>
-            <span>증가량</span>
           </div>
+          <div class="items-list" id="items-list"></div>
+          <div class="items-footer">
+            <button id="btn-item-add" class="ghost-btn">＋ 아이템 추가</button>
+            <button id="btn-items-reset" class="ghost-btn">↺ 수량 리셋</button>
+            <div class="items-total">
+              <span class="stat-label">합계</span>
+              <span id="items-total-value">0</span>
+              <span class="items-unit">원</span>
+            </div>
+          </div>
+        </section>
+      </div>
 
-          <div class="tracker-row">
-            <span class="tracker-label">레벨</span>
-            <input id="track-level-start" type="number" min="1" max="99" step="1" value="1" />
-            <input id="track-level-now" type="number" min="1" max="99" step="1" value="1" />
-            <span id="track-level-diff" class="tracker-diff">+0</span>
-          </div>
+      <!-- ============================================== -->
+      <!-- 탭: 설정 — SETTINGS / THEME / HOTKEYS -->
+      <!-- ============================================== -->
+      <div class="tab-pane" data-tab-content="settings" role="tabpanel">
 
-          <div class="tracker-row">
-            <span class="tracker-label">경험치 %</span>
-            <input id="track-exp-start" type="text" inputmode="decimal" data-exp-pct value="0.0000" placeholder="874564 → 87.4564" title="소수점 없이 874564 입력 → 87.4564 자동 변환 (점 직접 입력도 가능)" />
-            <input id="track-exp-now" type="text" inputmode="decimal" data-exp-pct value="0.0000" placeholder="874564 → 87.4564" title="소수점 없이 숫자만 입력해도 자동 변환" />
-            <span id="track-exp-diff" class="tracker-diff">+0.0000%</span>
-          </div>
-
-          <div class="tracker-row">
-            <span class="tracker-label">아데나</span>
-            <input id="track-adena-start" type="number" min="0" step="1" value="0" />
-            <input id="track-adena-now" type="number" min="0" step="1" value="0" />
-            <span id="track-adena-diff" class="tracker-diff">+0</span>
-          </div>
-        </div>
-
-        <div class="tracker-stats">
-          <div class="stat">
-            <span class="stat-label">⏱ SESSION</span>
-            <span class="stat-value" id="tracker-time">00:00:00</span>
-          </div>
-          <div class="stat">
-            <span class="stat-label">📈 EXP / H</span>
-            <span class="stat-value" id="tracker-exp-rate">+0%/h</span>
-          </div>
-          <div class="stat">
-            <span class="stat-label">💰 ADENA / H</span>
-            <span class="stat-value" id="tracker-adena-rate">+0/h</span>
-          </div>
-        </div>
-
-        <div class="tracker-actions">
-          <button id="btn-tracker-start" class="primary">⏵ START</button>
-          <button id="btn-tracker-stop">■ STOP</button>
-          <button id="btn-tracker-reset">↺ RESET</button>
-          <button id="btn-tracker-snapshot" title="현재값을 시작값으로 복사">📸 SNAP</button>
-        </div>
-      </section>
-
-      <!-- 설정 -->
-      <section class="panel settings">
-        <h3 class="panel-title">SETTINGS</h3>
-        <label class="chk">
-          <input type="checkbox" id="chk-sound" checked />
-          <span>완료 시 사운드 재생</span>
-        </label>
-        <label class="chk">
-          <input type="checkbox" id="chk-toast" checked />
-          <span>완료 시 Windows 토스트</span>
-        </label>
-        <label class="chk">
-          <input type="checkbox" id="chk-minimize" />
-          <span>창 닫기 시 트레이로 최소화</span>
-        </label>
-        <div class="exp-delay-row" style="margin-top:10px;display:flex;flex-direction:column;gap:4px;">
-          <label for="in-exp-delay" style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;">
-            <span>경험치 % 자동 포맷 딜레이</span>
-            <span id="exp-delay-value" style="font-variant-numeric:tabular-nums;color:var(--neon);font-weight:600;">3.0s</span>
+        <!-- 설정 -->
+        <section class="panel settings">
+          <h3 class="panel-title">SETTINGS</h3>
+          <label class="chk">
+            <input type="checkbox" id="chk-sound" checked />
+            <span>완료 시 사운드 재생</span>
           </label>
-          <input type="range" id="in-exp-delay" min="500" max="10000" step="100" value="3000" title="숫자만 입력했을 때 이 시간 동안 타이핑을 멈추면 xx.xxxx 형식으로 자동 변환됩니다. 너무 짧으면 천천히 타이핑할 때 중간에 포맷이 끼어들어 입력이 깨집니다. (blur/Enter/Tab은 즉시 변환)" />
-          <small style="color:var(--muted);font-size:11px;line-height:1.4;">숫자만 입력 시 이 시간 동안 멈추면 자동 소수점 변환. 느리게 타이핑하면 늘리세요. (포커스 해제/Enter/Tab은 즉시)</small>
-        </div>
-        <button id="btn-reset-window" class="ghost-btn" style="margin-top:10px;">⤢ 창 크기 기본값으로 복원</button>
-      </section>
-
-      <!-- 테마 -->
-      <section class="panel theme-panel">
-        <h3 class="panel-title">THEME · 색상 테마</h3>
-        <div class="theme-grid">
-          <button class="theme-chip" data-theme="green" title="네온 그린"><span></span>그린</button>
-          <button class="theme-chip" data-theme="cyan" title="시안"><span></span>시안</button>
-          <button class="theme-chip" data-theme="pink" title="핑크"><span></span>핑크</button>
-          <button class="theme-chip" data-theme="yellow" title="옐로우"><span></span>옐로우</button>
-          <button class="theme-chip" data-theme="purple" title="퍼플"><span></span>퍼플</button>
-          <button class="theme-chip" data-theme="red" title="레드"><span></span>레드</button>
-        </div>
-      </section>
-
-      <!-- 단축키 -->
-      <section class="panel hotkeys">
-        <h3 class="panel-title">HOTKEYS</h3>
-
-        <div class="hotkey-group">
-          <div class="hotkey-group-title">GLOBAL · 다른 창에서도 동작 (게임 중에도 작동)</div>
-          <div class="hotkey-row" data-hk="alwaysOnTop">
-            <label class="chk inline">
-              <input type="checkbox" data-hk-enabled />
-              <span>항상 위 토글</span>
+          <label class="chk">
+            <input type="checkbox" id="chk-toast" checked />
+            <span>완료 시 Windows 토스트</span>
+          </label>
+          <label class="chk">
+            <input type="checkbox" id="chk-minimize" />
+            <span>창 닫기 시 트레이로 최소화</span>
+          </label>
+          <div class="exp-delay-row" style="margin-top:10px;display:flex;flex-direction:column;gap:4px;">
+            <label for="in-exp-delay" style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;">
+              <span>경험치 % 자동 포맷 딜레이</span>
+              <span id="exp-delay-value" style="font-variant-numeric:tabular-nums;color:var(--neon);font-weight:600;">3.0s</span>
             </label>
-            <button type="button" class="hk-binding" data-hk-bind>F1</button>
-            <button type="button" class="hk-clear" data-hk-clear title="기본값으로">↺</button>
+            <input type="range" id="in-exp-delay" min="500" max="10000" step="100" value="3000" title="숫자만 입력했을 때 이 시간 동안 타이핑을 멈추면 xx.xxxx 형식으로 자동 변환됩니다. 너무 짧으면 천천히 타이핑할 때 중간에 포맷이 끼어들어 입력이 깨집니다. (blur/Enter/Tab은 즉시 변환)" />
+            <small style="color:var(--muted);font-size:11px;line-height:1.4;">숫자만 입력 시 이 시간 동안 멈추면 자동 소수점 변환. 느리게 타이핑하면 늘리세요. (포커스 해제/Enter/Tab은 즉시)</small>
           </div>
-          <div class="hotkey-row" data-hk="toggleHide">
-            <label class="chk inline">
-              <input type="checkbox" data-hk-enabled />
-              <span>창 숨기기/표시</span>
-            </label>
-            <button type="button" class="hk-binding" data-hk-bind>F2</button>
-            <button type="button" class="hk-clear" data-hk-clear title="기본값으로">↺</button>
-          </div>
-        </div>
+          <button id="btn-reset-window" class="ghost-btn" style="margin-top:10px;">⤢ 창 크기 기본값으로 복원</button>
+        </section>
 
-        <div class="hotkey-group">
-          <div class="hotkey-group-title">WINDOW · 이 창이 활성화일 때만</div>
-          <div class="hotkey-row" data-hk="startPause">
-            <label class="chk inline">
-              <input type="checkbox" data-hk-enabled />
-              <span>타이머 시작/정지</span>
-            </label>
-            <button type="button" class="hk-binding" data-hk-bind>Space</button>
-            <button type="button" class="hk-clear" data-hk-clear title="기본값으로">↺</button>
+        <!-- 테마 -->
+        <section class="panel theme-panel">
+          <h3 class="panel-title">THEME · 색상 테마</h3>
+          <div class="theme-grid">
+            <button class="theme-chip" data-theme="green" title="네온 그린"><span></span>그린</button>
+            <button class="theme-chip" data-theme="cyan" title="시안"><span></span>시안</button>
+            <button class="theme-chip" data-theme="pink" title="핑크"><span></span>핑크</button>
+            <button class="theme-chip" data-theme="yellow" title="옐로우"><span></span>옐로우</button>
+            <button class="theme-chip" data-theme="purple" title="퍼플"><span></span>퍼플</button>
+            <button class="theme-chip" data-theme="red" title="레드"><span></span>레드</button>
           </div>
-          <div class="hotkey-row" data-hk="reset">
-            <label class="chk inline">
-              <input type="checkbox" data-hk-enabled />
-              <span>타이머 리셋</span>
-            </label>
-            <button type="button" class="hk-binding" data-hk-bind>R</button>
-            <button type="button" class="hk-clear" data-hk-clear title="기본값으로">↺</button>
-          </div>
-        </div>
+        </section>
 
-        <div class="hotkey-help muted small">
-          ▸ 키 버튼 클릭 후 새 키 누르기 (Esc 취소 · Backspace 비우기)<br/>
-          ▸ 게임과 충돌하면 체크박스를 끄거나 다른 키로 바꾸세요.
-        </div>
-        <button id="btn-hotkey-reset" class="ghost-btn">↺ 단축키 기본값으로 모두 복원</button>
-      </section>
+        <!-- 단축키 -->
+        <section class="panel hotkeys">
+          <h3 class="panel-title">HOTKEYS</h3>
+
+          <div class="hotkey-group">
+            <div class="hotkey-group-title">GLOBAL · 다른 창에서도 동작 (게임 중에도 작동)</div>
+            <div class="hotkey-row" data-hk="alwaysOnTop">
+              <label class="chk inline">
+                <input type="checkbox" data-hk-enabled />
+                <span>항상 위 토글</span>
+              </label>
+              <button type="button" class="hk-binding" data-hk-bind>F1</button>
+              <button type="button" class="hk-clear" data-hk-clear title="기본값으로">↺</button>
+            </div>
+            <div class="hotkey-row" data-hk="toggleHide">
+              <label class="chk inline">
+                <input type="checkbox" data-hk-enabled />
+                <span>창 숨기기/표시</span>
+              </label>
+              <button type="button" class="hk-binding" data-hk-bind>F2</button>
+              <button type="button" class="hk-clear" data-hk-clear title="기본값으로">↺</button>
+            </div>
+          </div>
+
+          <div class="hotkey-group">
+            <div class="hotkey-group-title">WINDOW · 이 창이 활성화일 때만</div>
+            <div class="hotkey-row" data-hk="startPause">
+              <label class="chk inline">
+                <input type="checkbox" data-hk-enabled />
+                <span>타이머 시작/정지</span>
+              </label>
+              <button type="button" class="hk-binding" data-hk-bind>Space</button>
+              <button type="button" class="hk-clear" data-hk-clear title="기본값으로">↺</button>
+            </div>
+            <div class="hotkey-row" data-hk="reset">
+              <label class="chk inline">
+                <input type="checkbox" data-hk-enabled />
+                <span>타이머 리셋</span>
+              </label>
+              <button type="button" class="hk-binding" data-hk-bind>R</button>
+              <button type="button" class="hk-clear" data-hk-clear title="기본값으로">↺</button>
+            </div>
+          </div>
+
+          <div class="hotkey-help muted small">
+            ▸ 키 버튼 클릭 후 새 키 누르기 (Esc 취소 · Backspace 비우기)<br/>
+            ▸ 게임과 충돌하면 체크박스를 끄거나 다른 키로 바꾸세요.
+          </div>
+          <button id="btn-hotkey-reset" class="ghost-btn">↺ 단축키 기본값으로 모두 복원</button>
+        </section>
+      </div>
 
       <footer class="footer">
         <span class="muted">
@@ -438,8 +513,11 @@
     </main>
 
     <script src="../node_modules/tesseract.js/dist/tesseract.min.js"></script>
+    <!-- PaddleOCR UMD bundle (window.paddlejs.ocr) — 1.6MB 단일 파일, 모델은 init 시 CDN에서 로드 -->
+    <script src="../node_modules/@paddlejs-models/ocr/lib/index.js"></script>
     <script src="js/engine.js"></script>
     <script src="js/storage.js"></script>
+    <script src="js/paddle-ocr.js"></script>
     <script src="js/app.js"></script>
   </body>
 </html>

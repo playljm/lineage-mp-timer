@@ -1,7 +1,7 @@
 {
   "name": "lineage-mp-timer",
-  "version": "1.1.0",
-  "description": "리니지 클래식 MP 자연회복 완충 시간 계산 + 알림 Electron 앱",
+  "version": "1.2.0-paddle",
+  "description": "리니지 클래식 MP 자연회복 완충 시간 계산 + 알림 Electron 앱 (PaddleOCR 빌드)",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
@@ -23,8 +23,8 @@
     "electron-builder": "^24.13.3"
   },
   "build": {
-    "appId": "com.lineage.mptimer",
-    "productName": "LineageMPTimer",
+    "appId": "com.lineage.mptimer.paddle",
+    "productName": "LineageMPTimerPaddle",
     "directories": {
       "output": "dist"
     },
@@ -33,6 +33,9 @@
       "src/**/*",
       "node_modules/tesseract.js/**/*",
       "node_modules/tesseract.js-core/**/*",
+      "node_modules/@paddlejs-models/**/*",
+      "node_modules/@paddlejs/**/*",
+      "node_modules/@paddlejs-mediapipe/**/*",
       "package.json"
     ],
     "extraResources": [
@@ -71,10 +74,11 @@
       "shortcutName": "Lineage MP Timer"
     },
     "portable": {
-      "artifactName": "LineageMPTimer-portable-${version}.exe"
+      "artifactName": "LineageMPTimer-paddle-portable-${version}.exe"
     }
   },
   "dependencies": {
+    "@paddlejs-models/ocr": "^1.2.4",
     "tesseract.js": "^7.0.0"
   }
 }
