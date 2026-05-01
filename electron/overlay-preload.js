@@ -13,9 +13,18 @@ const displayX = parseInt(getArg('--loupe-display-x='), 10) || 0;
 const displayY = parseInt(getArg('--loupe-display-y='), 10) || 0;
 const scale = parseFloat(getArg('--loupe-scale=')) || 1;
 
+// 모든 source 후보 — base64-encoded JSON. 사용자가 'L' 키로 사이클하며
+// 마우스 위치와 일치하는 모니터 직접 찾을 수 있게 함.
+let loupeAllSources = [];
+try {
+  const raw = getArg('--loupe-all-sources=');
+  if (raw) loupeAllSources = JSON.parse(Buffer.from(raw, 'base64').toString('utf8'));
+} catch (_) { loupeAllSources = []; }
+
 contextBridge.exposeInMainWorld('overlayApi', {
   confirm: (region) => ipcRenderer.send('overlay:region-selected', region),
   cancel: () => ipcRenderer.send('overlay:cancelled'),
   getLoupeSourceId: () => loupeSourceId,
-  getLoupeExpected: () => ({ w: expectedW, h: expectedH, x: displayX, y: displayY, scale })
+  getLoupeExpected: () => ({ w: expectedW, h: expectedH, x: displayX, y: displayY, scale }),
+  getLoupeAllSources: () => loupeAllSources.slice()
 });

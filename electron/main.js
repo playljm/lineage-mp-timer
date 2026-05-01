@@ -451,7 +451,15 @@ ipcMain.handle('app:start-region-select', async (_, displayId) => {
       console.warn('[loupe] using index fallback:', idx, '/', sources.length, '— may show wrong monitor');
     }
     if (src && src.id) loupeSourceId = src.id;
+    // 모든 source ID/이름/해상도도 함께 패스 — 사용자가 수동으로 사이클 가능
+    var loupeAllSources = sources.map((s) => ({
+      id: s.id,
+      name: s.name || '',
+      w: s.thumbnail && s.thumbnail.getSize ? s.thumbnail.getSize().width : 0,
+      h: s.thumbnail && s.thumbnail.getSize ? s.thumbnail.getSize().height : 0
+    }));
   } catch (e) { console.error('[loupe] sourceId resolve failed:', e); }
+  if (typeof loupeAllSources === 'undefined') loupeAllSources = [];
 
   // expected video size — 매칭된 source의 monitor physical 해상도
   const sf = target.scaleFactor || 1;
@@ -482,7 +490,8 @@ ipcMain.handle('app:start-region-select', async (_, displayId) => {
         '--loupe-expected-h=' + expectedH,
         '--loupe-display-x=' + target.bounds.x,
         '--loupe-display-y=' + target.bounds.y,
-        '--loupe-scale=' + sf
+        '--loupe-scale=' + sf,
+        '--loupe-all-sources=' + Buffer.from(JSON.stringify(loupeAllSources || [])).toString('base64')
       ]
     }
   });

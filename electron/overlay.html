@@ -124,7 +124,7 @@
   <body>
     <div id="info">
       <span id="info-msg">📷 영역을 드래그로 선택하세요</span>
-      <small><b>Esc</b> 취소</small>
+      <small><b>L</b> 루페 source 변경 · <b>Esc</b> 취소</small>
     </div>
     <div id="cross-h"></div>
     <div id="cross-v"></div>
@@ -195,23 +195,43 @@
       }
 
       // ---------- Loupe (확대 미리보기) ----------
-      async function startLoupe() {
-        const sourceId = window.overlayApi && window.overlayApi.getLoupeSourceId
-          ? window.overlayApi.getLoupeSourceId()
-          : '';
+      // 모든 source 후보 + 현재 인덱스 — 'L' 키로 사이클 가능
+      const allSources = (window.overlayApi && window.overlayApi.getLoupeAllSources)
+        ? window.overlayApi.getLoupeAllSources() : [];
+      const initialSourceId = (window.overlayApi && window.overlayApi.getLoupeSourceId)
+        ? window.overlayApi.getLoupeSourceId() : '';
+      let currentSourceIdx = Math.max(0, allSources.findIndex((s) => s.id === initialSourceId));
+      let currentStream = null;
+
+      function updateSourceIndicator() {
+        const infoEl = document.getElementById('info-msg');
+        if (!infoEl || allSources.length === 0) return;
+        const cur = allSources[currentSourceIdx] || {};
+        infoEl.innerHTML = '📷 영역을 드래그로 선택하세요 · ' +
+          '<span style="color:#ffd84a">루페 source ' + (currentSourceIdx + 1) + '/' + allSources.length +
+          ' (' + (cur.w || '?') + '×' + (cur.h || '?') + ')</span> — 위치 어긋나면 <b>L</b>로 다음 source';
+      }
+
+      async function startLoupeWithSource(sourceId) {
         const expected = (window.overlayApi && window.overlayApi.getLoupeExpected)
           ? window.overlayApi.getLoupeExpected() : { w: 0, h: 0 };
         console.log('[Loupe] start', {
           sourceId,
+          idx: currentSourceIdx + '/' + allSources.length,
           expected,
           windowInner: { w: window.innerWidth, h: window.innerHeight },
-          devicePixelRatio: window.devicePixelRatio,
-          screen: { w: screen.width, h: screen.height }
+          devicePixelRatio: window.devicePixelRatio
         });
         if (!sourceId) {
           console.warn('[Loupe] sourceId 없음, 비활성');
           return;
         }
+        // 기존 stream 정리
+        if (currentStream) {
+          try { currentStream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+          currentStream = null;
+        }
+        videoReady = false;
         try {
           const stream = await navigator.mediaDevices.getUserMedia({
             audio: false,
@@ -224,39 +244,38 @@
               }
             }
           });
+          currentStream = stream;
           video.srcObject = stream;
           await new Promise((res) => {
             video.onloadedmetadata = () => {
-              const actualW = video.videoWidth;
-              const actualH = video.videoHeight;
               console.log('[Loupe] video metadata', {
-                videoSize: { w: actualW, h: actualH },
-                expected,
-                ratio: { x: expected.w ? actualW / expected.w : null, y: expected.h ? actualH / expected.h : null },
-                vsWindow: { x: actualW / window.innerWidth, y: actualH / window.innerHeight }
+                videoSize: { w: video.videoWidth, h: video.videoHeight },
+                expected
               });
-              if (expected.w > 0 && expected.h > 0) {
-                const dW = Math.abs(actualW - expected.w);
-                const dH = Math.abs(actualH - expected.h);
-                if (dW > 10 || dH > 10) {
-                  // 매칭된 source가 다른 모니터(또는 일부 영역)를 비추는 상황 → 사용자에게 명시
-                  console.error('[Loupe] !! source size mismatch — actual', { actualW, actualH }, 'expected', expected);
-                  const infoEl = document.getElementById('info-msg');
-                  if (infoEl) {
-                    infoEl.innerHTML = '⚠️ <b>루페 좌표 어긋남</b> · 캡처 source 매칭 실패 (video=' + actualW + '×' + actualH + ', expected=' + expected.w + '×' + expected.h + ') — 영역 지정 시 게임 화면을 직접 보고 잡아주세요';
-                  }
-                }
-              }
               res();
             };
           });
           await video.play();
           videoReady = true;
           loupeContainer.style.display = 'block';
+          updateSourceIndicator();
           requestAnimationFrame(renderLoupe);
         } catch (e) {
           console.error('[Loupe] start failed:', e);
         }
+      }
+
+      async function cycleLoupeSource() {
+        if (allSources.length < 2) return;
+        currentSourceIdx = (currentSourceIdx + 1) % allSources.length;
+        const next = allSources[currentSourceIdx];
+        console.log('[Loupe] cycle →', currentSourceIdx, next);
+        await startLoupeWithSource(next.id);
+      }
+
+      async function startLoupe() {
+        const sid = allSources.length > 0 ? allSources[currentSourceIdx].id : initialSourceId;
+        await startLoupeWithSource(sid);
       }
 
       function renderLoupe() {
@@ -375,6 +394,12 @@
       document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
           window.overlayApi.cancel();
+          return;
+        }
+        // 'L' 또는 'l' — 루페 source 사이클 (멀티 모니터 매칭 실패 시 수동 선택)
+        if (e.key === 'l' || e.key === 'L') {
+          e.preventDefault();
+          cycleLoupeSource();
           return;
         }
         if (region) {

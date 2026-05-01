@@ -87,6 +87,8 @@
     paddleDebugInfo: $('paddle-debug-info'),
     btnPaddleDebugCopy: $('btn-paddle-debug-copy'),
     paddleDebugCopied: $('paddle-debug-copied'),
+    btnOpenDevtools: $('btn-open-devtools'),
+    hybridDecisionLog: $('hybrid-decision-log'),
     // 탭 + 요약 바
     tabBar: $('tab-bar'),
     summaryBar: $('summary-bar'),
@@ -124,6 +126,12 @@
   const captureStreams = new Map(); // sourceId → { stream, video }
   let detectInterval = null;
   let detectionRunning = false;
+  let detectionRunningSince = 0;
+  // 사용자가 트래커 NOW 칸 직접 편집할 때 그 영역 OCR 일시 정지 (덮어쓰기 방지)
+  // blur 후 5초 grace period — 그 사이 같은 칸 다시 클릭하면 grace 갱신
+  const userEditUntil = { exp: 0, level: 0, adena: 0, mp: 0 };
+  function markUserEdit(key) { userEditUntil[key] = Date.now() + 5000; }
+  function isUserEditing(key) { return Date.now() < (userEditUntil[key] || 0); }
   // 트래커 자동 시작이 in-flight 일 때 중복 트리거 방지 (RESET 후 재시작 포함)
   let autoStartInProgress = false;
 
@@ -1163,39 +1171,34 @@
       throw new Error('해당 영역의 캡처 스트림이 없습니다. (sourceId: ' + region.sourceId + ')');
     }
     const scale = region.scaleFactor || 1;
-    const sx = Math.max(0, Math.round(region.x * scale));
-    const sy = Math.max(0, Math.round(region.y * scale));
-    const sw = Math.max(1, Math.round(region.width * scale));
-    const sh = Math.max(1, Math.round(region.height * scale));
     const ups = upscale && upscale > 0 ? upscale : 6;
     const smooth = !!(opts && opts.smooth);
     const invertForPaddle = !!(opts && opts.invertForPaddle);
     const binarize = !!(opts && opts.binarize);
     const morphOpenIters = (opts && Number.isFinite(opts.morphOpen)) ? Math.max(0, opts.morphOpen) : 0;
     const pad = (opts && Number.isFinite(opts.pad)) ? Math.max(0, Math.round(opts.pad)) : 0;
-    // 평균 휘도로 padding 배경색 자동 판별 (어두운 배경 게임 → 검은 padding, 밝은 → 흰 padding)
+    // pad는 source(게임 화면) 픽셀 자체를 사방 확장 — 사용자가 leading 글자를 살짝 잘랐어도 자동 보충
+    const vw = cap.video.videoWidth || 0;
+    const vh = cap.video.videoHeight || 0;
+    const baseSx = Math.round(region.x * scale);
+    const baseSy = Math.round(region.y * scale);
+    const baseSw = Math.max(1, Math.round(region.width * scale));
+    const baseSh = Math.max(1, Math.round(region.height * scale));
+    const sx = Math.max(0, baseSx - pad);
+    const sy = Math.max(0, baseSy - pad);
+    // pad만큼 확장하되 video 경계로 클램프
+    const swMax = vw > 0 ? (vw - sx) : (baseSw + pad * 2);
+    const shMax = vh > 0 ? (vh - sy) : (baseSh + pad * 2);
+    const sw = Math.min(swMax, baseSw + pad * 2 - (baseSx - pad < 0 ? Math.abs(baseSx - pad) : 0));
+    const sh = Math.min(shMax, baseSh + pad * 2 - (baseSy - pad < 0 ? Math.abs(baseSy - pad) : 0));
     const canvas = document.createElement('canvas');
-    canvas.width = sw * ups + pad * 2;
-    canvas.height = sh * ups + pad * 2;
+    canvas.width = sw * ups;
+    canvas.height = sh * ups;
     const ctx = canvas.getContext('2d');
     ctx.imageSmoothingEnabled = smooth;
     if (smooth) ctx.imageSmoothingQuality = 'high';
     try {
-      // 임시로 inner 부분만 그려서 휘도 측정 후 padding 색 결정
-      ctx.drawImage(cap.video, sx, sy, sw, sh, pad, pad, sw * ups, sh * ups);
-      if (pad > 0) {
-        const probe = ctx.getImageData(pad, pad, sw * ups, sh * ups).data;
-        let sum = 0;
-        for (let i = 0; i < probe.length; i += 4) sum += (probe[i] + probe[i+1] + probe[i+2]) / 3;
-        const avg = sum / (probe.length / 4);
-        const bgColor = avg < 128 ? '#000' : '#fff';
-        // 4개 가장자리만 채움 (가운데는 이미 캡처됨)
-        ctx.fillStyle = bgColor;
-        ctx.fillRect(0, 0, canvas.width, pad); // top
-        ctx.fillRect(0, canvas.height - pad, canvas.width, pad); // bottom
-        ctx.fillRect(0, pad, pad, sh * ups); // left
-        ctx.fillRect(canvas.width - pad, pad, pad, sh * ups); // right
-      }
+      ctx.drawImage(cap.video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
     } catch (e) {
       throw new Error('캡처 실패: ' + e.message);
     }
@@ -1403,8 +1406,7 @@
     } catch (_) { /* ignore */ }
   }
 
-  async function ocrMpRegion() {
-    if (autoDetect.ocrEngine === 'paddle') return await ocrMpRegionPaddle();
+  async function ocrMpRegionTesseract() {
     if (!autoDetect.mpRegion) return null;
     const canvas = captureRegionToCanvas(autoDetect.mpRegion);
     if (!canvas) return null;
@@ -1510,8 +1512,7 @@
   }
 
   // 다중 PSM 시도해서 가장 빈도 높은 결과 선택 — 단일 숫자 인식에 효과적
-  async function ocrLevelRegion() {
-    if (autoDetect.ocrEngine === 'paddle') return await ocrLevelRegionPaddle();
+  async function ocrLevelRegionTesseract() {
     if (!autoDetect.levelRegion) return null;
     const canvas = captureRegionToCanvas(autoDetect.levelRegion);
     if (!canvas) return null;
@@ -1582,8 +1583,7 @@
     };
   }
 
-  async function ocrAdenaRegion() {
-    if (autoDetect.ocrEngine === 'paddle') return await ocrAdenaRegionPaddle();
+  async function ocrAdenaRegionTesseract() {
     if (!autoDetect.adenaRegion) return null;
     const canvas = captureRegionToCanvas(autoDetect.adenaRegion);
     if (!canvas) return null;
@@ -1643,8 +1643,7 @@
     };
   }
 
-  async function ocrExpRegion() {
-    if (autoDetect.ocrEngine === 'paddle') return await ocrExpRegionPaddle();
+  async function ocrExpRegionTesseract() {
     if (!autoDetect.expRegion) return null;
     const canvas = captureRegionToCanvas(autoDetect.expRegion);
     if (!canvas) return null;
@@ -1737,7 +1736,7 @@
   // ========================================================================
   async function ocrMpRegionPaddle() {
     if (!autoDetect.mpRegion) return null;
-    const canvas = captureRegionToRawCanvas(autoDetect.mpRegion, 1, { pad: 8 });
+    const canvas = captureRegionToRawCanvas(autoDetect.mpRegion, 1, { pad: 2 });
     if (!canvas) return null;
     updatePreview(dom.adMpPreview, canvas);
     if (!window.MpPaddle) return null;
@@ -1788,7 +1787,7 @@
 
   async function ocrLevelRegionPaddle() {
     if (!autoDetect.levelRegion) return null;
-    const canvas = captureRegionToRawCanvas(autoDetect.levelRegion, 1, { pad: 8 });
+    const canvas = captureRegionToRawCanvas(autoDetect.levelRegion, 1, { pad: 2 });
     if (!canvas) return null;
     updatePreview(dom.adLevelPreview, canvas);
     if (!window.MpPaddle) return null;
@@ -1822,7 +1821,8 @@
 
   async function ocrAdenaRegionPaddle() {
     if (!autoDetect.adenaRegion) return null;
-    const canvas = captureRegionToRawCanvas(autoDetect.adenaRegion, 1, { pad: 8 });
+    // ADENA만 padding을 16으로 — 코인 아이콘 옆 / 영역 가장자리에 글자 닿아 자리 누락되는 문제 완화
+    const canvas = captureRegionToRawCanvas(autoDetect.adenaRegion, 1, { pad: 4 });
     if (!canvas) return null;
     updatePreview(dom.adAdenaPreview, canvas);
     if (!window.MpPaddle) return null;
@@ -1848,7 +1848,7 @@
 
   async function ocrExpRegionPaddle() {
     if (!autoDetect.expRegion) return null;
-    const canvas = captureRegionToRawCanvas(autoDetect.expRegion, 1, { pad: 8 });
+    const canvas = captureRegionToRawCanvas(autoDetect.expRegion, 1, { pad: 2 });
     if (!canvas) return null;
     updatePreview(dom.adExpPreview, canvas);
     if (!window.MpPaddle) return null;
@@ -1879,6 +1879,254 @@
       console.warn('[OCR EXP paddle] failed:', e);
       return null;
     }
+  }
+
+  // ========================================================================
+  // 엔진 dispatcher — autoDetect.ocrEngine으로 분기 (paddle / tesseract / hybrid)
+  // ========================================================================
+  async function ocrMpRegion() {
+    // 사용자가 INPUTS의 현재 MP 칸 편집 중이면 OCR skip (덮어쓰기 방지)
+    if (isUserEditing('mp')) return null;
+    if (autoDetect.ocrEngine === 'paddle') return await ocrMpRegionPaddle();
+    if (autoDetect.ocrEngine === 'hybrid') return await ocrMpRegionHybrid();
+    return await ocrMpRegionTesseract();
+  }
+  async function ocrLevelRegion() {
+    if (isUserEditing('level')) return null;
+    if (autoDetect.ocrEngine === 'paddle') return await ocrLevelRegionPaddle();
+    if (autoDetect.ocrEngine === 'hybrid') return await ocrLevelRegionHybrid();
+    return await ocrLevelRegionTesseract();
+  }
+  async function ocrAdenaRegion() {
+    if (isUserEditing('adena')) return null;
+    if (autoDetect.ocrEngine === 'paddle') return await ocrAdenaRegionPaddle();
+    if (autoDetect.ocrEngine === 'hybrid') return await ocrAdenaRegionHybrid();
+    return await ocrAdenaRegionTesseract();
+  }
+  async function ocrExpRegion() {
+    if (isUserEditing('exp')) return null;
+    if (autoDetect.ocrEngine === 'paddle') return await ocrExpRegionPaddle();
+    if (autoDetect.ocrEngine === 'hybrid') return await ocrExpRegionHybrid();
+    return await ocrExpRegionTesseract();
+  }
+
+  // ========================================================================
+  // 하이브리드 voting — paddle + tesseract 동시 실행 후 일치할 때만 채택
+  //   · paddle 약점(6/8) ≠ tesseract 약점(3/9, 0/5, 1) → 동시 오탐 확률 매우 낮음
+  //   · 하나만 parsed=null → parsed 있는 쪽 채택 (한쪽 엔진 약한 자리)
+  //   · 둘 다 parsed 있고 불일치 → parsed=null (anchor 보존, 다음 틱 재시도)
+  // ========================================================================
+  // In-UI hybrid 결정 로그 — 최근 20건 큐. DevTools 못 여는 사용자도 진단 가능하게.
+  const _hybridLogQueue = [];
+  function pushHybridLog(msg) {
+    const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
+    _hybridLogQueue.unshift('[' + ts + '] ' + msg);
+    if (_hybridLogQueue.length > 20) _hybridLogQueue.length = 20;
+    if (dom.hybridDecisionLog) {
+      dom.hybridDecisionLog.textContent = _hybridLogQueue.join('\n');
+    }
+  }
+
+  function voteHybrid(label, paddleR, tessR, parsedMatches) {
+    if (!paddleR && !tessR) return null;
+    if (!paddleR) return tessR;
+    if (!tessR) return paddleR;
+    const pp = paddleR.parsed, tp = tessR.parsed;
+    if (!pp && !tp) return paddleR;       // 둘 다 인식 실패
+    if (!pp) return tessR;                 // tess만 성공
+    if (!tp) return paddleR;               // paddle만 성공
+    if (parsedMatches(pp, tp)) {           // 둘 다 성공 + 일치 → 채택
+      console.log('[Hybrid ' + label + '] match:', pp);
+      pushHybridLog(label + ' ✅ match: ' + JSON.stringify(pp));
+      return {
+        text: 'paddle:"' + paddleR.text + '" / tess:"' + tessR.text + '"',
+        confidence: Math.max(paddleR.confidence || 0, tessR.confidence || 0),
+        parsed: pp,
+        hybrid: true
+      };
+    }
+    // 둘 다 성공 + 불일치 → 거부 (anchor 보존)
+    console.log('[Hybrid ' + label + '] DISAGREE: paddle=', pp, 'tess=', tp);
+    pushHybridLog(label + ' ❌ DISAGREE p=' + JSON.stringify(pp) + ' t=' + JSON.stringify(tp));
+    return { text: 'mismatch p:' + paddleR.text + ' t:' + tessR.text, confidence: 0, parsed: null };
+  }
+
+  async function ocrMpRegionHybrid() {
+    const [pr, tr] = await Promise.all([ocrMpRegionPaddle(), ocrMpRegionTesseract()]);
+    if (!pr || !tr || !pr.parsed || !tr.parsed) {
+      return voteHybrid('MP', pr, tr, (a, b) => a.cur === b.cur && a.max === b.max);
+    }
+    if (pr.parsed.cur === tr.parsed.cur && pr.parsed.max === tr.parsed.max) {
+      return voteHybrid('MP', pr, tr, (a, b) => a.cur === b.cur && a.max === b.max);
+    }
+    // 불일치 — max 일치 + cur 변화량이 plausible(20 이내)이면 단독 채택
+    // 정상 사냥 중 MP는 한 틱(1초)에 ±20 이상 안 변함 (기본 ~+10/16s)
+    const userMax = parseInt(dom.inMaxMp.value, 10) || 0;
+    const anchorCur = parseInt(dom.inCurMp.value, 10) || 0;
+    const pPlausible = pr.parsed.max === userMax && Math.abs(pr.parsed.cur - anchorCur) <= 20 && pr.parsed.cur >= 0 && pr.parsed.cur <= userMax;
+    const tPlausible = tr.parsed.max === userMax && Math.abs(tr.parsed.cur - anchorCur) <= 20 && tr.parsed.cur >= 0 && tr.parsed.cur <= userMax;
+    if (pPlausible && !tPlausible) {
+      console.log('[Hybrid MP] paddle plausible, accept:', pr.parsed);
+      pushHybridLog('MP 🟢 paddle 단독 채택: ' + pr.parsed.cur + '/' + pr.parsed.max);
+      return pr;
+    }
+    if (tPlausible && !pPlausible) {
+      console.log('[Hybrid MP] tess plausible, accept:', tr.parsed);
+      pushHybridLog('MP 🟢 tess 단독 채택: ' + tr.parsed.cur + '/' + tr.parsed.max);
+      return tr;
+    }
+    // 둘 다 plausible — anchor 있으면 delta 작은 쪽, 없으면 agreement 높은 쪽
+    if (pPlausible && tPlausible) {
+      const pAg = pr.parsed.agreementCount || 1;
+      const tAg = tr.parsed.agreementCount || 1;
+      if (anchorCur > 0) {
+        const pDelta = Math.abs(pr.parsed.cur - anchorCur);
+        const tDelta = Math.abs(tr.parsed.cur - anchorCur);
+        if (pDelta < tDelta) {
+          pushHybridLog('MP 🟡 paddle 채택 (delta ' + pDelta + ' < ' + tDelta + '): ' + pr.parsed.cur);
+          return pr;
+        }
+        if (tDelta < pDelta) {
+          pushHybridLog('MP 🟡 tess 채택 (delta ' + tDelta + ' < ' + pDelta + '): ' + tr.parsed.cur);
+          return tr;
+        }
+      }
+      if (tAg > pAg) { pushHybridLog('MP 🟡 tess 채택 (agreement ↑): ' + tr.parsed.cur); return tr; }
+      if (pAg > tAg) { pushHybridLog('MP 🟡 paddle 채택 (agreement ↑): ' + pr.parsed.cur); return pr; }
+      pushHybridLog('MP 🟡 paddle 채택 (default primary): ' + pr.parsed.cur);
+      return pr;
+    }
+    return voteHybrid('MP', pr, tr, (a, b) => a.cur === b.cur && a.max === b.max);
+  }
+  async function ocrLevelRegionHybrid() {
+    const [pr, tr] = await Promise.all([ocrLevelRegionPaddle(), ocrLevelRegionTesseract()]);
+    return voteHybrid('LEVEL', pr, tr, (a, b) => a.level === b.level);
+  }
+  async function ocrAdenaRegionHybrid() {
+    const [pr, tr] = await Promise.all([ocrAdenaRegionPaddle(), ocrAdenaRegionTesseract()]);
+    // 1) 둘 다 실패 / 한 쪽만 성공은 voteHybrid 기본 로직 통과
+    if (!pr || !tr || !pr.parsed || !tr.parsed) {
+      return voteHybrid('ADENA', pr, tr, (a, b) => a.adena === b.adena);
+    }
+    // 2) 일치하면 채택
+    if (pr.parsed.adena === tr.parsed.adena) {
+      return voteHybrid('ADENA', pr, tr, (a, b) => a.adena === b.adena);
+    }
+    // 3) 불일치 — ADENA 특별 처리
+    //    anchor (현재 트래커 NOW 값) 자릿수와 일치하는 쪽 우선
+    //    digit-drop misread는 자릿수가 짧음, anchor가 5자리면 5자리 결과 우선
+    const anchor = parseInt(dom.trkAdenaNow.value, 10) || 0;
+    if (anchor > 0) {
+      const anchorDigits = String(anchor).length;
+      const pDigits = String(pr.parsed.adena).length;
+      const tDigits = String(tr.parsed.adena).length;
+      if (pDigits === anchorDigits && tDigits !== anchorDigits) {
+        // ADENA는 사냥 중 증가만 하는 것이 일반적 — paddle 값이 anchor보다 너무 작으면 implausible
+        if (pr.parsed.adena >= anchor * 0.5) {
+          console.log('[Hybrid ADENA] paddle digits match anchor (' + anchorDigits + '), accept:', pr.parsed.adena);
+          pushHybridLog('ADENA 🟢 paddle 단독 채택 (자릿수 매치): ' + pr.parsed.adena);
+          return pr;
+        }
+      }
+      if (tDigits === anchorDigits && pDigits !== anchorDigits) {
+        if (tr.parsed.adena >= anchor * 0.5) {
+          console.log('[Hybrid ADENA] tess digits match anchor (' + anchorDigits + '), accept:', tr.parsed.adena);
+          pushHybridLog('ADENA 🟢 tess 단독 채택 (자릿수 매치): ' + tr.parsed.adena);
+          return tr;
+        }
+      }
+      // 한쪽은 anchor 이상 자릿수, 다른쪽은 미달 → 미달인 쪽이 digit-drop misread
+      // ADENA는 사냥 중 증가만 → 자릿수 anchor 이상 + value ≥ anchor*0.5 면 신뢰
+      if (pDigits >= anchorDigits && tDigits < anchorDigits) {
+        if (pr.parsed.adena >= anchor * 0.5) {
+          pushHybridLog('ADENA 🟡 paddle 채택 (tess digit-drop): paddle=' + pr.parsed.adena + ' tess=' + tr.parsed.adena);
+          return pr;
+        }
+      }
+      if (tDigits >= anchorDigits && pDigits < anchorDigits) {
+        if (tr.parsed.adena >= anchor * 0.5) {
+          pushHybridLog('ADENA 🟡 tess 채택 (paddle digit-drop): tess=' + tr.parsed.adena + ' paddle=' + pr.parsed.adena);
+          return tr;
+        }
+      }
+      // 둘 다 anchor 이상 자릿수 + 불일치 → agreementCount 큰 쪽 (다수결 통과한 결과 더 신뢰)
+      if (pDigits >= anchorDigits && tDigits >= anchorDigits) {
+        const pAg = (pr.parsed.agreementCount || 1);
+        const tAg = (tr.parsed.agreementCount || 1);
+        if (tAg > pAg) {
+          pushHybridLog('ADENA 🟡 tess 채택 (agreement ↑ ' + tAg + '>' + pAg + '): ' + tr.parsed.adena);
+          return tr;
+        }
+        if (pAg > tAg) {
+          pushHybridLog('ADENA 🟡 paddle 채택 (agreement ↑ ' + pAg + '>' + tAg + '): ' + pr.parsed.adena);
+          return pr;
+        }
+      }
+      // 자릿수가 둘 다 anchor보다 작은 misread → reject (anchor 보존)
+      if (pDigits < anchorDigits && tDigits < anchorDigits) {
+        console.log('[Hybrid ADENA] both digit-drops vs anchor=' + anchor + ': p=' + pr.parsed.adena + ' t=' + tr.parsed.adena);
+        pushHybridLog('ADENA ❌ 둘 다 digit-drop vs anchor=' + anchor);
+        return { text: 'mismatch p:' + pr.text + ' t:' + tr.text, confidence: 0, parsed: null };
+      }
+    }
+    // 4) 그 외 일반 voting (불일치 → reject)
+    return voteHybrid('ADENA', pr, tr, (a, b) => a.adena === b.adena);
+  }
+  async function ocrExpRegionHybrid() {
+    const [pr, tr] = await Promise.all([ocrExpRegionPaddle(), ocrExpRegionTesseract()]);
+    const matcher = (a, b) => Math.abs(a.exp - b.exp) < 0.01;
+    if (!pr || !tr || !pr.parsed || !tr.parsed) {
+      return voteHybrid('EXP', pr, tr, matcher);
+    }
+    if (matcher(pr.parsed, tr.parsed)) {
+      return voteHybrid('EXP', pr, tr, matcher);
+    }
+    // 불일치 — anchor 대비 작은 전진(0~5%p) 또는 레벨업 점프(99→0~2)면 단독 채택
+    const anchor = parseExpPct(dom.trkExpNow.value) || 0;
+    const isPlausibleForward = (val) => {
+      if (anchor <= 0) return val > 0 && val <= 100;  // 첫 인식
+      const delta = val - anchor;
+      // 작은 전진 0~5%p 허용 (정상 사냥 페이스)
+      if (delta > 0 && delta <= 5) return true;
+      // 레벨업 점프: prev > 95% AND new < 5%
+      if (anchor > 95 && val < 5) return true;
+      return false;
+    };
+    const pp = isPlausibleForward(pr.parsed.exp);
+    const tp = isPlausibleForward(tr.parsed.exp);
+    if (pp && !tp) {
+      console.log('[Hybrid EXP] paddle plausible forward, accept:', pr.parsed.exp, 'anchor=', anchor);
+      pushHybridLog('EXP 🟢 paddle 단독 채택 (전진): ' + pr.parsed.exp + ' (anchor=' + anchor + ')');
+      return pr;
+    }
+    if (tp && !pp) {
+      console.log('[Hybrid EXP] tess plausible forward, accept:', tr.parsed.exp, 'anchor=', anchor);
+      pushHybridLog('EXP 🟢 tess 단독 채택 (전진): ' + tr.parsed.exp + ' (anchor=' + anchor + ')');
+      return tr;
+    }
+    // 둘 다 plausible — anchor 있으면 delta 작은 쪽, 없으면 agreement 높은 쪽
+    if (pp && tp) {
+      const pAg = pr.parsed.agreementCount || 1;
+      const tAg = tr.parsed.agreementCount || 1;
+      if (anchor > 0) {
+        const pDelta = Math.abs(pr.parsed.exp - anchor);
+        const tDelta = Math.abs(tr.parsed.exp - anchor);
+        if (pDelta < tDelta) {
+          pushHybridLog('EXP 🟡 paddle 채택 (delta ' + pDelta.toFixed(4) + ' < tess ' + tDelta.toFixed(4) + '): ' + pr.parsed.exp);
+          return pr;
+        }
+        if (tDelta < pDelta) {
+          pushHybridLog('EXP 🟡 tess 채택 (delta ' + tDelta.toFixed(4) + ' < paddle ' + pDelta.toFixed(4) + '): ' + tr.parsed.exp);
+          return tr;
+        }
+      }
+      // anchor 없거나 delta 동률 → agreement 높은 쪽
+      if (tAg > pAg) { pushHybridLog('EXP 🟡 tess 채택 (agreement ↑ ' + tAg + '>' + pAg + '): ' + tr.parsed.exp); return tr; }
+      if (pAg > tAg) { pushHybridLog('EXP 🟡 paddle 채택 (agreement ↑ ' + pAg + '>' + tAg + '): ' + pr.parsed.exp); return pr; }
+      pushHybridLog('EXP 🟡 paddle 채택 (default primary): ' + pr.parsed.exp);
+      return pr;
+    }
+    return voteHybrid('EXP', pr, tr, matcher);
   }
 
   // Sanity check: confidence가 신뢰성 낮을 때 결과 자체로 검증
@@ -1916,8 +2164,17 @@
   }
 
   async function runDetectionTick() {
-    if (detectionRunning) return; // 이전 틱 진행 중이면 스킵
+    if (detectionRunning) {
+      // Watchdog: 10초 이상 hang 상태면 force unlock — paddle/tesseract 호출이 응답 없으면 시스템 영구 정지 방지
+      if (detectionRunningSince > 0 && Date.now() - detectionRunningSince > 10000) {
+        console.error('[AutoDetect] tick stuck > 10s, force unlocking — 다음 틱 진행');
+        detectionRunning = false;
+      } else {
+        return; // 정상 진행 중 스킵
+      }
+    }
     detectionRunning = true;
+    detectionRunningSince = Date.now();
     const threshold = (typeof autoDetect.confidenceThreshold === 'number') ? autoDetect.confidenceThreshold : 0;
     try {
       // MP 영역
@@ -2229,6 +2486,11 @@
         if (!window.MpPaddle) throw new Error('paddle-ocr.js 미로드 (script tag 누락)');
         await window.MpPaddle.init();
         console.log('[AutoDetect] paddle ready');
+      } else if (autoDetect.ocrEngine === 'hybrid') {
+        if (dom.adInitStatus) dom.adInitStatus.textContent = '⏳ Hybrid: paddle + tesseract 동시 초기화...';
+        if (!window.MpPaddle) throw new Error('paddle-ocr.js 미로드 (script tag 누락)');
+        await Promise.all([window.MpPaddle.init(), initOcrWorker()]);
+        console.log('[AutoDetect] hybrid (paddle + tesseract) ready');
       } else {
         if (dom.adInitStatus) dom.adInitStatus.textContent = '⏳ Tesseract 워커 초기화...';
         await initOcrWorker();
@@ -2723,6 +2985,17 @@
       dom[k].addEventListener('change', () => { renderTracker(); saveTrackerCurrent(); pushUndo(); });
     });
 
+    // 사용자가 트래커 NOW 칸 직접 편집 시 OCR 해당 영역 5초간 skip (덮어쓰기 방지)
+    const editKeyOf = { trkLevelNow: 'level', trkExpNow: 'exp', trkAdenaNow: 'adena' };
+    Object.keys(editKeyOf).forEach((domKey) => {
+      const el = dom[domKey];
+      if (!el) return;
+      const region = editKeyOf[domKey];
+      ['focus', 'input', 'keydown'].forEach((evt) => {
+        el.addEventListener(evt, () => markUserEdit(region));
+      });
+    });
+
     // 레벨 OCR 자동 학습: 사용자가 trkLevelNow 수정 + OCR이 안정된 상태일 때만 학습
     if (dom.trkLevelNow) {
       dom.trkLevelNow.addEventListener('change', () => {
@@ -3048,6 +3321,19 @@
     }
     if (dom.btnPaddleSelftest) dom.btnPaddleSelftest.addEventListener('click', runPaddleSelftest);
 
+    // DevTools 열기 — Ctrl+Shift+I 인식 안 되는 환경 대응
+    function openDevToolsClick() {
+      if (api && api.openDevTools) {
+        api.openDevTools().catch((e) => flashHint('DevTools 열기 실패: ' + (e.message || e)));
+      } else {
+        flashHint('DevTools API 미노출 (preload 누락)');
+      }
+    }
+    if (dom.btnOpenDevtools) dom.btnOpenDevtools.addEventListener('click', openDevToolsClick);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'F12') { e.preventDefault(); openDevToolsClick(); }
+    });
+
     // 디버그 정보 클립보드 복사
     if (dom.btnPaddleDebugCopy) {
       dom.btnPaddleDebugCopy.addEventListener('click', async () => {
@@ -3100,11 +3386,13 @@
       });
     }
     if (dom.selAdEngine) {
-      dom.selAdEngine.value = autoDetect.ocrEngine === 'tesseract' ? 'tesseract' : 'paddle';
+      const validEngine = (v) => (v === 'tesseract' || v === 'paddle' || v === 'hybrid') ? v : 'paddle';
+      dom.selAdEngine.value = validEngine(autoDetect.ocrEngine);
       dom.selAdEngine.addEventListener('change', () => {
-        autoDetect.ocrEngine = dom.selAdEngine.value === 'tesseract' ? 'tesseract' : 'paddle';
+        autoDetect.ocrEngine = validEngine(dom.selAdEngine.value);
         S.saveAutoDetect(autoDetect);
-        flashHint('OCR 엔진: ' + (autoDetect.ocrEngine === 'paddle' ? 'PaddleOCR' : 'Tesseract') + ' (자동 감지 재시작 시 적용)');
+        const labels = { paddle: 'PaddleOCR', tesseract: 'Tesseract', hybrid: 'Hybrid (paddle ∩ tesseract)' };
+        flashHint('OCR 엔진: ' + labels[autoDetect.ocrEngine] + ' (자동 감지 재시작 시 적용)');
       });
     }
     if (dom.inAdLevelOffset) {

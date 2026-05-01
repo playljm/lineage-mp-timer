@@ -311,6 +311,10 @@
             <span class="ad-info-label">Paddle 결과</span>
             <span id="paddle-test-result" style="font-family: monospace;">대기</span>
           </div>
+          <details open style="margin-top: 6px; font-size: 11px;">
+            <summary style="cursor:pointer; color: var(--text-dim);">📋 Hybrid 결정 로그 (최근 20건)</summary>
+            <pre id="hybrid-decision-log" style="margin: 6px 0 0; padding: 8px; background: var(--bg-panel-alt); border: 1px solid var(--border); border-radius: 4px; max-height: 200px; overflow: auto; white-space: pre-wrap; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--text-dim); user-select: text;">자동 감지 시작 시 표시</pre>
+          </details>
           <details style="margin-top: 6px; font-size: 11px;">
             <summary style="cursor:pointer; color: var(--text-dim);">🔬 디버그 정보 (paddle response 원본)</summary>
             <div style="margin-top: 6px; display:flex; gap:6px;">
@@ -353,11 +357,12 @@
             </div>
           </div>
           <div class="ad-options">
-            <label class="field inline-field" title="자동 감지 루프에서 사용할 OCR 엔진. paddle은 stylized 폰트에 강함 (첫 실행 시 ~30MB CDN 다운로드 필요).">
+            <label class="field inline-field" title="자동 감지 루프에서 사용할 OCR 엔진. paddle은 stylized 폰트에 강함, hybrid는 두 엔진이 일치할 때만 채택해 오탐 차단 (첫 실행 시 ~30MB CDN 다운로드).">
               <span style="font-size:10px;">OCR 엔진</span>
               <select id="sel-ad-engine" style="font-size:11px; padding:2px 6px;">
-                <option value="paddle">PaddleOCR (실험)</option>
-                <option value="tesseract">Tesseract (기존)</option>
+                <option value="paddle">PaddleOCR</option>
+                <option value="tesseract">Tesseract</option>
+                <option value="hybrid">Hybrid (paddle ∩ tesseract)</option>
               </select>
             </label>
             <label class="chk inline">
@@ -445,6 +450,7 @@
             <small style="color:var(--muted);font-size:11px;line-height:1.4;">숫자만 입력 시 이 시간 동안 멈추면 자동 소수점 변환. 느리게 타이핑하면 늘리세요. (포커스 해제/Enter/Tab은 즉시)</small>
           </div>
           <button id="btn-reset-window" class="ghost-btn" style="margin-top:10px;">⤢ 창 크기 기본값으로 복원</button>
+          <button id="btn-open-devtools" class="ghost-btn" style="margin-top:6px;" title="개발자 도구 (콘솔 로그 확인용)">🛠 DevTools 열기 (F12)</button>
         </section>
 
         <!-- 테마 -->
