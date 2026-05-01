@@ -75,6 +75,7 @@
     chkAdAutoStartTracker: $('chk-ad-auto-start-tracker'),
     chkAdPreview: $('chk-ad-preview'),
     selAdStability: $('sel-ad-stability'),
+    selAdEngine: $('sel-ad-engine'),
     inAdLevelOffset: $('in-ad-level-offset'),
     // Paddle 비교 테스트 버튼
     btnPaddleSelftest: $('btn-paddle-selftest'),
@@ -1146,13 +1147,16 @@
   }
 
   /**
-   * paddle 같은 자연 이미지 OCR용 — sharpening/contrast 등 가공 없이
-   * 적당히 업스케일만 한 raw 캡처를 반환. paddle은 텍스트 검출 단계가 있어
-   * 가공된 이미지에서 텍스트 영역 자체를 놓침.
-   * @param {object} region {x, y, width, height, sourceId, scaleFactor}
-   * @param {number} [upscale=4] 업스케일 배수 (paddle 입력 32×320 권장 → 자연 보간)
+   * paddle 같은 자연 이미지 OCR용 — sharpening/contrast 등 가공 없이 raw 업스케일.
+   * @param {object} region
+   * @param {number} [upscale=6] 업스케일 배수
+   * @param {object} [opts] {
+   *   smooth?: boolean (default false: nearest-neighbor)
+   *   invertForPaddle?, binarize?, morphOpen?, removeIslands? — paddle/tesseract 추가 전처리
+   *   pad?: number (default 0: 캡처 주변 padding 추가 — leading 글자 누락 방지)
+   * }
    */
-  function captureRegionToRawCanvas(region, upscale) {
+  function captureRegionToRawCanvas(region, upscale, opts) {
     if (!region) return null;
     const cap = captureStreams.get(region.sourceId);
     if (!cap || !cap.video) {
@@ -1163,20 +1167,229 @@
     const sy = Math.max(0, Math.round(region.y * scale));
     const sw = Math.max(1, Math.round(region.width * scale));
     const sh = Math.max(1, Math.round(region.height * scale));
-    const ups = upscale && upscale > 0 ? upscale : 4;
+    const ups = upscale && upscale > 0 ? upscale : 6;
+    const smooth = !!(opts && opts.smooth);
+    const invertForPaddle = !!(opts && opts.invertForPaddle);
+    const binarize = !!(opts && opts.binarize);
+    const morphOpenIters = (opts && Number.isFinite(opts.morphOpen)) ? Math.max(0, opts.morphOpen) : 0;
+    const pad = (opts && Number.isFinite(opts.pad)) ? Math.max(0, Math.round(opts.pad)) : 0;
+    // 평균 휘도로 padding 배경색 자동 판별 (어두운 배경 게임 → 검은 padding, 밝은 → 흰 padding)
     const canvas = document.createElement('canvas');
-    canvas.width = sw * ups;
-    canvas.height = sh * ups;
+    canvas.width = sw * ups + pad * 2;
+    canvas.height = sh * ups + pad * 2;
     const ctx = canvas.getContext('2d');
-    // 자연 보간 (paddle은 nearest-neighbor 픽셀화된 이미지에 약함)
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
+    ctx.imageSmoothingEnabled = smooth;
+    if (smooth) ctx.imageSmoothingQuality = 'high';
     try {
-      ctx.drawImage(cap.video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      // 임시로 inner 부분만 그려서 휘도 측정 후 padding 색 결정
+      ctx.drawImage(cap.video, sx, sy, sw, sh, pad, pad, sw * ups, sh * ups);
+      if (pad > 0) {
+        const probe = ctx.getImageData(pad, pad, sw * ups, sh * ups).data;
+        let sum = 0;
+        for (let i = 0; i < probe.length; i += 4) sum += (probe[i] + probe[i+1] + probe[i+2]) / 3;
+        const avg = sum / (probe.length / 4);
+        const bgColor = avg < 128 ? '#000' : '#fff';
+        // 4개 가장자리만 채움 (가운데는 이미 캡처됨)
+        ctx.fillStyle = bgColor;
+        ctx.fillRect(0, 0, canvas.width, pad); // top
+        ctx.fillRect(0, canvas.height - pad, canvas.width, pad); // bottom
+        ctx.fillRect(0, pad, pad, sh * ups); // left
+        ctx.fillRect(canvas.width - pad, pad, pad, sh * ups); // right
+      }
     } catch (e) {
       throw new Error('캡처 실패: ' + e.message);
     }
+    // 후처리: paddle은 자연 이미지(어두운글자/밝은배경)에 훈련됨
+    // 게임 UI는 흰글자/어두운배경 — 반전하면 paddle 학습 분포에 맞춰짐
+    if (invertForPaddle || binarize) {
+      const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const d = img.data;
+      // 1) 평균 휘도 → 자동 반전 판정
+      let sum = 0;
+      for (let i = 0; i < d.length; i += 4) sum += (d[i] + d[i+1] + d[i+2]) / 3;
+      const avg = sum / (d.length / 4);
+      const needInvert = invertForPaddle && avg < 128;
+      // 2) Otsu threshold (이진화 옵션 ON 시)
+      let threshold = 128;
+      if (binarize) {
+        const hist = new Array(256).fill(0);
+        for (let i = 0; i < d.length; i += 4) hist[Math.round((d[i] + d[i+1] + d[i+2]) / 3)]++;
+        const total = d.length / 4;
+        let sumAll = 0;
+        for (let t = 0; t < 256; t++) sumAll += t * hist[t];
+        let sumB = 0, wB = 0, varMax = 0;
+        for (let t = 0; t < 256; t++) {
+          wB += hist[t];
+          if (wB === 0) continue;
+          const wF = total - wB;
+          if (wF === 0) break;
+          sumB += t * hist[t];
+          const mB = sumB / wB;
+          const mF = (sumAll - sumB) / wF;
+          const v = wB * wF * (mB - mF) * (mB - mF);
+          if (v > varMax) { varMax = v; threshold = t; }
+        }
+      }
+      // 3) 픽셀 변환
+      for (let i = 0; i < d.length; i += 4) {
+        let v = (d[i] + d[i+1] + d[i+2]) / 3;
+        if (binarize) v = v > threshold ? 255 : 0;
+        if (needInvert) v = 255 - v;
+        d[i] = v; d[i+1] = v; d[i+2] = v;
+      }
+      ctx.putImageData(img, 0, 0);
+    }
+    // 4) 모폴로지 opening — 슬래시드 제로의 가운데 슬래시 제거
+    //    erode (검은 영역 축소) → dilate (검은 영역 복원) 순서
+    //    슬래시는 작아서 erode 시 사라지고, 0의 외곽 링은 두꺼워서 살아남음
+    //    이후 dilate로 링 두께 복원, 슬래시는 이미 사라져 복원 안 됨
+    if (morphOpenIters > 0) {
+      for (let it = 0; it < morphOpenIters; it++) {
+        morphErode(canvas);
+      }
+      for (let it = 0; it < morphOpenIters; it++) {
+        morphDilate(canvas);
+      }
+    }
+    // 5) 연결 요소 제거 — 큰 컴포넌트의 bbox에 완전히 둘러싸인 작은 섬 제거
+    //    슬래시드 제로의 슬래시: 0의 링 안에 위치한 작은 검은 섬 → 제거 대상
+    //    소수점/외곽 디지트: 어디에도 둘러싸이지 않음 → 보존
+    if (opts && opts.removeIslands) {
+      removeIslandComponents(canvas);
+    }
     return canvas;
+  }
+
+  // 검은 픽셀(글자) 침식 — 8-neighbor 중 하나라도 흰색이면 자기도 흰색
+  function morphErode(canvas) {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    const src = ctx.getImageData(0, 0, w, h).data;
+    const dst = new Uint8ClampedArray(src.length);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const idx = (y * w + x) * 4;
+        let allBlack = src[idx] < 128;
+        if (allBlack) {
+          outer: for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              if (dx === 0 && dy === 0) continue;
+              const nx = x + dx, ny = y + dy;
+              if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+              const nidx = (ny * w + nx) * 4;
+              if (src[nidx] >= 128) { allBlack = false; break outer; }
+            }
+          }
+        }
+        const v = allBlack ? 0 : 255;
+        dst[idx] = v; dst[idx + 1] = v; dst[idx + 2] = v; dst[idx + 3] = 255;
+      }
+    }
+    ctx.putImageData(new ImageData(dst, w, h), 0, 0);
+  }
+
+  /**
+   * 연결 컴포넌트 분석 — 큰 컴포넌트의 bbox 안에 완전히 들어간 작은 섬 제거
+   * 슬래시드 제로(0 안의 슬래시) 같은 패턴 제거용
+   */
+  function removeIslandComponents(canvas) {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    const img = ctx.getImageData(0, 0, w, h);
+    const d = img.data;
+    const labels = new Int32Array(w * h);
+    const components = [];
+    let nextLabel = 0;
+    // BFS flood fill — 8-connectivity로 검은 영역 그룹화
+    const queue = new Int32Array(w * h);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const idx = y * w + x;
+        if (labels[idx] !== 0 || d[idx * 4] >= 128) continue;
+        nextLabel++;
+        let qHead = 0, qTail = 0;
+        queue[qTail++] = idx;
+        labels[idx] = nextLabel;
+        let pixels = [idx];
+        let minX = x, maxX = x, minY = y, maxY = y;
+        while (qHead < qTail) {
+          const i = queue[qHead++];
+          const cy = (i / w) | 0;
+          const cx = i - cy * w;
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              if (dx === 0 && dy === 0) continue;
+              const nx = cx + dx, ny = cy + dy;
+              if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+              const nidx = ny * w + nx;
+              if (labels[nidx] !== 0 || d[nidx * 4] >= 128) continue;
+              labels[nidx] = nextLabel;
+              pixels.push(nidx);
+              if (nx < minX) minX = nx;
+              if (nx > maxX) maxX = nx;
+              if (ny < minY) minY = ny;
+              if (ny > maxY) maxY = ny;
+              queue[qTail++] = nidx;
+            }
+          }
+        }
+        components.push({ label: nextLabel, area: pixels.length, pixels, minX, maxX, minY, maxY });
+      }
+    }
+    if (components.length < 2) return;
+    // 각 컴포넌트가 다른 더 큰 컴포넌트의 bbox에 완전히 둘러싸여 있으면 제거 대상
+    const toRemove = new Set();
+    for (const c of components) {
+      for (const o of components) {
+        if (c === o || toRemove.has(c.label)) continue;
+        // o가 c보다 충분히 커야 (2배 이상) — 비슷한 크기면 슬래시가 아님
+        if (o.area < c.area * 2) continue;
+        // c의 bbox가 o의 bbox 안에 strict하게 포함되어야 (가장자리 닿으면 제외)
+        if (c.minX > o.minX && c.maxX < o.maxX &&
+            c.minY > o.minY && c.maxY < o.maxY) {
+          toRemove.add(c.label);
+          break;
+        }
+      }
+    }
+    if (toRemove.size === 0) return;
+    // 제거 대상 섬을 흰색으로
+    for (const c of components) {
+      if (!toRemove.has(c.label)) continue;
+      for (const i of c.pixels) {
+        const pi = i * 4;
+        d[pi] = 255; d[pi + 1] = 255; d[pi + 2] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
+  // 검은 픽셀(글자) 팽창 — 8-neighbor 중 하나라도 검정이면 자기도 검정
+  function morphDilate(canvas) {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    const src = ctx.getImageData(0, 0, w, h).data;
+    const dst = new Uint8ClampedArray(src.length);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const idx = (y * w + x) * 4;
+        let anyBlack = src[idx] < 128;
+        if (!anyBlack) {
+          outer: for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              if (dx === 0 && dy === 0) continue;
+              const nx = x + dx, ny = y + dy;
+              if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+              const nidx = (ny * w + nx) * 4;
+              if (src[nidx] < 128) { anyBlack = true; break outer; }
+            }
+          }
+        }
+        const v = anyBlack ? 0 : 255;
+        dst[idx] = v; dst[idx + 1] = v; dst[idx + 2] = v; dst[idx + 3] = 255;
+      }
+    }
+    ctx.putImageData(new ImageData(dst, w, h), 0, 0);
   }
 
   function updatePreview(targetEl, canvas) {
@@ -1191,6 +1404,7 @@
   }
 
   async function ocrMpRegion() {
+    if (autoDetect.ocrEngine === 'paddle') return await ocrMpRegionPaddle();
     if (!autoDetect.mpRegion) return null;
     const canvas = captureRegionToCanvas(autoDetect.mpRegion);
     if (!canvas) return null;
@@ -1297,6 +1511,7 @@
 
   // 다중 PSM 시도해서 가장 빈도 높은 결과 선택 — 단일 숫자 인식에 효과적
   async function ocrLevelRegion() {
+    if (autoDetect.ocrEngine === 'paddle') return await ocrLevelRegionPaddle();
     if (!autoDetect.levelRegion) return null;
     const canvas = captureRegionToCanvas(autoDetect.levelRegion);
     if (!canvas) return null;
@@ -1368,6 +1583,7 @@
   }
 
   async function ocrAdenaRegion() {
+    if (autoDetect.ocrEngine === 'paddle') return await ocrAdenaRegionPaddle();
     if (!autoDetect.adenaRegion) return null;
     const canvas = captureRegionToCanvas(autoDetect.adenaRegion);
     if (!canvas) return null;
@@ -1428,6 +1644,7 @@
   }
 
   async function ocrExpRegion() {
+    if (autoDetect.ocrEngine === 'paddle') return await ocrExpRegionPaddle();
     if (!autoDetect.expRegion) return null;
     const canvas = captureRegionToCanvas(autoDetect.expRegion);
     if (!canvas) return null;
@@ -1510,6 +1727,158 @@
       confidence: avgConf,
       parsed: { exp: finalExp, agreementCount: bestCount, totalAttempts: valid.length }
     };
+  }
+
+  // ========================================================================
+  // PaddleOCR 버전 — 자동 감지 루프용
+  //   · captureRegionToRawCanvas (sharpen·contrast 미적용 raw)
+  //   · MpPaddle.recognize 내부에서 canvas → HTMLImageElement 자동 변환
+  //   · 반환 shape은 tesseract 버전과 동일 (parsed/text/confidence) — 기존 dispatch 코드 무수정
+  // ========================================================================
+  async function ocrMpRegionPaddle() {
+    if (!autoDetect.mpRegion) return null;
+    const canvas = captureRegionToRawCanvas(autoDetect.mpRegion, 1, { pad: 8 });
+    if (!canvas) return null;
+    updatePreview(dom.adMpPreview, canvas);
+    if (!window.MpPaddle) return null;
+    try {
+      const r = await window.MpPaddle.recognize(canvas);
+      const text = r.text || '';
+      // tesseract 버전의 parseMpText와 동일한 로직 — 슬래시/구분자 / userMax fallback
+      const userMax = parseInt(dom.inMaxMp.value, 10) || 0;
+      let m = text.match(/(\d{1,5})\s*[\/\\|:]\s*(\d{1,5})/);
+      if (!m) m = text.match(/(\d{1,5})[^\d]+(\d{1,5})/);
+      if (!m) {
+        const nums = text.match(/\d{1,5}/g);
+        if (nums && nums.length >= 2) m = [null, nums[0], nums[1]];
+      }
+      let cur = NaN, max = NaN, fb = false;
+      if (m) { cur = parseInt(m[1], 10); max = parseInt(m[2], 10); }
+      const initialValid = m && Number.isFinite(cur) && Number.isFinite(max)
+        && cur <= max && max > 0 && max <= 99999;
+      if (!initialValid && userMax > 0) {
+        const digits = text.replace(/[^0-9]/g, '');
+        if (digits) {
+          const maxLen = String(userMax).length;
+          let tryCur = NaN;
+          if (digits.length === maxLen) tryCur = parseInt(digits, 10);
+          else if (digits.length > maxLen && digits.length <= maxLen * 2 + 1) {
+            tryCur = parseInt(digits.slice(0, digits.length - maxLen), 10);
+          } else if (digits.length > 0 && digits.length < maxLen) tryCur = parseInt(digits, 10);
+          if (Number.isFinite(tryCur) && tryCur >= 0 && tryCur <= userMax) {
+            cur = tryCur; max = userMax; fb = true;
+          }
+        }
+      }
+      console.log('[OCR MP paddle] text=' + JSON.stringify(text) + ' cur=' + cur + ' max=' + max + (fb ? ' (fallback)' : ''));
+      if (!Number.isFinite(cur) || !Number.isFinite(max)) {
+        return { text, confidence: r.confidence, parsed: null };
+      }
+      return {
+        text,
+        confidence: r.confidence,
+        parsed: { cur, max, agreementCount: 1, totalAttempts: 1 },
+        usedFallback: fb
+      };
+    } catch (e) {
+      console.warn('[OCR MP paddle] failed:', e);
+      return null;
+    }
+  }
+
+  async function ocrLevelRegionPaddle() {
+    if (!autoDetect.levelRegion) return null;
+    const canvas = captureRegionToRawCanvas(autoDetect.levelRegion, 1, { pad: 8 });
+    if (!canvas) return null;
+    updatePreview(dom.adLevelPreview, canvas);
+    if (!window.MpPaddle) return null;
+    try {
+      const r = await window.MpPaddle.recognize(canvas);
+      const text = r.text || '';
+      const digits = text.replace(/[^0-9]/g, '');
+      const rawLevel = digits ? parseInt(digits, 10) : NaN;
+      console.log('[OCR LEVEL paddle] text=' + JSON.stringify(text) + ' raw=' + rawLevel);
+      if (!Number.isFinite(rawLevel) || rawLevel < 1 || rawLevel > 99) {
+        return { text, confidence: r.confidence, parsed: null };
+      }
+      const offset = parseInt(autoDetect.levelOffset, 10) || 0;
+      const corrected = rawLevel + offset;
+      lastRawOcrLevel = rawLevel;
+      recentRawOcrLevels.push(rawLevel);
+      if (recentRawOcrLevels.length > 5) recentRawOcrLevels.shift();
+      if (recentRawOcrLevels.length >= 3 && recentRawOcrLevels.every((v) => v === rawLevel)) {
+        lastStableRawOcrLevel = rawLevel;
+      }
+      return {
+        text,
+        confidence: r.confidence,
+        parsed: { level: corrected, raw: rawLevel, offset, agreementCount: 1, totalAttempts: 1 }
+      };
+    } catch (e) {
+      console.warn('[OCR LEVEL paddle] failed:', e);
+      return null;
+    }
+  }
+
+  async function ocrAdenaRegionPaddle() {
+    if (!autoDetect.adenaRegion) return null;
+    const canvas = captureRegionToRawCanvas(autoDetect.adenaRegion, 1, { pad: 8 });
+    if (!canvas) return null;
+    updatePreview(dom.adAdenaPreview, canvas);
+    if (!window.MpPaddle) return null;
+    try {
+      const r = await window.MpPaddle.recognize(canvas);
+      const text = r.text || '';
+      const digits = text.replace(/[^0-9]/g, '');
+      const adena = digits ? parseInt(digits, 10) : NaN;
+      console.log('[OCR ADENA paddle] text=' + JSON.stringify(text) + ' adena=' + adena);
+      if (!Number.isFinite(adena) || adena < 0 || adena > 9999999999) {
+        return { text, confidence: r.confidence, parsed: null };
+      }
+      return {
+        text,
+        confidence: r.confidence,
+        parsed: { adena, agreementCount: 1, totalAttempts: 1 }
+      };
+    } catch (e) {
+      console.warn('[OCR ADENA paddle] failed:', e);
+      return null;
+    }
+  }
+
+  async function ocrExpRegionPaddle() {
+    if (!autoDetect.expRegion) return null;
+    const canvas = captureRegionToRawCanvas(autoDetect.expRegion, 1, { pad: 8 });
+    if (!canvas) return null;
+    updatePreview(dom.adExpPreview, canvas);
+    if (!window.MpPaddle) return null;
+    try {
+      const r = await window.MpPaddle.recognize(canvas);
+      const text = r.text || '';
+      // tesseract parseExpText와 동일 — 소수점 매칭 우선, 없으면 4자리 이상 정수에서 마지막 4자리를 소수부로
+      let exp = NaN;
+      const decMatch = text.match(/(\d{1,3})\s*\.\s*(\d{1,4})/);
+      if (decMatch) {
+        const intPart = parseInt(decMatch[1], 10);
+        const decPart = decMatch[2].padEnd(4, '0').slice(0, 4);
+        exp = parseFloat(intPart + '.' + decPart);
+      } else {
+        const intOnly = text.replace(/[^0-9]/g, '');
+        if (intOnly && intOnly.length >= 4) exp = parseExpPct(intOnly);
+      }
+      console.log('[OCR EXP paddle] text=' + JSON.stringify(text) + ' exp=' + exp);
+      if (!Number.isFinite(exp) || exp < 0 || exp > 100) {
+        return { text, confidence: r.confidence, parsed: null };
+      }
+      return {
+        text,
+        confidence: r.confidence,
+        parsed: { exp, agreementCount: 1, totalAttempts: 1 }
+      };
+    } catch (e) {
+      console.warn('[OCR EXP paddle] failed:', e);
+      return null;
+    }
   }
 
   // Sanity check: confidence가 신뢰성 낮을 때 결과 자체로 검증
@@ -1855,9 +2224,16 @@
       });
       await setupCaptureStreams();
       console.log('[AutoDetect] capture streams OK, count=', captureStreams.size);
-      if (dom.adInitStatus) dom.adInitStatus.textContent = '⏳ OCR 워커 초기화...';
-      await initOcrWorker();
-      console.log('[AutoDetect] OCR worker OK');
+      if (autoDetect.ocrEngine === 'paddle') {
+        if (dom.adInitStatus) dom.adInitStatus.textContent = '⏳ PaddleOCR 모델 로드 중... (첫 실행 시 ~30MB CDN 다운로드)';
+        if (!window.MpPaddle) throw new Error('paddle-ocr.js 미로드 (script tag 누락)');
+        await window.MpPaddle.init();
+        console.log('[AutoDetect] paddle ready');
+      } else {
+        if (dom.adInitStatus) dom.adInitStatus.textContent = '⏳ Tesseract 워커 초기화...';
+        await initOcrWorker();
+        console.log('[AutoDetect] tesseract worker OK');
+      }
       autoDetect.enabled = true;
       S.saveAutoDetect(autoDetect);
       renderAutoDetectInfo();
@@ -2721,6 +3097,14 @@
       dom.selAdStability.addEventListener('change', () => {
         autoDetect.stabilityRequired = parseInt(dom.selAdStability.value, 10);
         S.saveAutoDetect(autoDetect);
+      });
+    }
+    if (dom.selAdEngine) {
+      dom.selAdEngine.value = autoDetect.ocrEngine === 'tesseract' ? 'tesseract' : 'paddle';
+      dom.selAdEngine.addEventListener('change', () => {
+        autoDetect.ocrEngine = dom.selAdEngine.value === 'tesseract' ? 'tesseract' : 'paddle';
+        S.saveAutoDetect(autoDetect);
+        flashHint('OCR 엔진: ' + (autoDetect.ocrEngine === 'paddle' ? 'PaddleOCR' : 'Tesseract') + ' (자동 감지 재시작 시 적용)');
       });
     }
     if (dom.inAdLevelOffset) {

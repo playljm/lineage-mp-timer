@@ -353,6 +353,13 @@
             </div>
           </div>
           <div class="ad-options">
+            <label class="field inline-field" title="자동 감지 루프에서 사용할 OCR 엔진. paddle은 stylized 폰트에 강함 (첫 실행 시 ~30MB CDN 다운로드 필요).">
+              <span style="font-size:10px;">OCR 엔진</span>
+              <select id="sel-ad-engine" style="font-size:11px; padding:2px 6px;">
+                <option value="paddle">PaddleOCR (실험)</option>
+                <option value="tesseract">Tesseract (기존)</option>
+              </select>
+            </label>
             <label class="chk inline">
               <input type="checkbox" id="chk-ad-auto-start" />
               <span>인식 후 타이머 자동 시작</span>

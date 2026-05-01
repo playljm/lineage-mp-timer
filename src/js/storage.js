@@ -112,6 +112,7 @@
       autoStart: false,        // 인식 후 타이머 자동 시작
       autoStartTracker: false, // 첫 경험치 인식 시 트래커 자동 시작 (시작값을 첫 인식값으로)
       stabilityRequired: 1,    // OCR 결과 안정성 검증 (0=즉시, 1=1회, 2=2회 연속)
+      ocrEngine: 'paddle',     // 'tesseract' | 'paddle' — paddle 빌드 기본 paddle
       showPreview: true,       // 캡처된 이미지 미리보기
       mpRegion: null,          // { x, y, width, height, sourceId, displayId, displayLabel, scaleFactor }
       expRegion: null,
