@@ -7,6 +7,32 @@
 (function () {
   'use strict';
 
+  // ==========================================================================
+  // Tesseract WASM stderr 노이즈 필터링
+  //   tesseract-core가 인식 통계(Bottom/top/Median/quartile/Mean/SD 등)를
+  //   stderr로 console.log에 마구 출력 — diagnose 어렵게 함. 패턴 매칭으로 차단.
+  // ==========================================================================
+  const _origConsoleLog = console.log.bind(console);
+  const NOISE_PATTERNS = [
+    // Tesseract WASM stderr 통계
+    /^Bottom=/, /^Total count=/, /^Min=/, /^Max=/, /^Mean=/, /^SD=/, /^Range=/,
+    /^Lower quartile=/, /^Upper quartile=/, /^Median=/,
+    // 매 틱 반복되는 OCR 다수결 로그 (디버그 시 거슬림 — 필요 시 주석 처리)
+    /^\[OCR LEVEL\] 다수결:/,
+    /^\[OCR EXP/,
+    /^\[OCR ADENA/,
+    /^\[Tesseract\] recognizing text/
+  ];
+  console.log = function () {
+    const first = arguments[0];
+    if (typeof first === 'string') {
+      for (const p of NOISE_PATTERNS) {
+        if (p.test(first)) return;
+      }
+    }
+    _origConsoleLog.apply(console, arguments);
+  };
+
   const E = window.MpEngine;
   const S = window.MpStorage;
   const api = window.api || null;
@@ -27,6 +53,18 @@
     inTargetPct: $('in-target-pct'),
     btnStart: $('btn-start'), btnPause: $('btn-pause'), btnReset: $('btn-reset'),
     btnPin: $('btn-pin'), btnTray: $('btn-tray'), btnQuit: $('btn-quit'),
+    btnCompact: $('btn-compact'),
+    compactView: $('compact-view'),
+    compactStartTime: $('compact-start-time'),
+    compactElapsed: $('compact-elapsed'),
+    compactExpRate: $('compact-exp-rate'),
+    compactAdenaRate: $('compact-adena-rate'),
+    compactLevel: $('compact-level'),
+    compactLevelDiff: $('compact-level-diff'),
+    compactExp: $('compact-exp'),
+    compactExpDiff: $('compact-exp-diff'),
+    compactAdena: $('compact-adena'),
+    compactAdenaDiff: $('compact-adena-diff'),
     appVersion: $('app-version'),
     presetName: $('preset-name'), btnPresetSave: $('btn-preset-save'),
     presetList: $('preset-list'),
@@ -52,9 +90,14 @@
     btnItemsReset: $('btn-items-reset'),
     // auto-detect (MP + EXP + LEVEL + ADENA)
     btnAdMpRegion: $('btn-ad-mp-region'),
+    btnAdMpBarRegion: $('btn-ad-mp-bar-region'),
+    btnAdMpBarCalibrate: $('btn-ad-mp-bar-calibrate'),
+    adCalibrateStatus: $('ad-calibrate-status'),
     btnAdExpRegion: $('btn-ad-exp-region'),
     btnAdLevelRegion: $('btn-ad-level-region'),
     btnAdAdenaRegion: $('btn-ad-adena-region'),
+    chkAdUseMpBar: $('chk-ad-use-mp-bar'),
+    adMpBarRegionInfo: $('ad-mp-bar-region-info'),
     btnAdToggle: $('btn-ad-toggle'),
     adStatus: $('ad-status'),
     adDisplay: $('ad-display'),
@@ -71,6 +114,47 @@
     adExpPreview: $('ad-exp-preview'),
     adLevelPreview: $('ad-level-preview'),
     adAdenaPreview: $('ad-adena-preview'),
+    // 학습 데이터 수집 UI
+    trainLabelMp: $('train-label-mp'),
+    trainLabelExp: $('train-label-exp'),
+    trainLabelLevel: $('train-label-level'),
+    trainLabelAdena: $('train-label-adena'),
+    btnTrainCaptureToggle: $('btn-train-capture-toggle'),
+    selTrainCaptureInterval: $('sel-train-capture-interval'),
+    trainCaptureStatus: $('train-capture-status'),
+    btnTrainLabelStart: $('btn-train-label-start'),
+    btnTrainPendingRefresh: $('btn-train-pending-refresh'),
+    btnTrainPendingClear: $('btn-train-pending-clear'),
+    trainPendingCount: $('train-pending-count'),
+    trainLabelingPanel: $('train-labeling-panel'),
+    trainLabelingCurrent: $('train-labeling-current'),
+    trainLabelingTotal: $('train-labeling-total'),
+    trainLabelingThumb: $('train-labeling-thumb'),
+    trainLabelingRegion: $('train-labeling-region'),
+    trainLabelingMeta: $('train-labeling-meta'),
+    trainLabelingInput: $('train-labeling-input'),
+    btnTrainLabelingConfirm: $('btn-train-labeling-confirm'),
+    btnTrainLabelingSkip: $('btn-train-labeling-skip'),
+    btnTrainLabelingDelete: $('btn-train-labeling-delete'),
+    btnTrainLabelingStop: $('btn-train-labeling-stop'),
+    btnTrainLabelingBulkConfirm: $('btn-train-labeling-bulk-confirm'),
+    btnTrainLabelingBulkDelete: $('btn-train-labeling-bulk-delete'),
+    btnTrainSaveAll: $('btn-train-save-all'),
+    btnTrainSaveAdena: $('btn-train-save-adena'),
+    btnTrainSaveMp: $('btn-train-save-mp'),
+    btnTrainOpenFolder: $('btn-train-open-folder'),
+    btnTrainStatsRefresh: $('btn-train-stats-refresh'),
+    trainStatTotal: $('train-stat-total'),
+    trainStatMp: $('train-stat-mp'),
+    trainStatExp: $('train-stat-exp'),
+    trainStatLevel: $('train-stat-level'),
+    trainStatAdena: $('train-stat-adena'),
+    trainStatPendingTotal: $('train-stat-pending-total'),
+    trainStatPendingMp: $('train-stat-pending-mp'),
+    trainStatPendingExp: $('train-stat-pending-exp'),
+    trainStatPendingLevel: $('train-stat-pending-level'),
+    trainStatPendingAdena: $('train-stat-pending-adena'),
+    trainStatus: $('train-status'),
     chkAdAutoStart: $('chk-ad-auto-start'),
     chkAdAutoStartTracker: $('chk-ad-auto-start-tracker'),
     chkAdPreview: $('chk-ad-preview'),
@@ -882,6 +966,522 @@
       dom.trkExpRate.textContent = '+0.0000%/h';
       dom.trkAdenaRate.textContent = '+0/h';
     }
+    // 컴팩트 뷰 동기화 — 시작/현재/증가량 포함
+    syncCompactView(elapsedSec, dExp, dAdena, t.current, dLevel);
+  }
+
+  // 컴팩트 뷰: 시작 시간 (HH:MM) + 경과 + EXP/H + ADENA/H + 트래커 (현재값 + 증가량)
+  function syncCompactView(elapsedSec, dExp, dAdena, current, dLevel) {
+    if (!dom.compactView) return;
+    if (tracker.active && tracker.startedAt) {
+      const d = new Date(tracker.startedAt);
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mm = String(d.getMinutes()).padStart(2, '0');
+      if (dom.compactStartTime) dom.compactStartTime.textContent = hh + ':' + mm;
+      if (dom.compactElapsed) dom.compactElapsed.textContent = '(' + E.formatDuration(elapsedSec) + ')';
+    } else {
+      if (dom.compactStartTime) dom.compactStartTime.textContent = '--:--';
+      if (dom.compactElapsed) dom.compactElapsed.textContent = '(00:00)';
+    }
+    if (elapsedSec >= 30) {
+      const hours = elapsedSec / 3600;
+      if (dom.compactExpRate) dom.compactExpRate.textContent = `${dExp >= 0 ? '+' : ''}${(dExp / hours).toFixed(4)}%/h`;
+      if (dom.compactAdenaRate) dom.compactAdenaRate.textContent = `${dAdena >= 0 ? '+' : ''}${formatNumber(dAdena / hours)}/h`;
+    } else if (tracker.active && elapsedSec > 0) {
+      if (dom.compactExpRate) dom.compactExpRate.textContent = '측정 중';
+      if (dom.compactAdenaRate) dom.compactAdenaRate.textContent = '측정 중';
+    } else {
+      if (dom.compactExpRate) dom.compactExpRate.textContent = '+0.0000%/h';
+      if (dom.compactAdenaRate) dom.compactAdenaRate.textContent = '+0/h';
+    }
+
+    // 트래커 행 (현재값 + 증가량)
+    const setDiff = (el, value, suffix = '') => {
+      if (!el) return;
+      const sign = value >= 0 ? '+' : '';
+      const txt = (typeof value === 'number')
+        ? sign + (suffix === '%' ? value.toFixed(4) + '%' : (Number.isInteger(value) ? value : formatNumber(value)) + suffix)
+        : '+0' + suffix;
+      el.textContent = txt;
+      el.classList.toggle('negative', value < 0);
+      el.classList.toggle('positive', value > 0);
+    };
+    if (current && Number.isFinite(current.level)) {
+      if (dom.compactLevel) dom.compactLevel.textContent = String(current.level);
+    } else if (dom.compactLevel) dom.compactLevel.textContent = '--';
+    setDiff(dom.compactLevelDiff, dLevel || 0);
+
+    if (current && Number.isFinite(current.exp)) {
+      if (dom.compactExp) dom.compactExp.textContent = current.exp.toFixed(4) + '%';
+    } else if (dom.compactExp) dom.compactExp.textContent = '--%';
+    setDiff(dom.compactExpDiff, dExp || 0, '%');
+
+    if (current && Number.isFinite(current.adena)) {
+      if (dom.compactAdena) dom.compactAdena.textContent = formatNumber(current.adena);
+    } else if (dom.compactAdena) dom.compactAdena.textContent = '--';
+    setDiff(dom.compactAdenaDiff, dAdena || 0);
+  }
+
+  // 컴팩트 모드 토글 — body.compact-mode + 컴팩트 뷰 표시 + 창 크기 조정
+  function setCompactMode(enabled) {
+    document.body.classList.toggle('compact-mode', enabled);
+    if (dom.compactView) {
+      if (enabled) dom.compactView.removeAttribute('hidden');
+      else dom.compactView.setAttribute('hidden', '');
+    }
+    if (api && api.setCompactMode) api.setCompactMode(enabled);
+    if (dom.btnCompact) {
+      dom.btnCompact.title = enabled ? '컴팩트 모드 해제 (F3)' : '컴팩트 모드 (F3)';
+      dom.btnCompact.classList.toggle('active', enabled);
+    }
+    try {
+      const s = S.loadSettings();
+      s.compactMode = enabled;
+      S.saveSettings(s);
+    } catch (_) { /* ignore */ }
+  }
+  function toggleCompactMode() {
+    setCompactMode(!document.body.classList.contains('compact-mode'));
+  }
+
+  // ==========================================================================
+  // 학습 데이터 수집 (Tesseract LSTM fine-tuning용)
+  //   각 영역의 최근 캡처 캔버스(latestCaptureCanvas)를 사용자 정답 라벨과 함께
+  //   %APPDATA%/LineageMPTimer/training-data/{region}/ 에 저장.
+  //   파일: <safe-label>_<timestamp>.png + <safe-label>_<timestamp>.gt.txt
+  // ==========================================================================
+  function _trainSetStatus(msg, kind) {
+    if (!dom.trainStatus) return;
+    dom.trainStatus.textContent = msg;
+    dom.trainStatus.classList.toggle('success', kind === 'success');
+    dom.trainStatus.classList.toggle('error', kind === 'error');
+  }
+  async function _trainRefreshStats() {
+    if (!api) return;
+    try {
+      if (api.getTrainingStats) {
+        const stats = await api.getTrainingStats();
+        if (stats) {
+          if (dom.trainStatTotal) dom.trainStatTotal.textContent = String(stats.total || 0);
+          if (dom.trainStatMp) dom.trainStatMp.textContent = String(stats.byRegion?.mp || 0);
+          if (dom.trainStatExp) dom.trainStatExp.textContent = String(stats.byRegion?.exp || 0);
+          if (dom.trainStatLevel) dom.trainStatLevel.textContent = String(stats.byRegion?.level || 0);
+          if (dom.trainStatAdena) dom.trainStatAdena.textContent = String(stats.byRegion?.adena || 0);
+        }
+      }
+      if (api.listPendingSamples) {
+        const p = await api.listPendingSamples({ includeImage: false });
+        if (p) {
+          if (dom.trainStatPendingTotal) dom.trainStatPendingTotal.textContent = String(p.total || 0);
+          if (dom.trainStatPendingMp) dom.trainStatPendingMp.textContent = String(p.byRegion?.mp || 0);
+          if (dom.trainStatPendingExp) dom.trainStatPendingExp.textContent = String(p.byRegion?.exp || 0);
+          if (dom.trainStatPendingLevel) dom.trainStatPendingLevel.textContent = String(p.byRegion?.level || 0);
+          if (dom.trainStatPendingAdena) dom.trainStatPendingAdena.textContent = String(p.byRegion?.adena || 0);
+          if (dom.trainPendingCount) dom.trainPendingCount.textContent = String(p.total || 0);
+        }
+      }
+    } catch (_) { /* ignore */ }
+  }
+
+  // ===== 자동 캡처 (라벨 없이 _pending에 PNG만 저장) =====
+  let trainCaptureTimer = null;
+  let trainCaptureCount = 0;
+  let trainCaptureSkipped = 0;
+  // dedup: 최근 N(=10)개의 OCR 결과 추적. 새 값이 히스토리에 있으면 스킵
+  //   - 단순 직전값만 비교하면 220↔221 진동 시 모두 저장됨 → 히스토리 방식이 강력
+  //   - OCR 결과가 빈/null인 경우는 dedup 안 함 (인식 실패 케이스는 저장하면 학습 가치 큼)
+  const DEDUP_HISTORY_SIZE = 10;
+  const recentCapturedOcrHistory = { mp: [], exp: [], level: [], adena: [] };
+  function _trainIsCapturing() { return !!trainCaptureTimer; }
+  async function _trainCaptureOnce() {
+    if (!api || !api.savePendingSample) return;
+    let savedThisTick = 0;
+    let skippedThisTick = 0;
+    for (const region of ['mp', 'exp', 'level', 'adena']) {
+      const canvas = latestCaptureCanvas[region];
+      if (!canvas) continue;
+      const ocr = recentOcrResults[region] || '';
+      // dedup: OCR 값이 최근 10개 히스토리에 있으면 스킵
+      if (ocr && recentCapturedOcrHistory[region].includes(ocr)) {
+        skippedThisTick++;
+        continue;
+      }
+      let dataUrl;
+      try { dataUrl = canvas.toDataURL('image/png'); } catch (_) { continue; }
+      try {
+        const r = await api.savePendingSample({ region, dataUrl, ocrSuggestion: ocr });
+        if (r && r.ok) {
+          savedThisTick++;
+          if (ocr) {
+            recentCapturedOcrHistory[region].push(ocr);
+            if (recentCapturedOcrHistory[region].length > DEDUP_HISTORY_SIZE) {
+              recentCapturedOcrHistory[region].shift();
+            }
+          }
+        }
+      } catch (_) { /* ignore */ }
+    }
+    trainCaptureCount += savedThisTick;
+    trainCaptureSkipped += skippedThisTick;
+    if (savedThisTick > 0 || skippedThisTick > 0) {
+      _trainSetStatus(`🎬 캡처 누적: ${trainCaptureCount}개 (중복 스킵 ${trainCaptureSkipped}개)`, 'success');
+      if (savedThisTick > 0) _trainRefreshStats();
+    }
+  }
+  function startTrainCapture() {
+    if (trainCaptureTimer) return;
+    const interval = parseInt((dom.selTrainCaptureInterval && dom.selTrainCaptureInterval.value) || '10', 10);
+    const ms = Math.max(2, interval) * 1000;
+    trainCaptureCount = 0;
+    trainCaptureSkipped = 0;
+    // 새 세션 시작 시 dedup 히스토리 리셋
+    recentCapturedOcrHistory.mp.length = 0;
+    recentCapturedOcrHistory.exp.length = 0;
+    recentCapturedOcrHistory.level.length = 0;
+    recentCapturedOcrHistory.adena.length = 0;
+    _trainCaptureOnce();
+    trainCaptureTimer = setInterval(() => _trainCaptureOnce(), ms);
+    if (dom.btnTrainCaptureToggle) {
+      dom.btnTrainCaptureToggle.textContent = '⏸️ 자동 캡처 정지';
+      dom.btnTrainCaptureToggle.classList.add('active');
+    }
+    if (dom.trainCaptureStatus) {
+      dom.trainCaptureStatus.textContent = `🔴 REC (${interval}초 간격)`;
+      dom.trainCaptureStatus.classList.add('active');
+    }
+    _trainSetStatus(`🎬 자동 캡처 시작 (${interval}초 간격)`, 'success');
+  }
+  function stopTrainCapture() {
+    if (!trainCaptureTimer) return;
+    clearInterval(trainCaptureTimer);
+    trainCaptureTimer = null;
+    if (dom.btnTrainCaptureToggle) {
+      dom.btnTrainCaptureToggle.textContent = '🎬 자동 캡처 시작';
+      dom.btnTrainCaptureToggle.classList.remove('active');
+    }
+    if (dom.trainCaptureStatus) {
+      dom.trainCaptureStatus.textContent = '⏸️ 정지';
+      dom.trainCaptureStatus.classList.remove('active');
+    }
+    _trainSetStatus('자동 캡처 종료. [라벨링 시작]에서 정리하세요.', 'success');
+    _trainRefreshStats();
+  }
+  function toggleTrainCapture() {
+    if (_trainIsCapturing()) stopTrainCapture(); else startTrainCapture();
+  }
+
+  // ===== 라벨링 (대기 샘플 한 줄씩 표시) =====
+  const trainLabeling = { samples: [], idx: 0, active: false };
+  async function startLabeling() {
+    if (!api || !api.listPendingSamples) return;
+    const p = await api.listPendingSamples({ includeImage: true });
+    if (!p || !p.samples || p.samples.length === 0) {
+      _trainSetStatus('대기 중인 샘플 없음 — 먼저 자동 캡처', 'error');
+      return;
+    }
+    trainLabeling.samples = p.samples;
+    trainLabeling.idx = 0;
+    trainLabeling.active = true;
+    if (dom.trainLabelingPanel) dom.trainLabelingPanel.removeAttribute('hidden');
+    _renderLabelingItem();
+  }
+  function _renderLabelingItem() {
+    const total = trainLabeling.samples.length;
+    if (dom.trainLabelingTotal) dom.trainLabelingTotal.textContent = String(total);
+    if (trainLabeling.idx >= total) {
+      stopLabeling(true);
+      return;
+    }
+    if (dom.trainLabelingCurrent) dom.trainLabelingCurrent.textContent = String(trainLabeling.idx + 1);
+    const s = trainLabeling.samples[trainLabeling.idx];
+    if (dom.trainLabelingThumb) dom.trainLabelingThumb.src = s.dataUrl || '';
+    if (dom.trainLabelingRegion) dom.trainLabelingRegion.textContent = s.region.toUpperCase();
+    if (dom.trainLabelingMeta) dom.trainLabelingMeta.textContent = `📅 ${s.capturedAt || ''} · OCR 추천: ${s.ocrSuggestion || '(없음)'}`;
+    if (dom.trainLabelingInput) {
+      dom.trainLabelingInput.value = s.ocrSuggestion || '';
+      dom.trainLabelingInput.focus();
+      dom.trainLabelingInput.select();
+    }
+  }
+  async function confirmLabeling() {
+    if (!trainLabeling.active) return;
+    const s = trainLabeling.samples[trainLabeling.idx];
+    if (!s) return;
+    const label = (dom.trainLabelingInput && dom.trainLabelingInput.value || '').trim();
+    if (!label) {
+      _trainSetStatus('라벨 비어있음 (스킵하려면 Tab, 삭제는 Del)', 'error');
+      return;
+    }
+    try {
+      const res = await api.confirmPendingSample({ region: s.region, baseName: s.baseName, label });
+      if (res && res.ok) {
+        _trainSetStatus(`✅ ${s.region.toUpperCase()} ${label} 확정 (${trainLabeling.idx + 1}/${trainLabeling.samples.length})`, 'success');
+        trainLabeling.idx++;
+        _renderLabelingItem();
+        _trainRefreshStats();
+      } else {
+        _trainSetStatus(`확정 실패: ${res && res.error || '?'}`, 'error');
+      }
+    } catch (e) {
+      _trainSetStatus('확정 예외: ' + e.message, 'error');
+    }
+  }
+  function skipLabeling() {
+    if (!trainLabeling.active) return;
+    trainLabeling.idx++;
+    _renderLabelingItem();
+  }
+  async function deleteLabeling() {
+    if (!trainLabeling.active) return;
+    const s = trainLabeling.samples[trainLabeling.idx];
+    if (!s) return;
+    try {
+      await api.deletePendingSample({ region: s.region, baseName: s.baseName });
+      _trainSetStatus(`🗑️ ${s.region.toUpperCase()} 삭제`, 'success');
+      // 현재 idx 위치에 다음 샘플이 들어옴 (배열에서 제거)
+      trainLabeling.samples.splice(trainLabeling.idx, 1);
+      _renderLabelingItem();
+      _trainRefreshStats();
+    } catch (e) {
+      _trainSetStatus('삭제 예외: ' + e.message, 'error');
+    }
+  }
+  function stopLabeling(finished) {
+    trainLabeling.active = false;
+    trainLabeling.samples = [];
+    trainLabeling.idx = 0;
+    if (dom.trainLabelingPanel) dom.trainLabelingPanel.setAttribute('hidden', '');
+    if (finished) _trainSetStatus('🎉 라벨링 완료', 'success');
+    else _trainSetStatus('라벨링 종료', '');
+  }
+  // 같은 OCR 추천값을 가진 대기 샘플을 입력 라벨로 일괄 확정
+  async function bulkConfirmSameOcr() {
+    if (!trainLabeling.active) return;
+    const cur = trainLabeling.samples[trainLabeling.idx];
+    if (!cur) return;
+    const label = (dom.trainLabelingInput && dom.trainLabelingInput.value || '').trim();
+    if (!label) {
+      _trainSetStatus('라벨 비어있음', 'error');
+      return;
+    }
+    const targetOcr = cur.ocrSuggestion || '';
+    const targetRegion = cur.region;
+    // 현재 idx 이후 (현재 포함) 같은 region + 같은 ocrSuggestion 모두 대상
+    const matches = trainLabeling.samples.slice(trainLabeling.idx).filter(
+      (s) => s.region === targetRegion && (s.ocrSuggestion || '') === targetOcr
+    );
+    if (matches.length === 0) {
+      _trainSetStatus('일치하는 샘플 없음', 'error');
+      return;
+    }
+    if (!confirm(`${targetRegion.toUpperCase()} OCR 추천값 "${targetOcr || '(없음)'}"을 가진 대기 샘플 ${matches.length}개를 모두 "${label}"로 확정하시겠습니까?`)) return;
+    let ok = 0, fail = 0;
+    for (const s of matches) {
+      try {
+        const res = await api.confirmPendingSample({ region: s.region, baseName: s.baseName, label });
+        if (res && res.ok) ok++; else fail++;
+      } catch (_) { fail++; }
+    }
+    // 처리한 샘플들을 배열에서 제거 (현재 idx 위치 유지)
+    trainLabeling.samples = trainLabeling.samples.filter(
+      (s) => !(s.region === targetRegion && (s.ocrSuggestion || '') === targetOcr)
+    );
+    // idx가 배열 길이보다 크면 끝
+    if (trainLabeling.idx >= trainLabeling.samples.length) {
+      _trainSetStatus(`💨 일괄 확정 ${ok}개 (실패 ${fail}) — 대기 모두 처리됨`, 'success');
+      stopLabeling(true);
+    } else {
+      _trainSetStatus(`💨 일괄 확정 ${ok}개 (실패 ${fail})`, 'success');
+      _renderLabelingItem();
+    }
+    _trainRefreshStats();
+  }
+  // 같은 OCR 추천값을 가진 대기 샘플 일괄 삭제
+  async function bulkDeleteSameOcr() {
+    if (!trainLabeling.active) return;
+    const cur = trainLabeling.samples[trainLabeling.idx];
+    if (!cur) return;
+    const targetOcr = cur.ocrSuggestion || '';
+    const targetRegion = cur.region;
+    const matches = trainLabeling.samples.slice(trainLabeling.idx).filter(
+      (s) => s.region === targetRegion && (s.ocrSuggestion || '') === targetOcr
+    );
+    if (matches.length === 0) {
+      _trainSetStatus('일치하는 샘플 없음', 'error');
+      return;
+    }
+    if (!confirm(`${targetRegion.toUpperCase()} OCR 추천값 "${targetOcr || '(없음)'}"을 가진 대기 샘플 ${matches.length}개를 모두 삭제하시겠습니까?`)) return;
+    let ok = 0;
+    for (const s of matches) {
+      try {
+        await api.deletePendingSample({ region: s.region, baseName: s.baseName });
+        ok++;
+      } catch (_) { /* ignore */ }
+    }
+    trainLabeling.samples = trainLabeling.samples.filter(
+      (s) => !(s.region === targetRegion && (s.ocrSuggestion || '') === targetOcr)
+    );
+    if (trainLabeling.idx >= trainLabeling.samples.length) {
+      _trainSetStatus(`💢 일괄 삭제 ${ok}개 — 대기 모두 처리됨`, 'success');
+      stopLabeling(true);
+    } else {
+      _trainSetStatus(`💢 일괄 삭제 ${ok}개`, 'success');
+      _renderLabelingItem();
+    }
+    _trainRefreshStats();
+  }
+  async function clearAllPending() {
+    if (!api || !api.clearAllPending) return;
+    if (!confirm('대기 중인 모든 샘플을 삭제하시겠습니까?')) return;
+    try {
+      const r = await api.clearAllPending();
+      _trainSetStatus(`🗑️ ${r.removed || 0}개 파일 삭제`, 'success');
+      _trainRefreshStats();
+    } catch (e) {
+      _trainSetStatus('삭제 예외: ' + e.message, 'error');
+    }
+  }
+  async function _saveTrainingRegion(region, labelInputEl) {
+    if (!api || !api.saveTrainingSample) {
+      _trainSetStatus('IPC 미사용 가능 (api 없음)', 'error');
+      return false;
+    }
+    const canvas = latestCaptureCanvas[region];
+    if (!canvas) {
+      _trainSetStatus(`${region.toUpperCase()}: 최근 캡처 없음 — 자동 감지 ON 후 다시 시도`, 'error');
+      return false;
+    }
+    const label = (labelInputEl && labelInputEl.value || '').trim();
+    if (!label) {
+      _trainSetStatus(`${region.toUpperCase()}: 정답값 입력 필요`, 'error');
+      if (labelInputEl) labelInputEl.focus();
+      return false;
+    }
+    let dataUrl;
+    try {
+      dataUrl = canvas.toDataURL('image/png');
+    } catch (e) {
+      _trainSetStatus(`${region.toUpperCase()}: 캔버스 변환 실패 - ${e.message}`, 'error');
+      return false;
+    }
+    try {
+      const res = await api.saveTrainingSample({ region, dataUrl, label, gtText: label });
+      if (res && res.ok) {
+        return true;
+      }
+      _trainSetStatus(`${region.toUpperCase()}: 저장 실패 - ${res && res.error || 'unknown'}`, 'error');
+      return false;
+    } catch (e) {
+      _trainSetStatus(`${region.toUpperCase()}: 저장 예외 - ${e.message}`, 'error');
+      return false;
+    }
+  }
+  async function saveTrainingAll() {
+    const targets = [
+      { region: 'mp', el: dom.trainLabelMp },
+      { region: 'exp', el: dom.trainLabelExp },
+      { region: 'level', el: dom.trainLabelLevel },
+      { region: 'adena', el: dom.trainLabelAdena }
+    ];
+    const filled = targets.filter((t) => t.el && (t.el.value || '').trim());
+    if (filled.length === 0) {
+      _trainSetStatus('정답값이 하나도 입력 안됨', 'error');
+      return;
+    }
+    let ok = 0, fail = 0;
+    for (const t of filled) {
+      const success = await _saveTrainingRegion(t.region, t.el);
+      if (success) ok++; else fail++;
+    }
+    if (fail === 0) {
+      _trainSetStatus(`✅ ${ok}개 저장 완료`, 'success');
+    } else {
+      _trainSetStatus(`⚠️ ${ok}개 성공, ${fail}개 실패`, 'error');
+    }
+    _trainRefreshStats();
+  }
+  function setupTrainingControls() {
+    // 자동 캡처 토글
+    if (dom.btnTrainCaptureToggle) {
+      dom.btnTrainCaptureToggle.addEventListener('click', () => toggleTrainCapture());
+    }
+    // 라벨링 시작/종료/확정/스킵/삭제
+    if (dom.btnTrainLabelStart) {
+      dom.btnTrainLabelStart.addEventListener('click', () => startLabeling());
+    }
+    if (dom.btnTrainLabelingConfirm) {
+      dom.btnTrainLabelingConfirm.addEventListener('click', () => confirmLabeling());
+    }
+    if (dom.btnTrainLabelingSkip) {
+      dom.btnTrainLabelingSkip.addEventListener('click', () => skipLabeling());
+    }
+    if (dom.btnTrainLabelingDelete) {
+      dom.btnTrainLabelingDelete.addEventListener('click', () => deleteLabeling());
+    }
+    if (dom.btnTrainLabelingStop) {
+      dom.btnTrainLabelingStop.addEventListener('click', () => stopLabeling(false));
+    }
+    if (dom.btnTrainLabelingBulkConfirm) {
+      dom.btnTrainLabelingBulkConfirm.addEventListener('click', () => bulkConfirmSameOcr());
+    }
+    if (dom.btnTrainLabelingBulkDelete) {
+      dom.btnTrainLabelingBulkDelete.addEventListener('click', () => bulkDeleteSameOcr());
+    }
+    if (dom.trainLabelingInput) {
+      dom.trainLabelingInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); confirmLabeling(); }
+        else if (e.key === 'Tab') { e.preventDefault(); skipLabeling(); }
+        else if (e.key === 'Delete') { e.preventDefault(); deleteLabeling(); }
+        else if (e.key === 'Escape') { e.preventDefault(); stopLabeling(false); }
+      });
+    }
+    if (dom.btnTrainPendingRefresh) {
+      dom.btnTrainPendingRefresh.addEventListener('click', () => _trainRefreshStats());
+    }
+    if (dom.btnTrainPendingClear) {
+      dom.btnTrainPendingClear.addEventListener('click', () => clearAllPending());
+    }
+    // 보조: 수동 1개씩 저장
+    if (dom.btnTrainSaveAll) {
+      dom.btnTrainSaveAll.addEventListener('click', () => saveTrainingAll());
+    }
+    if (dom.btnTrainSaveAdena) {
+      dom.btnTrainSaveAdena.addEventListener('click', async () => {
+        const ok = await _saveTrainingRegion('adena', dom.trainLabelAdena);
+        if (ok) _trainSetStatus('✅ ADENA 1개 저장', 'success');
+        _trainRefreshStats();
+      });
+    }
+    if (dom.btnTrainSaveMp) {
+      dom.btnTrainSaveMp.addEventListener('click', async () => {
+        const ok = await _saveTrainingRegion('mp', dom.trainLabelMp);
+        if (ok) _trainSetStatus('✅ MP 1개 저장', 'success');
+        _trainRefreshStats();
+      });
+    }
+    if (dom.btnTrainOpenFolder && api && api.openTrainingFolder) {
+      dom.btnTrainOpenFolder.addEventListener('click', async () => {
+        try {
+          const r = await api.openTrainingFolder();
+          if (r && r.ok) _trainSetStatus(`📁 ${r.dir}`, 'success');
+          else _trainSetStatus(`폴더 열기 실패 - ${r && r.error || ''}`, 'error');
+        } catch (e) {
+          _trainSetStatus(`폴더 열기 예외 - ${e.message}`, 'error');
+        }
+      });
+    }
+    if (dom.btnTrainStatsRefresh) {
+      dom.btnTrainStatsRefresh.addEventListener('click', () => _trainRefreshStats());
+    }
+    // 수동 라벨 입력 Enter → saveTrainingAll
+    [dom.trainLabelMp, dom.trainLabelExp, dom.trainLabelLevel, dom.trainLabelAdena].forEach((el) => {
+      if (!el) return;
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); saveTrainingAll(); }
+      });
+    });
+    // 초기 통계
+    _trainRefreshStats();
   }
   function restoreTrackerInputs() {
     if (tracker.start) {
@@ -919,13 +1519,20 @@
     if (!dom.adDisplay) return;
     // 모니터 표시: 모든 영역의 displayLabel 수집해서 unique 만들기
     const labels = [];
-    [autoDetect.mpRegion, autoDetect.expRegion, autoDetect.levelRegion, autoDetect.adenaRegion]
+    [autoDetect.mpRegion, autoDetect.mpBarRegion, autoDetect.expRegion, autoDetect.levelRegion, autoDetect.adenaRegion]
       .forEach((r) => { if (r && r.displayLabel && !labels.includes(r.displayLabel)) labels.push(r.displayLabel); });
     dom.adDisplay.textContent = labels.length === 0 ? '미지정' : labels.join(' / ');
     if (dom.adMpRegionInfo) dom.adMpRegionInfo.textContent = formatRegion(autoDetect.mpRegion);
+    if (dom.adMpBarRegionInfo) {
+      const r = autoDetect.mpBarRegion;
+      const enabled = autoDetect.useMpBar && r;
+      const calib = autoDetect.mpBarMaxX > 0 ? ' · 🎯 보정 ' + autoDetect.mpBarMaxX + 'col' : '';
+      dom.adMpBarRegionInfo.textContent = (enabled ? '🟢 ' : (r ? '⚪ ' : '')) + formatRegion(r) + calib;
+    }
     if (dom.adExpRegionInfo) dom.adExpRegionInfo.textContent = formatRegion(autoDetect.expRegion);
     if (dom.adLevelRegionInfo) dom.adLevelRegionInfo.textContent = formatRegion(autoDetect.levelRegion);
     if (dom.adAdenaRegionInfo) dom.adAdenaRegionInfo.textContent = formatRegion(autoDetect.adenaRegion);
+    if (dom.chkAdUseMpBar) dom.chkAdUseMpBar.checked = !!autoDetect.useMpBar;
     if (dom.btnAdToggle) {
       dom.btnAdToggle.textContent = autoDetect.enabled
         ? '⏹ 자동 감지 중지'
@@ -982,7 +1589,9 @@
           }
         };
         opts.errorHandler = (e) => console.error('[Tesseract worker error]', e);
-        const createPromise = Tesseract.createWorker('eng', 1, opts);
+        // eng+lineage: 게임 폰트 fine-tuned 모델(lineage.traineddata) 우선 사용 + 영문 fallback
+        // build/tessdata/lineage.traineddata 가 build extraResources로 패키징됨
+        const createPromise = Tesseract.createWorker('eng+lineage', 1, opts);
 
         const timeoutPromise = new Promise((_, rej) => {
           setTimeout(() => rej(new Error(
@@ -1056,7 +1665,7 @@
   async function setupCaptureStreams() {
     // 사용 중인 모든 sourceId의 스트림 준비
     const sourceIds = new Set();
-    [autoDetect.mpRegion, autoDetect.expRegion, autoDetect.levelRegion, autoDetect.adenaRegion]
+    [autoDetect.mpRegion, autoDetect.mpBarRegion, autoDetect.expRegion, autoDetect.levelRegion, autoDetect.adenaRegion]
       .forEach((r) => { if (r && r.sourceId) sourceIds.add(r.sourceId); });
     if (sourceIds.size === 0) throw new Error('지정된 영역의 sourceId가 없습니다');
     // 사용 안 하는 stream 정리
@@ -1395,8 +2004,24 @@
     ctx.putImageData(new ImageData(dst, w, h), 0, 0);
   }
 
+  // 최근 캡처된 캔버스 (학습 데이터 저장용) — region key('mp'/'exp'/'level'/'adena')
+  const latestCaptureCanvas = { mp: null, exp: null, level: null, adena: null };
+  // 최근 OCR raw 결과 (학습 자동 수집의 'OCR과 트래커 일치' 체크용)
+  //   safe-string 형태로 저장 → 트래커 NOW와 직접 비교 (자릿수/포맷 일치)
+  const recentOcrResults = { mp: null, exp: null, level: null, adena: null };
+  function _regionKeyForElId(el) {
+    if (!el || !el.id) return null;
+    if (el.id === 'ad-mp-preview') return 'mp';
+    if (el.id === 'ad-exp-preview') return 'exp';
+    if (el.id === 'ad-level-preview') return 'level';
+    if (el.id === 'ad-adena-preview') return 'adena';
+    return null;
+  }
   function updatePreview(targetEl, canvas) {
     if (!targetEl) return;
+    // 학습 데이터 저장 위해 캔버스는 항상 보존 (preview 표시 여부와 무관)
+    const key = _regionKeyForElId(targetEl);
+    if (key && canvas) latestCaptureCanvas[key] = canvas;
     if (!autoDetect.showPreview) {
       targetEl.removeAttribute('src');
       return;
@@ -1404,6 +2029,437 @@
     try {
       targetEl.src = canvas.toDataURL('image/png');
     } catch (_) { /* ignore */ }
+  }
+
+  // ==========================================================================
+  // MP 바 픽셀 분석 — OCR 완전 우회. 게임의 컬러 MP 바(파란색)에서
+  //   채워진 비율을 측정해서 (사용자 입력 max) × ratio = cur 계산.
+  //
+  // 채움 판정: HSV 색공간의 saturation(채도) 사용 — 컬러풀(채도 ↑) = 바 채움,
+  //   회색/검정/흰색(채도 ↓) = 바 비어있음 또는 텍스트/배경.
+  //   이렇게 하면 어떤 컬러 바든(블루/레드/그린) reference color 없이 자동 처리.
+  //
+  // 텍스트 오버레이 처리: column 단위로 "한 픽셀이라도 채도 높으면 채워짐" 판정 →
+  //   텍스트가 일부 픽셀만 가려도 column 전체는 살아있음.
+  // ==========================================================================
+  // RGB → Hue (0~360°). 회색(saturation=0)일 때 -1 반환.
+  function rgbToHue(r, g, b) {
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const delta = max - min;
+    if (delta === 0) return -1;
+    let h;
+    if (max === r) h = ((g - b) / delta) % 6;
+    else if (max === g) h = (b - r) / delta + 2;
+    else h = (r - g) / delta + 4;
+    h = h * 60;
+    if (h < 0) h += 360;
+    return h;
+  }
+  // Hue 거리 — 원형(0=360 동치)
+  function hueDistance(h1, h2) {
+    const d = Math.abs(h1 - h2);
+    return Math.min(d, 360 - d);
+  }
+
+  // RGB Euclidean distance
+  function rgbDist(r1, g1, b1, r2, g2, b2) {
+    const dr = r1 - r2, dg = g1 - g2, db = b1 - b2;
+    return Math.sqrt(dr * dr + dg * dg + db * db);
+  }
+  // 영역에서 fill의 대표 RGB 추출 — 평균이 아니라 가장 채도 높고 밝은 픽셀들의 평균
+  //   텍스트(흰색/회색)나 배경(어두움)에 흐려지지 않은 진짜 fill 색
+  function computeAvgRgb(data, w, h, xStart, xEnd) {
+    // 1단계: sample 영역의 모든 픽셀 후보 수집 (채도 + 밝기 충분한 것만)
+    const candidates = [];
+    for (let x = xStart; x < xEnd; x++) {
+      for (let y = 0; y < h; y++) {
+        const i = (y * w + x) * 4;
+        const r = data[i], g = data[i + 1], b = data[i + 2];
+        const max = Math.max(r, g, b);
+        const min = Math.min(r, g, b);
+        const sat = max === 0 ? 0 : (max - min) / max;
+        const val = max / 255;
+        if (sat < 0.30 || val < 0.30) continue;  // dim/회색 픽셀 제외
+        if (max > 240 && sat < 0.2) continue;     // 흰색 텍스트
+        candidates.push({ r, g, b, score: sat * val });
+      }
+    }
+    if (candidates.length === 0) return null;
+    // 2단계: score(채도×밝기) 상위 30% 픽셀만 선택 → 진짜 fill 픽셀들
+    candidates.sort((a, b) => b.score - a.score);
+    const topCount = Math.max(5, Math.floor(candidates.length * 0.30));
+    const top = candidates.slice(0, topCount);
+    let sumR = 0, sumG = 0, sumB = 0;
+    for (const p of top) { sumR += p.r; sumG += p.g; sumB += p.b; }
+    return { r: sumR / top.length, g: sumG / top.length, b: sumB / top.length, count: top.length };
+  }
+
+  function computeBarFillRatio(canvas, refColor) {
+    if (!canvas || !canvas.width || !canvas.height) return null;
+    try {
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      const w = canvas.width, h = canvas.height;
+      const data = ctx.getImageData(0, 0, w, h).data;
+      const hasRef = refColor && Number.isFinite(refColor.r);
+      const refBrightness = hasRef ? Math.max(refColor.r, refColor.g, refColor.b) / 255 : 0;
+      // === Column 평균 brightness ===
+      //   text 픽셀 제외, 채도 있는 픽셀만 (배경 흰점/검은점 제외)
+      const colAvgBright = new Array(w).fill(0);
+      for (let x = 0; x < w; x++) {
+        let sum = 0, cnt = 0;
+        for (let y = 0; y < h; y++) {
+          const i = (y * w + x) * 4;
+          const r = data[i], g = data[i + 1], b = data[i + 2];
+          const max = Math.max(r, g, b);
+          const min = Math.min(r, g, b);
+          const sat = max === 0 ? 0 : (max - min) / max;
+          if (max > 240 && sat < 0.2) continue;  // 흰 텍스트
+          if (max < 30) continue;                 // 거의 검은 배경
+          sum += max;
+          cnt++;
+        }
+        colAvgBright[x] = cnt > 0 ? sum / cnt / 255 : 0;
+      }
+      // === Boundary 검출: 절대 임계 (refBrightness × 0.90) ===
+      //   refBrightness = 보정 시 학습한 fill 평균 밝기
+      //   강한 임계 90% — 진짜 fill 픽셀만 통과, 빈 영역(어두운 데코) 차단
+      //   refColor 없으면 max/min 자연 분리 (보정 안 된 상태)
+      let absThreshold;
+      if (hasRef) {
+        absThreshold = refBrightness * 0.85;
+      } else {
+        let maxColB = 0, minColB = 1;
+        for (let x = 0; x < w; x++) {
+          if (colAvgBright[x] > maxColB) maxColB = colAvgBright[x];
+          if (colAvgBright[x] < minColB) minColB = colAvgBright[x];
+        }
+        absThreshold = (maxColB + minColB) / 2;
+      }
+      console.log('[MP bar] absThreshold=' + absThreshold.toFixed(3) + ' (refBright=' + refBrightness.toFixed(3) + ')');
+      const RGB_TOL = 60;
+      const SAT_MIN = 0.30;
+      const VAL_MIN = 0.30;
+      const HUE_TOL = 30;
+      // Step 1: 5~25% 구간에서 dominant hue 자동 검출
+      //   - 0~5% leftmost는 바 시작 데코(테두리/괄호)로 다른 색 가능 → skip
+      //   - 5~25%는 MP가 100%일 때 fill 영역 안에 확실히 들어감
+      //   - hue 히스토그램으로 dominant 찾기
+      const refSampleStart = Math.max(0, Math.floor(w * 0.05));
+      const refSampleEnd = Math.max(refSampleStart + 5, Math.floor(w * 0.25));
+      const hueHist = new Array(36).fill(0);   // 10° 버킷 36개
+      for (let x = refSampleStart; x < refSampleEnd; x++) {
+        for (let y = 0; y < h; y++) {
+          const i = (y * w + x) * 4;
+          const r = data[i], g = data[i + 1], b = data[i + 2];
+          const max = Math.max(r, g, b);
+          const min = Math.min(r, g, b);
+          const sat = max === 0 ? 0 : (max - min) / max;
+          const val = max / 255;
+          if (sat > SAT_MIN && val > VAL_MIN) {
+            const hue = rgbToHue(r, g, b);
+            if (hue >= 0) hueHist[Math.floor(hue / 10) % 36]++;
+          }
+        }
+      }
+      let refBucket = -1, refCount = 0;
+      for (let i = 0; i < 36; i++) {
+        if (hueHist[i] > refCount) { refCount = hueHist[i]; refBucket = i; }
+      }
+      if (refBucket < 0) {
+        // 왼쪽에 컬러 픽셀 0 — 진단 정보 수집해서 반환
+        //   가장 채도 높은 픽셀 통계 출력 (사용자가 thresholds 어떤지 판단 가능)
+        let maxSat = 0, maxVal = 0;
+        for (let x = refSampleStart; x < refSampleEnd; x++) {
+          for (let y = 0; y < h; y++) {
+            const i = (y * w + x) * 4;
+            const r = data[i], g = data[i + 1], b = data[i + 2];
+            const max = Math.max(r, g, b);
+            const min = Math.min(r, g, b);
+            const sat = max === 0 ? 0 : (max - min) / max;
+            const val = max / 255;
+            if (sat > maxSat) maxSat = sat;
+            if (val > maxVal) maxVal = val;
+          }
+        }
+        console.warn('[MP bar] refHue 추출 실패 — 왼쪽 10%에 SAT>' + SAT_MIN + ' AND VAL>' + VAL_MIN + ' 픽셀 0개. ' +
+                     '실측 max sat=' + maxSat.toFixed(2) + ' max val=' + maxVal.toFixed(2));
+        return {
+          ratio: 0, ratioSmoothed: 0, ratioCluster: 0, ratioRightmost: 0,
+          filledCols: 0, totalCols: w, refHue: -1,
+          colFilled: new Array(w).fill(false),
+          density: new Array(w).fill(0),
+          smoothedBoundary: -1,
+          clusterBoundary: -1,
+          diagnosticMaxSat: maxSat,
+          diagnosticMaxVal: maxVal
+        };
+      }
+      const refHue = refBucket * 10 + 5;
+      // Step 1.5: ADAPTIVE 임계값 학습 — 샘플 영역에서 refHue 매치 픽셀들의
+      //   최대 intensity (sat × val) 측정. 이의 50%를 fill 임계로 사용.
+      //   → 빈 영역의 어두운 같은-hue 데코는 intensity 낮아 자동 배제.
+      let maxRefIntensity = 0;
+      for (let x = refSampleStart; x < refSampleEnd; x++) {
+        for (let y = 0; y < h; y++) {
+          const i = (y * w + x) * 4;
+          const r = data[i], g = data[i + 1], b = data[i + 2];
+          const max = Math.max(r, g, b);
+          const min = Math.min(r, g, b);
+          const sat = max === 0 ? 0 : (max - min) / max;
+          const val = max / 255;
+          if (sat > SAT_MIN && val > VAL_MIN) {
+            const hue = rgbToHue(r, g, b);
+            if (hue >= 0 && hueDistance(hue, refHue) < HUE_TOL) {
+              const intensity = sat * val;
+              if (intensity > maxRefIntensity) maxRefIntensity = intensity;
+            }
+          }
+        }
+      }
+      const ADAPTIVE_INTENSITY = maxRefIntensity * 0.65;
+      console.log('[MP bar] mode=' + (hasRef ? 'RGB-distance' : 'HSV-adaptive') + (hasRef ? ' refRGB=(' + Math.round(refColor.r) + ',' + Math.round(refColor.g) + ',' + Math.round(refColor.b) + ')' : ' refHue=' + refHue + '°'));
+      // Step 2: column별 채움 검사 — column 평균 brightness가 절대 임계 이상이면 fill
+      const colFilled = new Array(w).fill(false);
+      for (let x = 0; x < w; x++) {
+        if (colAvgBright[x] < absThreshold) continue;
+        // refColor 있으면 색 일치도 추가 검사
+        if (hasRef) {
+          let hasRefMatch = false;
+          for (let y = 0; y < h; y++) {
+            const i = (y * w + x) * 4;
+            const r = data[i], g = data[i + 1], b = data[i + 2];
+            if (rgbDist(r, g, b, refColor.r, refColor.g, refColor.b) < RGB_TOL) {
+              hasRefMatch = true; break;
+            }
+          }
+          if (!hasRefMatch) continue;
+        }
+        colFilled[x] = true;
+      }
+      const filledCount = colFilled.filter(Boolean).length;
+      // 가장 오른쪽 filled column 위치 — 단순 boundary
+      let rightmostFilled = -1;
+      for (let x = w - 1; x >= 0; x--) {
+        if (colFilled[x]) { rightmostFilled = x; break; }
+      }
+      // === Sliding window 밀도 기반 boundary (텍스트 gap 통과) ===
+      //   각 column에서 ±WINDOW 범위의 채움 밀도 측정.
+      //   텍스트가 가린 column도 주변이 채워졌으면 "fill 영역"으로 본다.
+      //   가장 오른쪽 density >= 30% column = boundary.
+      const WINDOW = Math.max(8, Math.floor(w * 0.05));
+      const density = new Array(w).fill(0);
+      for (let x = 0; x < w; x++) {
+        let f = 0, t = 0;
+        for (let dx = -WINDOW; dx <= WINDOW; dx++) {
+          const nx = x + dx;
+          if (nx >= 0 && nx < w) {
+            t++;
+            if (colFilled[nx]) f++;
+          }
+        }
+        density[x] = f / t;
+      }
+      let smoothedBoundary = -1;
+      for (let x = w - 1; x >= 0; x--) {
+        if (density[x] >= 0.30) { smoothedBoundary = x; break; }
+      }
+      const ratioSmoothed = smoothedBoundary < 0 ? 0 : (smoothedBoundary + 1) / w;
+      // === Rightmost-cluster boundary ===
+      //   가장 오른쪽 column부터 walk back. column이 filled이고 ±15 범위에 ≥2 이웃 filled이면
+      //   "노이즈 아닌 실제 fill 영역"으로 인정. 임계 완화로 낮은 MP(작은 fill 영역)에서도 검출.
+      let clusterBoundary = -1;
+      for (let x = w - 1; x >= 0; x--) {
+        if (!colFilled[x]) continue;
+        let neighbors = 0;
+        for (let dx = -15; dx <= 15; dx++) {
+          if (dx === 0) continue;
+          const nx = x + dx;
+          if (nx >= 0 && nx < w && colFilled[nx]) neighbors++;
+        }
+        if (neighbors >= 2) { clusterBoundary = x; break; }
+      }
+      const ratioCluster = clusterBoundary < 0 ? 0 : (clusterBoundary + 1) / w;
+      return {
+        ratio: filledCount / w,
+        ratioSmoothed,
+        ratioCluster,
+        ratioRightmost: (rightmostFilled + 1) / w,
+        filledCols: filledCount,
+        totalCols: w,
+        refHue,
+        colFilled,
+        density,
+        smoothedBoundary,
+        clusterBoundary
+      };
+    } catch (e) {
+      console.warn('[MP bar] fill ratio compute failed:', e);
+      return null;
+    }
+  }
+
+  // 검출 결과를 캔버스 위에 시각화 — 녹색 띠(채움) + 빨강 띠(빈) + 흰 boundary 선
+  function drawBarDetectionOverlay(canvas, result) {
+    if (!canvas || !result || !result.colFilled) return;
+    try {
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width, h = canvas.height;
+      const stripeY = h - 4;
+      // column별로 정확히 색칠 (정밀)
+      for (let x = 0; x < w; x++) {
+        ctx.fillStyle = result.colFilled[x] ? 'rgba(0, 255, 0, 0.85)' : 'rgba(255, 0, 0, 0.65)';
+        ctx.fillRect(x, stripeY, 1, 3);
+      }
+      // boundary 표시:
+      //   노란선 = cluster (채택값)
+      //   청색선 = smoothed (참조)
+      //   흰선   = rightmost (참조)
+      const xC = Math.round(result.ratioCluster * w);
+      const xS = Math.round(result.ratioSmoothed * w);
+      const xR = Math.round(result.ratioRightmost * w);
+      ctx.fillStyle = 'rgba(255, 255, 0, 0.95)';
+      ctx.fillRect(xC - 1, 0, 2, h);
+      if (xS !== xC) {
+        ctx.fillStyle = 'rgba(0, 200, 255, 0.6)';
+        ctx.fillRect(xS - 1, 0, 1, h);
+      }
+      if (xR !== xC && xR !== xS) {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+        ctx.fillRect(xR - 1, 0, 1, h);
+      }
+    } catch (_) { /* ignore */ }
+  }
+
+  async function ocrMpRegionFromBar() {
+    if (!autoDetect.mpBarRegion) return null;
+    const userMax = parseInt(dom.inMaxMp.value, 10) || 0;
+    if (userMax <= 0) {
+      // userMax 미입력 시 바 모드 의미 없음 → null 반환 (UI에서 안내)
+      return { text: 'INPUTS의 최대 MP 입력 필요', confidence: 0, parsed: null };
+    }
+    const canvas = captureRegionToRawCanvas(autoDetect.mpBarRegion, 1, {});
+    if (!canvas) return null;
+    const result = computeBarFillRatio(canvas, autoDetect.mpBarRefColor);
+    if (!result) {
+      updatePreview(dom.adMpPreview, canvas);
+      return { text: '바 분석 실패', confidence: 0, parsed: null };
+    }
+    // 시각화 (보드 오버레이) — 사용자가 검출 결과를 한눈에 진단 가능
+    drawBarDetectionOverlay(canvas, result);
+    updatePreview(dom.adMpPreview, canvas);
+    const { ratio, ratioSmoothed, ratioCluster, ratioRightmost, filledCols, totalCols, refHue, clusterBoundary } = result;
+    // === filledCount 기반 cur 계산 ===
+    //   보정값(mpBarMaxX) = 100% MP 시점 filled column 수
+    //   현재 filled column / 보정값 = 비율
+    //   RGB 매칭이라 빈 영역이 정확히 배제됨 → filled 픽셀 수가 직접 비례
+    const maxFilled = parseInt(autoDetect.mpBarMaxX, 10) || 0;
+    let calibratedRatio;
+    let chosen;
+    if (maxFilled > 0) {
+      calibratedRatio = Math.max(0, Math.min(1, filledCols / maxFilled));
+      chosen = 'filled/calib';
+    } else {
+      // 미보정 — fallback chain (이전 boundary 방식)
+      let chosenRatio = ratioCluster;
+      chosen = 'cluster';
+      if (chosenRatio < 0.005 && ratioSmoothed > 0.005) { chosen = 'smoothed'; chosenRatio = ratioSmoothed; }
+      if (chosenRatio < 0.005 && ratioRightmost > 0.005) { chosen = 'rightmost'; chosenRatio = ratioRightmost; }
+      if (chosenRatio < 0.005 && ratio > 0.005) { chosen = 'ratio'; chosenRatio = ratio; }
+      calibratedRatio = chosenRatio;
+    }
+    const cur = Math.round(userMax * calibratedRatio);
+    const hueLabel = refHue < 0 ? 'RGB' : Math.round(refHue) + '°';
+    console.log('[MP bar] filled=' + filledCols + '/' + (maxFilled || totalCols) + ' (' + (calibratedRatio * 100).toFixed(1) + '%) cluster=' + (ratioCluster * 100).toFixed(1) + '% [' + chosen + '] → cur=' + cur + '/' + userMax);
+    return {
+      text: 'bar:' + (calibratedRatio * 100).toFixed(1) + '% [' + chosen + ']',
+      confidence: 95,
+      parsed: { cur, max: userMax, agreementCount: 1, totalAttempts: 1 },
+      barMode: true,
+      ratio: calibratedRatio,
+      refHue,
+      chosen,
+      calibratedMaxFilled: maxFilled
+    };
+  }
+
+  // 100% MP 보정 — 현재 mp 바 captured에서 cluster boundary를 mpBarMaxX로 저장.
+  //   사용자가 MP 가득 찼을 때 호출. 이후 모든 측정은 이 width 대비 비율.
+  async function calibrateMpBarMax() {
+    const writeStatus = (s) => { if (dom.adCalibrateStatus) dom.adCalibrateStatus.textContent = s; };
+    console.warn('[calibrate v18] STEP 1: 함수 진입');
+    writeStatus('🎯 [v18] STEP 1 함수 진입');
+    try {
+      if (!autoDetect.mpBarRegion) {
+        console.warn('[calibrate] STEP 2 FAIL: mpBarRegion 없음');
+        writeStatus('🎯 [v18] ❌ MP 바 영역 미지정');
+        flashHint('⚠️ 먼저 [📊 MP 바] 영역을 지정하세요.');
+        return;
+      }
+      writeStatus('🎯 STEP 2 OK: 영역 ' + autoDetect.mpBarRegion.width + '×' + autoDetect.mpBarRegion.height);
+      const cap = captureStreams.get(autoDetect.mpBarRegion.sourceId);
+      if (!cap || !cap.video) {
+        writeStatus('🎯 STEP 3 캡처 스트림 시작 중...');
+        try {
+          await setupCaptureStreams();
+          writeStatus('🎯 STEP 3 캡처 스트림 준비 완료');
+        } catch (e) {
+          writeStatus('🎯 ❌ STEP 3 FAIL: ' + (e.message || e));
+          return;
+        }
+      } else {
+        writeStatus('🎯 STEP 3 OK: 기존 스트림 사용');
+      }
+      let canvas;
+      try {
+        canvas = captureRegionToRawCanvas(autoDetect.mpBarRegion, 1, {});
+        writeStatus('🎯 STEP 4 OK: canvas ' + (canvas ? canvas.width + 'x' + canvas.height : 'null'));
+      } catch (e) {
+        writeStatus('🎯 ❌ STEP 4 FAIL: ' + (e.message || e));
+        return;
+      }
+      if (!canvas) {
+        writeStatus('🎯 ❌ STEP 4b FAIL: canvas null');
+        return;
+      }
+      writeStatus('🎯 STEP 5 보정 분석 중...');
+      // 보정 시점: 캔버스 데이터 직접 가져와서 fill 영역(5~25%)의 평균 RGB 계산 → refColor
+      const ctxC = canvas.getContext('2d', { willReadFrequently: true });
+      const wC = canvas.width, hC = canvas.height;
+      const dataC = ctxC.getImageData(0, 0, wC, hC).data;
+      const refStart = Math.max(0, Math.floor(wC * 0.05));
+      const refEnd = Math.max(refStart + 5, Math.floor(wC * 0.25));
+      const refColor = computeAvgRgb(dataC, wC, hC, refStart, refEnd);
+      if (!refColor) {
+        writeStatus('🎯 ❌ STEP 5 FAIL: refColor 계산 불가');
+        return;
+      }
+      autoDetect.mpBarRefColor = { r: refColor.r, g: refColor.g, b: refColor.b };
+      // refColor 저장 후 분석 — RGB 매칭 적용
+      const result = computeBarFillRatio(canvas, autoDetect.mpBarRefColor);
+      if (!result) {
+        writeStatus('🎯 ❌ STEP 5 FAIL: 분석 결과 없음');
+        return;
+      }
+      // 보정값: filledCount 직접 사용 (총 fill column 수, ratio가 아닌 raw count)
+      const filledAtFull = result.filledCols;
+      if (!Number.isFinite(filledAtFull) || filledAtFull < 5) {
+        writeStatus('🎯 ❌ STEP 6 FAIL: 채움 cols 부족 filled=' + filledAtFull);
+        return;
+      }
+      autoDetect.mpBarMaxX = filledAtFull;  // 100% MP일 때 fill columns 수
+      S.saveAutoDetect(autoDetect);
+      renderAutoDetectInfo();
+      const pct = Math.round(filledAtFull / result.totalCols * 100);
+      const msg = '✅ 보정 완료 — 100% = ' + filledAtFull + ' filled cols / ' + result.totalCols + ' (' + pct + '%) RGB=(' + Math.round(refColor.r) + ',' + Math.round(refColor.g) + ',' + Math.round(refColor.b) + ')';
+      flashHint('✅ 보정 완료');
+      console.warn('[calibrate v22] SUCCESS:', msg);
+      writeStatus('🎯 ' + msg);
+    } catch (e) {
+      console.error('[calibrate] 예외:', e);
+      writeStatus('🎯 ❌ 예외: ' + (e.message || e));
+      flashHint('⚠️ 보정 실패: ' + (e.message || e));
+    }
   }
 
   async function ocrMpRegionTesseract() {
@@ -1493,9 +2549,10 @@
     for (const [k, cnt] of Object.entries(counts)) {
       if (cnt > bestCount) { bestCount = cnt; bestKey = k; }
     }
-    // PSM 2개 둘 다 일치할 때만 채택 — 한쪽만 보면 stability 통과해 박힐 위험
-    if (bestCount < 2) {
-      console.log('[OCR MP] 다수결 미충족 (PSM마다 결과 다름):', counts, '→ skip');
+    // PSM 단일 결과도 허용 (stability check이 false positive 차단)
+    //   2/2 strict 했을 때 정상 결과도 reject되는 문제 → 1/2도 통과시키되
+    //   stability 검증 횟수 (기본 1회 → 2회로) + plausibility (max 일치 등) 로 안정성 확보
+    if (bestCount < 1) {
       return { text: results[0].text, confidence: results[0].confidence, parsed: null };
     }
     const [bestCur, bestMax] = bestKey.split('/').map((s) => parseInt(s, 10));
@@ -1590,37 +2647,51 @@
     updatePreview(dom.adAdenaPreview, canvas);
     const w = await initOcrWorker();
 
-    // PSM 7/8/13 다수결 — 글리프 유사 숫자(4↔9 등) 헷갈림 차단
+    // 다양한 글리프 표현을 얻기 위해 두 가지 캔버스로 OCR 실행
+    //   - canvas: preprocessed (sharpen + contrast stretch) 12x — 기본
+    //   - canvasRaw: raw 16x nearest-neighbor (전처리 없음) — 4↔9 같은 confusion에 다른 의견 제공
+    //     pad: 10 — 사용자가 leading 글자(앞자리)를 살짝 잘랐을 때 보충 (digit-drop 방지)
+    // 각 캔버스 × PSM 7/8/13 = 최대 6개 결과 수집
+    let canvasRaw = null;
+    try {
+      canvasRaw = captureRegionToRawCanvas(autoDetect.adenaRegion, 16, { pad: 10 });
+    } catch (_) { canvasRaw = null; }
+
     const psmModes = ['7', '8', '13'];
     const results = [];
-    for (const psm of psmModes) {
-      try {
-        await w.setParameters({
-          tessedit_char_whitelist: '0123456789,',
-          tessedit_pageseg_mode: psm,
-          load_system_dawg: '0', load_freq_dawg: '0',
-          load_unambig_dawg: '0', load_punc_dawg: '0',
-          load_number_dawg: '0', load_bigram_dawg: '0'
-        });
-        const res = await w.recognize(canvas);
-        const text = ((res && res.data && res.data.text) || '').trim();
-        const rawConf = (res && res.data && res.data.confidence);
-        const confidence = Math.max(0, Number.isFinite(rawConf) ? rawConf : 0);
-        const digits = text.replace(/[^0-9]/g, '');
-        const adena = digits ? parseInt(digits, 10) : NaN;
-        results.push({ psm, text, confidence, adena });
-        console.log('[OCR ADENA psm=' + psm + '] text=' + JSON.stringify(text) + ' conf=' + Math.round(confidence) + ' adena=' + adena);
-      } catch (e) {
-        console.warn('[OCR ADENA psm=' + psm + '] failed:', e);
+    const recognizeOn = async (label, c) => {
+      for (const psm of psmModes) {
+        try {
+          await w.setParameters({
+            tessedit_char_whitelist: '0123456789,',
+            tessedit_pageseg_mode: psm,
+            load_system_dawg: '0', load_freq_dawg: '0',
+            load_unambig_dawg: '0', load_punc_dawg: '0',
+            load_number_dawg: '0', load_bigram_dawg: '0'
+          });
+          const res = await w.recognize(c);
+          const text = ((res && res.data && res.data.text) || '').trim();
+          const rawConf = (res && res.data && res.data.confidence);
+          const confidence = Math.max(0, Number.isFinite(rawConf) ? rawConf : 0);
+          const digits = text.replace(/[^0-9]/g, '');
+          const adena = digits ? parseInt(digits, 10) : NaN;
+          results.push({ src: label, psm, text, confidence, digits, adena });
+          console.log('[OCR ADENA ' + label + ' psm=' + psm + '] text=' + JSON.stringify(text) + ' conf=' + Math.round(confidence) + ' adena=' + adena);
+        } catch (e) {
+          console.warn('[OCR ADENA ' + label + ' psm=' + psm + '] failed:', e);
+        }
       }
-    }
+    };
+    await recognizeOn('pp', canvas);
+    if (canvasRaw) await recognizeOn('raw', canvasRaw);
 
     if (results.length === 0) return null;
     const valid = results.filter((r) => Number.isFinite(r.adena) && r.adena >= 0 && r.adena <= 9999999999);
     if (valid.length === 0) {
       return { text: results[0].text, confidence: results[0].confidence, parsed: null };
     }
-    // 다수결: 같은 adena 값을 카운트
+
+    // ===== 1차: 풀-넘버 다수결 =====
     const counts = {};
     valid.forEach((r) => { counts[r.adena] = (counts[r.adena] || 0) + 1; });
     let bestAdena = valid[0].adena;
@@ -1628,9 +2699,98 @@
     for (const [v, cnt] of Object.entries(counts)) {
       if (cnt > bestCount) { bestCount = cnt; bestAdena = parseInt(v, 10); }
     }
-    // 2/3 미달이면 parsed null로 → 다음 틱 재시도 (stability check 자연스럽게 미통과)
-    if (bestCount < 2) {
-      console.log('[OCR ADENA] 다수결 약함 (PSM마다 결과 다름):', counts, '→ skip');
+
+    // ===== 1.5차: Leading-digit-drop 검출 =====
+    //   - 한 캔버스가 N자리, 다른 캔버스가 N+1자리 읽고 N자리가 N+1자리의 마지막 N자리와 동일하면
+    //     앞자리 누락 misread → 긴 쪽 채택 (anchor 없어도 동작)
+    //   - 예: 41293 (raw) + 1293 (pp) → "1293"이 "41293"의 suffix → 41293 채택
+    //   - 핵심: 적어도 하나의 결과가 더 길어야 — 짧은 다수결로 끌려가는 것 방지
+    {
+      const lengths = [...new Set(valid.map((r) => r.digits.length))].sort((a, b) => b - a);
+      if (lengths.length >= 2 && lengths[0] - lengths[1] === 1) {
+        const longLen = lengths[0];
+        const shortLen = lengths[1];
+        const longResults = valid.filter((r) => r.digits.length === longLen);
+        const shortResults = valid.filter((r) => r.digits.length === shortLen);
+        // 긴 결과들 중 가장 빈도 높은 값
+        const longCounts = {};
+        longResults.forEach((r) => { longCounts[r.adena] = (longCounts[r.adena] || 0) + 1; });
+        let topLongAdena = NaN, topLongCnt = 0;
+        for (const [v, cnt] of Object.entries(longCounts)) {
+          if (cnt > topLongCnt) { topLongCnt = cnt; topLongAdena = parseInt(v, 10); }
+        }
+        // 짧은 결과 중 적어도 하나가 긴 결과의 suffix와 일치 → leading-digit-drop
+        const longStr = String(topLongAdena);
+        const suffixHit = shortResults.some((r) => r.digits === longStr.slice(-shortLen));
+        // 1자리만 누락 + suffix 매치 + leading digit가 1~9 (≠0) 인 경우만 채택
+        const leadingDigit = longStr[0];
+        if (suffixHit && leadingDigit && leadingDigit !== '0' && Number.isFinite(topLongAdena)) {
+          const matched = longResults.filter((r) => r.adena === topLongAdena);
+          const avgConf = matched.reduce((s, r) => s + r.confidence, 0) / Math.max(1, matched.length);
+          console.log('[OCR ADENA] leading-digit-drop 보정: long=' + topLongAdena + ' (' + longLen + '자리, ' + topLongCnt + '/' + longResults.length + ') vs short=' + shortResults.map((r) => r.digits).join(','));
+          return {
+            text: String(topLongAdena),
+            confidence: avgConf,
+            parsed: { adena: topLongAdena, agreementCount: topLongCnt, totalAttempts: valid.length, leadingDigitRescue: true }
+          };
+        }
+      }
+    }
+
+    // ===== 2차: 자릿수가 모두 같을 때 자리수별(per-digit) 다수결 =====
+    //   - 4↔9, 6↔8 같은 단일 자리 confusion이 모든 PSM에서 동일하게 발생해도
+    //     변형 캔버스(raw)에서 다른 의견이 한 번이라도 나오면 위치별 majority가 정답에 수렴
+    //   - 예: pp:39326,39326,39326 + raw:34326,39326,34326 → 자리별 [3,4|9,3,2,6] → 4 win
+    let perDigitAdena = NaN;
+    let perDigitDetail = null;
+    const digitsList = valid.map((r) => r.digits);
+    const lenCounts = {};
+    digitsList.forEach((s) => { lenCounts[s.length] = (lenCounts[s.length] || 0) + 1; });
+    let dominantLen = 0, dominantLenCnt = 0;
+    for (const [L, cnt] of Object.entries(lenCounts)) {
+      if (cnt > dominantLenCnt) { dominantLenCnt = cnt; dominantLen = parseInt(L, 10); }
+    }
+    if (dominantLen > 0 && dominantLenCnt >= Math.ceil(valid.length / 2)) {
+      const sameLen = digitsList.filter((s) => s.length === dominantLen);
+      const perPos = [];
+      for (let i = 0; i < dominantLen; i++) {
+        const c = {};
+        sameLen.forEach((s) => { const ch = s[i]; c[ch] = (c[ch] || 0) + 1; });
+        let bestCh = null, bestN = 0;
+        for (const [ch, n] of Object.entries(c)) {
+          if (n > bestN) { bestN = n; bestCh = ch; }
+        }
+        // 단일 위치에서 동률(tie)이면 위치 다수결 무효 — 안전하게 풀-넘버로 fallback
+        const tieAtPos = Object.values(c).filter((n) => n === bestN).length > 1;
+        perPos.push({ best: bestCh, count: bestN, tie: tieAtPos, dist: c });
+      }
+      const tieFound = perPos.some((p) => p.tie);
+      if (!tieFound) {
+        const reconstructed = perPos.map((p) => p.best).join('');
+        const n = parseInt(reconstructed, 10);
+        if (Number.isFinite(n) && n >= 0 && n <= 9999999999) {
+          perDigitAdena = n;
+          perDigitDetail = perPos.map((p, i) => 'pos' + i + ':' + p.best + '(' + p.count + '/' + sameLen.length + ')').join(' ');
+        }
+      }
+    }
+
+    // 2차가 1차와 다른 결과를 도출하면 자릿수별 다수결을 우선 (글리프 confusion 보정)
+    if (Number.isFinite(perDigitAdena) && perDigitAdena !== bestAdena) {
+      console.log('[OCR ADENA] per-digit override: full-num=' + bestAdena + ' → per-digit=' + perDigitAdena + ' (' + perDigitDetail + ')');
+      const matched = valid.filter((r) => r.digits.length === dominantLen);
+      const avgConf = matched.reduce((s, r) => s + r.confidence, 0) / Math.max(1, matched.length);
+      return {
+        text: String(perDigitAdena),
+        confidence: avgConf,
+        parsed: { adena: perDigitAdena, agreementCount: dominantLenCnt, totalAttempts: valid.length, perDigit: true }
+      };
+    }
+
+    // 1차 다수결: half 미달이면 parsed null로 → 다음 틱 재시도
+    const minRequired = Math.max(2, Math.ceil(valid.length / 2));
+    if (bestCount < minRequired) {
+      console.log('[OCR ADENA] 다수결 약함 (PSM/canvas마다 결과 다름):', counts, '→ skip');
       return { text: results[0].text, confidence: results[0].confidence, parsed: null };
     }
     const matched = valid.filter((r) => r.adena === bestAdena);
@@ -1821,8 +2981,9 @@
 
   async function ocrAdenaRegionPaddle() {
     if (!autoDetect.adenaRegion) return null;
-    // ADENA만 padding을 16으로 — 코인 아이콘 옆 / 영역 가장자리에 글자 닿아 자리 누락되는 문제 완화
-    const canvas = captureRegionToRawCanvas(autoDetect.adenaRegion, 1, { pad: 4 });
+    // ADENA만 padding을 크게 — 코인 아이콘 옆 / 영역 가장자리에 글자 닿아 자리 누락되는 문제 완화
+    // pad: 10 — 사용자가 leading 글자(앞자리)를 살짝 잘랐을 때 보충 (digit-drop 방지)
+    const canvas = captureRegionToRawCanvas(autoDetect.adenaRegion, 1, { pad: 10 });
     if (!canvas) return null;
     updatePreview(dom.adAdenaPreview, canvas);
     if (!window.MpPaddle) return null;
@@ -1887,27 +3048,51 @@
   async function ocrMpRegion() {
     // 사용자가 INPUTS의 현재 MP 칸 편집 중이면 OCR skip (덮어쓰기 방지)
     if (isUserEditing('mp')) return null;
-    if (autoDetect.ocrEngine === 'paddle') return await ocrMpRegionPaddle();
-    if (autoDetect.ocrEngine === 'hybrid') return await ocrMpRegionHybrid();
-    return await ocrMpRegionTesseract();
+    let r;
+    // 1순위 — 바 픽셀 모드: mpBarRegion 지정 + useMpBar 토글 ON
+    //   OCR 완전 우회. 컬러 채움 비율 × userMax = cur (100% 정확)
+    if (autoDetect.useMpBar && autoDetect.mpBarRegion) r = await ocrMpRegionFromBar();
+    // 2순위 — 기존 OCR 엔진 dispatcher
+    else if (autoDetect.ocrEngine === 'paddle') r = await ocrMpRegionPaddle();
+    else if (autoDetect.ocrEngine === 'hybrid') r = await ocrMpRegionHybrid();
+    else r = await ocrMpRegionTesseract();
+    if (r && r.parsed && Number.isFinite(r.parsed.cur) && Number.isFinite(r.parsed.max)) {
+      recentOcrResults.mp = r.parsed.cur + '/' + r.parsed.max;
+    }
+    return r;
   }
   async function ocrLevelRegion() {
     if (isUserEditing('level')) return null;
-    if (autoDetect.ocrEngine === 'paddle') return await ocrLevelRegionPaddle();
-    if (autoDetect.ocrEngine === 'hybrid') return await ocrLevelRegionHybrid();
-    return await ocrLevelRegionTesseract();
+    let r;
+    if (autoDetect.ocrEngine === 'paddle') r = await ocrLevelRegionPaddle();
+    else if (autoDetect.ocrEngine === 'hybrid') r = await ocrLevelRegionHybrid();
+    else r = await ocrLevelRegionTesseract();
+    if (r && r.parsed && Number.isFinite(r.parsed.level)) {
+      recentOcrResults.level = String(r.parsed.level);
+    }
+    return r;
   }
   async function ocrAdenaRegion() {
     if (isUserEditing('adena')) return null;
-    if (autoDetect.ocrEngine === 'paddle') return await ocrAdenaRegionPaddle();
-    if (autoDetect.ocrEngine === 'hybrid') return await ocrAdenaRegionHybrid();
-    return await ocrAdenaRegionTesseract();
+    let r;
+    if (autoDetect.ocrEngine === 'paddle') r = await ocrAdenaRegionPaddle();
+    else if (autoDetect.ocrEngine === 'hybrid') r = await ocrAdenaRegionHybrid();
+    else r = await ocrAdenaRegionTesseract();
+    if (r && r.parsed && Number.isFinite(r.parsed.adena)) {
+      recentOcrResults.adena = String(r.parsed.adena);
+    }
+    return r;
   }
   async function ocrExpRegion() {
     if (isUserEditing('exp')) return null;
-    if (autoDetect.ocrEngine === 'paddle') return await ocrExpRegionPaddle();
-    if (autoDetect.ocrEngine === 'hybrid') return await ocrExpRegionHybrid();
-    return await ocrExpRegionTesseract();
+    let r;
+    if (autoDetect.ocrEngine === 'paddle') r = await ocrExpRegionPaddle();
+    else if (autoDetect.ocrEngine === 'hybrid') r = await ocrExpRegionHybrid();
+    else r = await ocrExpRegionTesseract();
+    if (r && r.parsed && Number.isFinite(r.parsed.exp)) {
+      recentOcrResults.exp = r.parsed.exp.toFixed(4);
+    }
+    return r;
   }
 
   // ========================================================================
@@ -2049,16 +3234,70 @@
           return tr;
         }
       }
-      // 둘 다 anchor 이상 자릿수 + 불일치 → agreementCount 큰 쪽 (다수결 통과한 결과 더 신뢰)
+      // 둘 다 anchor 이상 자릿수 + 불일치
       if (pDigits >= anchorDigits && tDigits >= anchorDigits) {
         const pAg = (pr.parsed.agreementCount || 1);
         const tAg = (tr.parsed.agreementCount || 1);
+        const pVal = pr.parsed.adena;
+        const tVal = tr.parsed.adena;
+        // === Anti-stuck 휴리스틱 ===
+        // ADENA는 사냥 중 monotonic 증가만 함. 한 엔진이 anchor와 정확히 같고
+        // 다른 엔진은 anchor 너머로 전진했다면 → 일치하는 쪽이 cached misread,
+        // 전진한 쪽이 진짜 새 값일 확률 높음.
+        // 단 jump가 비정상(>20k/tick)이면 reject.
+        if (anchor > 0) {
+          const pIsAnchor = pVal === anchor;
+          const tIsAnchor = tVal === anchor;
+          const MAX_JUMP = 20000;
+          if (tIsAnchor && pVal > anchor && (pVal - anchor) <= MAX_JUMP) {
+            pushHybridLog('ADENA 🟢 paddle 채택 (전진 vs tess stuck@anchor=' + anchor + '): p=' + pVal + ' t=' + tVal);
+            return pr;
+          }
+          if (pIsAnchor && tVal > anchor && (tVal - anchor) <= MAX_JUMP) {
+            pushHybridLog('ADENA 🟢 tess 채택 (전진 vs paddle stuck@anchor=' + anchor + '): t=' + tVal + ' p=' + pVal);
+            return tr;
+          }
+          // Anti-backward: 한쪽이 anchor와 정확 일치 + 다른쪽이 anchor 미만 → anchor 일치 쪽 신뢰
+          //   (사용자가 anchor를 수동 보정한 경우, 잘못된 쪽이 backward로 떨어짐)
+          if (pIsAnchor && tVal < anchor) {
+            pushHybridLog('ADENA 🟢 paddle 채택 (anchor 일치 vs tess backward): p=' + pVal + ' t=' + tVal);
+            return pr;
+          }
+          if (tIsAnchor && pVal < anchor) {
+            pushHybridLog('ADENA 🟢 tess 채택 (anchor 일치 vs paddle backward): t=' + tVal + ' p=' + pVal);
+            return tr;
+          }
+          // 둘 다 anchor 미만 (backward) → reject (anchor 보존)
+          if (pVal < anchor && tVal < anchor) {
+            pushHybridLog('ADENA ❌ 둘 다 backward (p=' + pVal + ' t=' + tVal + ' < anchor=' + anchor + ') — 보존');
+            return { text: 'mismatch p:' + pr.text + ' t:' + tr.text, confidence: 0, parsed: null };
+          }
+          // 둘 다 anchor와 다르고 둘 다 anchor보다 큼 → ADENA monotonic 가정상 큰 쪽
+          //   (digit shrink misread (8→5) 가 enlarge misread (5→8) 보다 빈도 높음)
+          //   단 비율 차이 3배 이상이면 한쪽이 자릿수-수준 misread일 수 있어 reject
+          if (pVal > anchor && tVal > anchor && pVal !== tVal) {
+            const pDelta = pVal - anchor;
+            const tDelta = tVal - anchor;
+            const ratio = Math.max(pDelta, tDelta) / Math.max(1, Math.min(pDelta, tDelta));
+            if (ratio < 3 && Math.max(pDelta, tDelta) <= MAX_JUMP) {
+              if (pVal > tVal) {
+                pushHybridLog('ADENA 🟡 paddle 채택 (larger forward): p=' + pVal + ' t=' + tVal + ' (anchor=' + anchor + ')');
+                return pr;
+              }
+              if (tVal > pVal) {
+                pushHybridLog('ADENA 🟡 tess 채택 (larger forward): t=' + tVal + ' p=' + pVal + ' (anchor=' + anchor + ')');
+                return tr;
+              }
+            }
+          }
+        }
+        // 그 외 — agreementCount fallback (다수결 통과한 결과 더 신뢰)
         if (tAg > pAg) {
-          pushHybridLog('ADENA 🟡 tess 채택 (agreement ↑ ' + tAg + '>' + pAg + '): ' + tr.parsed.adena);
+          pushHybridLog('ADENA 🟡 tess 채택 (agreement ↑ ' + tAg + '>' + pAg + '): t=' + tVal + ' p=' + pVal);
           return tr;
         }
         if (pAg > tAg) {
-          pushHybridLog('ADENA 🟡 paddle 채택 (agreement ↑ ' + pAg + '>' + tAg + '): ' + pr.parsed.adena);
+          pushHybridLog('ADENA 🟡 paddle 채택 (agreement ↑ ' + pAg + '>' + tAg + '): p=' + pVal + ' t=' + tVal);
           return pr;
         }
       }
@@ -2177,8 +3416,8 @@
     detectionRunningSince = Date.now();
     const threshold = (typeof autoDetect.confidenceThreshold === 'number') ? autoDetect.confidenceThreshold : 0;
     try {
-      // MP 영역
-      if (autoDetect.mpRegion) {
+      // MP 영역 (또는 MP 바 영역) — useMpBar 모드에서는 mpBarRegion만 있어도 측정
+      if (autoDetect.mpRegion || (autoDetect.useMpBar && autoDetect.mpBarRegion)) {
         try {
           const r = await ocrMpRegion();
           if (r) {
@@ -2468,9 +3707,10 @@
 
   async function startAutoDetect() {
     const hasMp = !!(autoDetect.mpRegion && autoDetect.mpRegion.sourceId);
+    const hasMpBar = !!(autoDetect.mpBarRegion && autoDetect.mpBarRegion.sourceId);
     const hasExp = !!(autoDetect.expRegion && autoDetect.expRegion.sourceId);
-    if (!hasMp && !hasExp) {
-      flashHint('먼저 [📷 MP 영역] 또는 [📷 경험치 영역]을 지정하세요.');
+    if (!hasMp && !hasMpBar && !hasExp) {
+      flashHint('먼저 [📷 MP 영역] / [📊 MP 바] / [📷 경험치 영역] 중 하나를 지정하세요.');
       return;
     }
     setAdStatus('초기화...', 'on');
@@ -2620,10 +3860,14 @@
       if (kind === 'exp') autoDetect.expRegion = regionData;
       else if (kind === 'level') autoDetect.levelRegion = regionData;
       else if (kind === 'adena') autoDetect.adenaRegion = regionData;
+      else if (kind === 'mpBar') {
+        autoDetect.mpBarRegion = regionData;
+        autoDetect.useMpBar = true;  // 바 영역 새로 지정 시 자동 활성화
+      }
       else autoDetect.mpRegion = regionData;
       S.saveAutoDetect(autoDetect);
       renderAutoDetectInfo();
-      const kindLabel = kind === 'exp' ? '경험치' : kind === 'level' ? '레벨' : kind === 'adena' ? '아데나' : 'MP';
+      const kindLabel = kind === 'exp' ? '경험치' : kind === 'level' ? '레벨' : kind === 'adena' ? '아데나' : kind === 'mpBar' ? 'MP 바' : 'MP';
       flashHint(`✅ ${kindLabel} 영역 지정 완료 (${selected.label})`);
       if (wasOn) startAutoDetect();
     } catch (e) {
@@ -2934,6 +4178,10 @@
     dom.btnTray.addEventListener('click', () => {
       if (api && api.minimizeToTray) api.minimizeToTray();
     });
+    if (dom.btnCompact) {
+      dom.btnCompact.addEventListener('click', () => toggleCompactMode());
+    }
+    setupTrainingControls();
     dom.btnQuit.addEventListener('click', () => {
       if (api && api.quit) api.quit(); else window.close();
     });
@@ -3076,9 +4324,39 @@
 
     // Auto-detect
     if (dom.btnAdMpRegion) dom.btnAdMpRegion.addEventListener('click', () => onPickRegion('mp'));
+    if (dom.btnAdMpBarRegion) dom.btnAdMpBarRegion.addEventListener('click', () => onPickRegion('mpBar'));
+    if (dom.btnAdMpBarCalibrate) {
+      console.warn('[bind v18] 🎯 보정 listener attached');
+      dom.btnAdMpBarCalibrate.addEventListener('click', function () {
+        // === v18: 결과를 dom.adCalibrateStatus(전용 영역, OCR loop 무관)에 출력 ===
+        const writeStatus = (s) => { if (dom.adCalibrateStatus) dom.adCalibrateStatus.textContent = s; };
+        writeStatus('🎯 [v18] 보정 시작...');
+        console.warn('[click v18] STEP A: handler 진입');
+        if (typeof calibrateMpBarMax !== 'function') {
+          writeStatus('🎯 [v18] ❌ 함수 미정의 (typeof=' + typeof calibrateMpBarMax + ')');
+          return;
+        }
+        Promise.resolve()
+          .then(() => calibrateMpBarMax())
+          .then((result) => {
+            console.warn('[click v18] STEP D: 정상 종료', result);
+          })
+          .catch((e) => {
+            console.error('[click v18] STEP E: 예외', e);
+            writeStatus('🎯 [v18] ❌ 예외: ' + (e && e.message ? e.message : e));
+          });
+      });
+    } else {
+      console.warn('[bind v18] btn-ad-mp-bar-calibrate ELEMENT NOT FOUND in DOM');
+    }
     if (dom.btnAdExpRegion) dom.btnAdExpRegion.addEventListener('click', () => onPickRegion('exp'));
     if (dom.btnAdLevelRegion) dom.btnAdLevelRegion.addEventListener('click', () => onPickRegion('level'));
     if (dom.btnAdAdenaRegion) dom.btnAdAdenaRegion.addEventListener('click', () => onPickRegion('adena'));
+    if (dom.chkAdUseMpBar) dom.chkAdUseMpBar.addEventListener('change', () => {
+      autoDetect.useMpBar = dom.chkAdUseMpBar.checked;
+      S.saveAutoDetect(autoDetect);
+      renderAutoDetectInfo();
+    });
     if (dom.btnAdToggle) dom.btnAdToggle.addEventListener('click', toggleAutoDetect);
 
     // Paddle 비교 테스트: 한 번 캡처해서 paddle로 인식 → 결과 표시
@@ -3332,6 +4610,7 @@
     if (dom.btnOpenDevtools) dom.btnOpenDevtools.addEventListener('click', openDevToolsClick);
     document.addEventListener('keydown', (e) => {
       if (e.key === 'F12') { e.preventDefault(); openDevToolsClick(); }
+      if (e.key === 'F3') { e.preventDefault(); toggleCompactMode(); }
     });
 
     // 디버그 정보 클립보드 복사
@@ -3519,6 +4798,11 @@
       dom.btnPin.classList.add('active');
     }
     applyTheme(s.theme || 'green', false);
+    // 컴팩트 모드 복원 (이전 세션 ON 상태였으면)
+    if (s.compactMode) {
+      // 약간 delay — DOM 준비 + window setSize race 방지
+      setTimeout(() => setCompactMode(true), 100);
+    }
   }
 
   async function applyAppVersion() {

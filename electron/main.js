@@ -8,7 +8,8 @@ const {
   Notification,
   globalShortcut,
   screen,
-  desktopCapturer
+  desktopCapturer,
+  shell
 } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -322,6 +323,35 @@ ipcMain.handle('app:reset-window-size', () => {
   saveBounds();
 });
 
+// 컴팩트 모드 — ON: 작은 창 (560×190, 트래커 행 포함), OFF: 이전 크기 복원
+let savedBoundsBeforeCompact = null;
+ipcMain.handle('app:set-compact-mode', (_, enabled) => {
+  if (!mainWindow) return;
+  if (enabled) {
+    // 현재 크기 저장
+    if (!savedBoundsBeforeCompact) {
+      const [w, h] = mainWindow.getSize();
+      savedBoundsBeforeCompact = { width: w, height: h };
+    }
+    // minimumSize 임시 완화 (기본 440×540 → 360×130) — 트래커 행 추가로 최소 높이 ↑
+    mainWindow.setMinimumSize(360, 130);
+    const fitted = fitToWorkArea(560, 190);
+    mainWindow.setSize(fitted.width, fitted.height);
+  } else {
+    // minimumSize 원복
+    mainWindow.setMinimumSize(440, 540);
+    if (savedBoundsBeforeCompact) {
+      const fitted = fitToWorkArea(savedBoundsBeforeCompact.width, savedBoundsBeforeCompact.height);
+      mainWindow.setSize(fitted.width, fitted.height);
+      savedBoundsBeforeCompact = null;
+    } else {
+      const fitted = fitToWorkArea(580, 980);
+      mainWindow.setSize(fitted.width, fitted.height);
+    }
+  }
+  saveBounds();
+});
+
 ipcMain.handle('app:set-global-hotkeys', (_, map) => {
   return registerGlobalHotkeys(map || {});
 });
@@ -516,4 +546,236 @@ ipcMain.handle('app:start-region-select', async (_, displayId) => {
     ipcMain.once('overlay:region-selected', onSelected);
     ipcMain.once('overlay:cancelled', onCancel);
   });
+});
+
+// ========== 학습 데이터 수집 (Tesseract LSTM 학습용) ==========
+//   저장 위치: %APPDATA%/LineageMPTimer/training-data/{mp,exp,level,adena}/
+//   파일 형식: <safe-label>_<timestamp>.png + <safe-label>_<timestamp>.gt.txt
+//   - .gt.txt 는 Tesseract LSTM `lstm.train` 호환 ground truth 파일
+const TRAINING_REGIONS = ['mp', 'exp', 'level', 'adena'];
+function trainingDataDir(region) {
+  const base = path.join(app.getPath('userData'), 'training-data');
+  return region ? path.join(base, region) : base;
+}
+function ensureTrainingDirs() {
+  for (const r of TRAINING_REGIONS) {
+    try { fs.mkdirSync(trainingDataDir(r), { recursive: true }); } catch (_) {}
+  }
+}
+function safeLabel(s) {
+  // 파일명에 안전한 문자만 — 숫자, 점, 슬래시→of, 그 외→_
+  return String(s ?? '')
+    .replace(/\//g, 'of')
+    .replace(/\./g, 'p')
+    .replace(/[^0-9A-Za-z_-]/g, '_')
+    .slice(0, 32) || 'unlabeled';
+}
+function timestampStr() {
+  const d = new Date();
+  return d.getFullYear()
+    + String(d.getMonth() + 1).padStart(2, '0')
+    + String(d.getDate()).padStart(2, '0')
+    + '_'
+    + String(d.getHours()).padStart(2, '0')
+    + String(d.getMinutes()).padStart(2, '0')
+    + String(d.getSeconds()).padStart(2, '0')
+    + '_'
+    + String(d.getMilliseconds()).padStart(3, '0');
+}
+
+ipcMain.handle('app:save-training-sample', (_, payload) => {
+  try {
+    if (!payload || typeof payload !== 'object') return { ok: false, error: 'invalid payload' };
+    const { region, dataUrl, label, gtText } = payload;
+    if (!TRAINING_REGIONS.includes(region)) return { ok: false, error: 'invalid region' };
+    if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) return { ok: false, error: 'invalid dataUrl' };
+    if (typeof label !== 'string' || !label.trim()) return { ok: false, error: 'label required' };
+
+    ensureTrainingDirs();
+    const dir = trainingDataDir(region);
+    const safe = safeLabel(label);
+    const stamp = timestampStr();
+    const baseName = `${safe}_${stamp}`;
+    const pngPath = path.join(dir, baseName + '.png');
+    const gtPath = path.join(dir, baseName + '.gt.txt');
+
+    // dataURL → buffer (data:image/png;base64,...)
+    const m = dataUrl.match(/^data:image\/(png|jpeg|jpg);base64,(.+)$/);
+    if (!m) return { ok: false, error: 'invalid dataUrl format' };
+    const buf = Buffer.from(m[2], 'base64');
+    fs.writeFileSync(pngPath, buf);
+    // ground truth — gtText 우선, 없으면 label
+    fs.writeFileSync(gtPath, String(gtText || label).trim() + '\n', 'utf-8');
+    return { ok: true, file: pngPath, baseName };
+  } catch (e) {
+    console.error('save-training-sample failed', e);
+    return { ok: false, error: String(e && e.message || e) };
+  }
+});
+
+ipcMain.handle('app:get-training-stats', () => {
+  try {
+    ensureTrainingDirs();
+    const stats = { total: 0, byRegion: {}, dir: trainingDataDir() };
+    for (const r of TRAINING_REGIONS) {
+      let count = 0;
+      try {
+        const files = fs.readdirSync(trainingDataDir(r));
+        count = files.filter((f) => f.endsWith('.png')).length;
+      } catch (_) { /* ignore */ }
+      stats.byRegion[r] = count;
+      stats.total += count;
+    }
+    return stats;
+  } catch (e) {
+    return { total: 0, byRegion: {}, error: String(e && e.message || e) };
+  }
+});
+
+ipcMain.handle('app:open-training-folder', () => {
+  try {
+    ensureTrainingDirs();
+    shell.openPath(trainingDataDir());
+    return { ok: true, dir: trainingDataDir() };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message || e) };
+  }
+});
+
+// ========== 미라벨 샘플 (자동 캡처 → 사후 라벨링용) ==========
+//   _pending/{region}/<timestamp>__<safeOcr>.png + 같은이름.json (OCR 메타)
+//   라벨링 후에는 정식 region 폴더로 이동 + .gt.txt 생성
+function pendingDir(region) {
+  const base = path.join(app.getPath('userData'), 'training-data', '_pending');
+  return region ? path.join(base, region) : base;
+}
+function ensurePendingDirs() {
+  for (const r of TRAINING_REGIONS) {
+    try { fs.mkdirSync(pendingDir(r), { recursive: true }); } catch (_) {}
+  }
+}
+
+ipcMain.handle('app:save-pending-sample', (_, payload) => {
+  try {
+    if (!payload || typeof payload !== 'object') return { ok: false, error: 'invalid payload' };
+    const { region, dataUrl, ocrSuggestion } = payload;
+    if (!TRAINING_REGIONS.includes(region)) return { ok: false, error: 'invalid region' };
+    if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) return { ok: false, error: 'invalid dataUrl' };
+    ensurePendingDirs();
+    const dir = pendingDir(region);
+    const stamp = timestampStr();
+    const safeOcr = ocrSuggestion ? safeLabel(ocrSuggestion) : 'noocr';
+    const baseName = `${stamp}__${safeOcr}`;
+    const pngPath = path.join(dir, baseName + '.png');
+    const jsonPath = path.join(dir, baseName + '.json');
+    const m = dataUrl.match(/^data:image\/(png|jpeg|jpg);base64,(.+)$/);
+    if (!m) return { ok: false, error: 'invalid dataUrl format' };
+    fs.writeFileSync(pngPath, Buffer.from(m[2], 'base64'));
+    fs.writeFileSync(jsonPath, JSON.stringify({
+      region, ocrSuggestion: ocrSuggestion || null, capturedAt: new Date().toISOString()
+    }, null, 2), 'utf-8');
+    return { ok: true, baseName, file: pngPath };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message || e) };
+  }
+});
+
+ipcMain.handle('app:list-pending-samples', (_, opts) => {
+  try {
+    ensurePendingDirs();
+    const includeImage = !!(opts && opts.includeImage);
+    const result = { total: 0, byRegion: {}, samples: [] };
+    for (const r of TRAINING_REGIONS) {
+      const dir = pendingDir(r);
+      let files = [];
+      try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.png')); } catch (_) { files = []; }
+      result.byRegion[r] = files.length;
+      result.total += files.length;
+      // sort by timestamp asc
+      files.sort();
+      for (const f of files) {
+        const baseName = f.replace(/\.png$/i, '');
+        const jsonPath = path.join(dir, baseName + '.json');
+        let meta = {};
+        try { meta = JSON.parse(fs.readFileSync(jsonPath, 'utf-8')); } catch (_) {}
+        const sample = {
+          region: r,
+          baseName,
+          ocrSuggestion: meta.ocrSuggestion || '',
+          capturedAt: meta.capturedAt || ''
+        };
+        if (includeImage) {
+          try {
+            const png = fs.readFileSync(path.join(dir, f));
+            sample.dataUrl = 'data:image/png;base64,' + png.toString('base64');
+          } catch (_) { sample.dataUrl = null; }
+        }
+        result.samples.push(sample);
+      }
+    }
+    return result;
+  } catch (e) {
+    return { total: 0, byRegion: {}, samples: [], error: String(e && e.message || e) };
+  }
+});
+
+ipcMain.handle('app:confirm-pending-sample', (_, payload) => {
+  try {
+    const { region, baseName, label } = payload || {};
+    if (!TRAINING_REGIONS.includes(region)) return { ok: false, error: 'invalid region' };
+    if (typeof baseName !== 'string' || !baseName) return { ok: false, error: 'invalid baseName' };
+    if (typeof label !== 'string' || !label.trim()) return { ok: false, error: 'label required' };
+    const srcPng = path.join(pendingDir(region), baseName + '.png');
+    const srcJson = path.join(pendingDir(region), baseName + '.json');
+    if (!fs.existsSync(srcPng)) return { ok: false, error: 'png not found' };
+    ensureTrainingDirs();
+    const dstDir = trainingDataDir(region);
+    const safe = safeLabel(label);
+    const stamp = timestampStr();
+    const dstBase = `${safe}_${stamp}`;
+    const dstPng = path.join(dstDir, dstBase + '.png');
+    const dstGt = path.join(dstDir, dstBase + '.gt.txt');
+    fs.copyFileSync(srcPng, dstPng);
+    fs.writeFileSync(dstGt, label.trim() + '\n', 'utf-8');
+    // pending에서 제거
+    try { fs.unlinkSync(srcPng); } catch (_) {}
+    try { fs.unlinkSync(srcJson); } catch (_) {}
+    return { ok: true, file: dstPng };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message || e) };
+  }
+});
+
+ipcMain.handle('app:delete-pending-sample', (_, payload) => {
+  try {
+    const { region, baseName } = payload || {};
+    if (!TRAINING_REGIONS.includes(region)) return { ok: false, error: 'invalid region' };
+    if (typeof baseName !== 'string' || !baseName) return { ok: false, error: 'invalid baseName' };
+    const png = path.join(pendingDir(region), baseName + '.png');
+    const json = path.join(pendingDir(region), baseName + '.json');
+    try { fs.unlinkSync(png); } catch (_) {}
+    try { fs.unlinkSync(json); } catch (_) {}
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message || e) };
+  }
+});
+
+ipcMain.handle('app:clear-all-pending', () => {
+  try {
+    ensurePendingDirs();
+    let removed = 0;
+    for (const r of TRAINING_REGIONS) {
+      const dir = pendingDir(r);
+      try {
+        const files = fs.readdirSync(dir);
+        for (const f of files) {
+          try { fs.unlinkSync(path.join(dir, f)); removed++; } catch (_) {}
+        }
+      } catch (_) {}
+    }
+    return { ok: true, removed };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message || e) };
+  }
 });

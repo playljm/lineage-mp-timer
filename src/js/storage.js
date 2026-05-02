@@ -57,7 +57,8 @@
     return safeParse(localStorage.getItem(SETTINGS_KEY), {
       sound: true, toast: true, minimizeOnClose: false,
       alwaysOnTop: false, volume: 0.5, theme: 'green',
-      expAutoFormatDelayMs: 3000
+      expAutoFormatDelayMs: 3000,
+      compactMode: false
     });
   }
   function saveSettings(settings) {
@@ -112,9 +113,15 @@
       autoStart: false,        // 인식 후 타이머 자동 시작
       autoStartTracker: false, // 첫 경험치 인식 시 트래커 자동 시작 (시작값을 첫 인식값으로)
       stabilityRequired: 1,    // OCR 결과 안정성 검증 (0=즉시, 1=1회, 2=2회 연속)
-      ocrEngine: 'paddle',     // 'tesseract' | 'paddle' — paddle 빌드 기본 paddle
+      ocrEngine: 'hybrid',     // 'tesseract' | 'paddle' | 'hybrid' — paddle MP 검출 실패(빈 결과) 보완 위해 hybrid 기본
+      mpSingleNumber: true,    // MP 영역을 단일 숫자(cur)로만 OCR + max는 INPUTS의 사용자 입력값 사용
+                               // — 슬래시/콜론/배너 텍스처 우회. 사용자가 MP 영역을 cur 숫자만 좁게 잡으면 LEVEL/ADENA처럼 안정.
       showPreview: true,       // 캡처된 이미지 미리보기
       mpRegion: null,          // { x, y, width, height, sourceId, displayId, displayLabel, scaleFactor }
+      mpBarRegion: null,       // 블루 MP 바 영역 — 색칠 비율 × userMax = cur
+      useMpBar: false,         // 기본 OFF — OCR이 더 안정적. 바 모드 사용하려면 사용자가 명시적으로 ON
+      mpBarMaxX: 0,            // 100% 보정값 (cols, 0이면 미보정 — 영역 전체 width 사용)
+      mpBarRefColor: null,     // 보정 시 fill 영역의 평균 RGB { r, g, b } — 색 매칭 기준
       expRegion: null,
       levelRegion: null,
       adenaRegion: null,
@@ -141,9 +148,28 @@
       return r;
     };
     if (stored.mpRegion) stored.mpRegion = enrich(stored.mpRegion);
+    if (stored.mpBarRegion) stored.mpBarRegion = enrich(stored.mpBarRegion);
     if (stored.expRegion) stored.expRegion = enrich(stored.expRegion);
     if (stored.levelRegion) stored.levelRegion = enrich(stored.levelRegion);
     if (stored.adenaRegion) stored.adenaRegion = enrich(stored.adenaRegion);
+    // 마이그레이션: paddle 단독은 MP 영역(슬래시 + 컬러바 배경)에서 빈 결과 다발 → hybrid로 일괄 승격
+    // 사용자가 의도적으로 tesseract 선택한 케이스는 보존
+    if (stored.ocrEngine === 'paddle' && !stored._engineMigratedToHybrid) {
+      stored.ocrEngine = 'hybrid';
+      stored._engineMigratedToHybrid = true;
+      console.log('[storage] ocrEngine paddle → hybrid 자동 마이그레이션 (MP 검출 실패 보완)');
+    }
+    // mpBarMaxX 의미 변경 (col index → filledCount). refColor 없으면 reset해서 재보정 유도.
+    if (stored.mpBarMaxX > 0 && !stored.mpBarRefColor) {
+      console.log('[storage] mpBarMaxX 의미 변경됨 — refColor 없어서 재보정 필요. 기존 보정값 reset.');
+      stored.mpBarMaxX = 0;
+    }
+    // MP 바 픽셀 모드는 안정성 부족 → OCR 모드로 일괄 전환 (1회만, 사용자가 다시 켤 수 있음)
+    if (stored.useMpBar === true && !stored._barModeMigratedToOcr) {
+      console.log('[storage] useMpBar true → false 자동 전환 (OCR이 더 안정적). 사용자가 다시 켜려면 체크박스 클릭.');
+      stored.useMpBar = false;
+      stored._barModeMigratedToOcr = true;
+    }
     return { ...defaults, ...stored };
   }
   function saveAutoDetect(s) {

@@ -24,6 +24,7 @@
         <span class="app-version" id="app-version" title="앱 버전" style="margin-left:8px;font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums;letter-spacing:0.5px;">v—</span>
       </div>
       <div class="actions">
+        <button id="btn-compact" class="icon-btn" title="컴팩트 모드 토글 (F3) — 사냥 시작 시간/EXP-H/ADENA-H만 표시">📦</button>
         <button id="btn-pin" class="icon-btn" title="항상 위 (F1)">📌</button>
         <button id="btn-tray" class="icon-btn" title="트레이로 숨기기 (F2)">⎯</button>
         <button id="btn-quit" class="icon-btn close" title="종료">✕</button>
@@ -51,6 +52,42 @@
       <div class="summary-item">
         <span class="summary-label">💰 ADENA/H</span>
         <span class="summary-value" id="summary-adena-rate">+0/h</span>
+      </div>
+    </div>
+
+    <!-- 컴팩트 뷰 — 평소 hidden, .compact-mode 켜지면 표시 -->
+    <div class="compact-view" id="compact-view" hidden>
+      <div class="compact-row">
+        <div class="compact-item">
+          <span class="compact-label">🕐 시작</span>
+          <span class="compact-value" id="compact-start-time">--:--</span>
+          <span class="compact-elapsed" id="compact-elapsed">(00:00)</span>
+        </div>
+        <div class="compact-item">
+          <span class="compact-label">📈 EXP/H</span>
+          <span class="compact-value" id="compact-exp-rate">+0%/h</span>
+        </div>
+        <div class="compact-item">
+          <span class="compact-label">💰 ADENA/H</span>
+          <span class="compact-value" id="compact-adena-rate">+0/h</span>
+        </div>
+      </div>
+      <div class="compact-row compact-row-tracker">
+        <div class="compact-item">
+          <span class="compact-label">⚔️ Lv</span>
+          <span class="compact-value" id="compact-level">--</span>
+          <span class="compact-diff" id="compact-level-diff">+0</span>
+        </div>
+        <div class="compact-item">
+          <span class="compact-label">📊 EXP</span>
+          <span class="compact-value" id="compact-exp">--%</span>
+          <span class="compact-diff" id="compact-exp-diff">+0%</span>
+        </div>
+        <div class="compact-item">
+          <span class="compact-label">🪙</span>
+          <span class="compact-value" id="compact-adena">--</span>
+          <span class="compact-diff" id="compact-adena-diff">+0</span>
+        </div>
       </div>
     </div>
 
@@ -295,7 +332,10 @@
             <br/>③ 슬래시 잘 인식되면 그대로 사용, 안 되면 INPUTS의 max를 자동 활용해 cur만 추출
           </p>
           <div class="auto-detect-actions">
-            <button id="btn-ad-mp-region" class="ghost-btn ad-btn">📷 MP</button>
+            <button id="btn-ad-mp-region" class="ghost-btn ad-btn" title="MP 영역 — 텍스트 OCR (cur/max). 단일 숫자만 좁게 캡처하면 더 안정적">📷 MP</button>
+            <button id="btn-ad-mp-bar-region" class="ghost-btn ad-btn" title="MP 바 영역 — 파란색 채움 막대를 영역 지정. OCR 없이 채움 비율 × INPUTS 최대 MP = cur 계산.">📊 MP 바</button>
+            <button id="btn-ad-mp-bar-calibrate" class="ghost-btn ad-btn" title="MP가 100%일 때 클릭 → 그 시점 채움 끝 위치를 max로 저장. 영역이 실제 바보다 넓어도 정확히 측정 가능.">🎯 100% 보정</button>
+            <div id="ad-calibrate-status" style="flex-basis: 100%; padding: 6px 10px; background: rgba(255, 200, 0, 0.08); border: 1px solid rgba(255, 200, 0, 0.3); border-radius: 4px; font-family: monospace; font-size: 11px; color: #ffd966; min-height: 24px;">🎯 보정 상태: 대기 중</div>
             <button id="btn-ad-exp-region" class="ghost-btn ad-btn">📷 경험치</button>
             <button id="btn-ad-level-region" class="ghost-btn ad-btn">📷 레벨</button>
             <button id="btn-ad-adena-region" class="ghost-btn ad-btn">📷 아데나</button>
@@ -329,6 +369,7 @@
           <div class="ad-info" id="ad-info">
             <div class="ad-info-row"><span class="ad-info-label">모니터</span><span id="ad-display">미지정</span></div>
             <div class="ad-info-row"><span class="ad-info-label">MP 영역</span><span id="ad-mp-region-info">미지정</span></div>
+            <div class="ad-info-row"><span class="ad-info-label">MP 바 영역</span><span id="ad-mp-bar-region-info">미지정</span></div>
             <div class="ad-info-row"><span class="ad-info-label">경험치 영역</span><span id="ad-exp-region-info">미지정</span></div>
             <div class="ad-info-row"><span class="ad-info-label">레벨 영역</span><span id="ad-level-region-info">미지정</span></div>
             <div class="ad-info-row"><span class="ad-info-label">아데나 영역</span><span id="ad-adena-region-info">미지정</span></div>
@@ -356,14 +397,137 @@
               <div class="ad-preview-img-wrap"><img id="ad-adena-preview" alt="ADENA" /></div>
             </div>
           </div>
+
+          <!-- 학습 데이터 수집 (Tesseract LSTM fine-tuning용) -->
+          <details class="training-section" open>
+            <summary>📸 학습 데이터 수집 (게임 폰트 traineddata 학습용) — 200~500개 권장</summary>
+            <div class="training-body">
+
+              <!-- ◆ 1단계: 자동 캡처 (라벨 없이) -->
+              <div class="training-stage">
+                <div class="training-stage-title">1️⃣ 자동 캡처 — 사냥 중 켜두기만 하면 OK</div>
+                <div class="training-help">
+                  매 10초마다 4개 영역을 PNG로 _pending 폴더에 저장. <strong>라벨링은 나중에 한 번에 처리.</strong>
+                  사냥 끝나면 [2단계 라벨링]으로 가서 정리하세요.
+                </div>
+                <div class="training-stage-controls">
+                  <button type="button" class="btn-primary btn-capture-toggle" id="btn-train-capture-toggle">🎬 자동 캡처 시작</button>
+                  <label class="field inline-field">
+                    <span style="font-size:10px;">간격</span>
+                    <select id="sel-train-capture-interval" style="font-size:11px; padding:2px 6px;">
+                      <option value="5">5초</option>
+                      <option value="10" selected>10초</option>
+                      <option value="20">20초</option>
+                      <option value="30">30초</option>
+                    </select>
+                  </label>
+                  <span class="training-capture-status" id="train-capture-status">⏸️ 정지</span>
+                </div>
+              </div>
+
+              <hr class="training-divider"/>
+
+              <!-- ◆ 2단계: 라벨링 (사후 정리) -->
+              <div class="training-stage">
+                <div class="training-stage-title">2️⃣ 라벨링 — 캡처된 이미지에 정답값 붙이기</div>
+                <div class="training-help">
+                  대기 중인 미라벨 샘플을 한 줄씩 보여줍니다. OCR 추천값이 미리 채워져 있으니 <kbd>Enter</kbd>(확정) / <kbd>Tab</kbd>(스킵) / <kbd>Del</kbd>(삭제)로 빠르게 정리.
+                </div>
+                <div class="training-stage-controls">
+                  <button type="button" class="btn-primary" id="btn-train-label-start">🏷️ 라벨링 시작 (<span id="train-pending-count">0</span>개 대기 중)</button>
+                  <button type="button" id="btn-train-pending-refresh">🔄 새로고침</button>
+                  <button type="button" id="btn-train-pending-clear">🗑️ 모두 삭제 (대기 중)</button>
+                </div>
+                <!-- 라벨링 작업 영역 (시작 클릭 시 표시) -->
+                <div class="training-labeling-panel" id="train-labeling-panel" hidden>
+                  <div class="training-labeling-progress">
+                    진행: <span id="train-labeling-current">0</span> / <span id="train-labeling-total">0</span>
+                  </div>
+                  <div class="training-labeling-row" id="train-labeling-row">
+                    <div class="training-labeling-thumb-wrap">
+                      <img id="train-labeling-thumb" alt="" />
+                    </div>
+                    <div class="training-labeling-form">
+                      <div class="training-labeling-region" id="train-labeling-region">REGION</div>
+                      <div class="training-labeling-meta" id="train-labeling-meta"></div>
+                      <input type="text" id="train-labeling-input" placeholder="정답값 (예: 42402, 25.6745, 229/235)" />
+                      <div class="training-labeling-actions">
+                        <button type="button" class="btn-primary" id="btn-train-labeling-confirm">✅ 확정 (Enter)</button>
+                        <button type="button" id="btn-train-labeling-skip">⏭️ 스킵 (Tab)</button>
+                        <button type="button" id="btn-train-labeling-delete">🗑️ 삭제 (Del)</button>
+                        <button type="button" id="btn-train-labeling-stop">✖ 종료</button>
+                      </div>
+                      <div class="training-labeling-actions" style="margin-top:4px;">
+                        <button type="button" id="btn-train-labeling-bulk-confirm" title="현재 OCR 추천값(예: 42402)과 같은 추천값을 가진 모든 대기 샘플을 입력값으로 일괄 확정. 같은 misread가 반복될 때 시간 절약.">💨 같은 OCR 추천값 모두 확정 (입력값으로)</button>
+                        <button type="button" id="btn-train-labeling-bulk-delete" title="현재 OCR 추천값과 같은 추천값을 가진 모든 대기 샘플 일괄 삭제. 잘못된 OCR이 반복되면 활용.">💢 같은 OCR 추천값 모두 삭제</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <hr class="training-divider"/>
+
+              <!-- ◆ 3단계: 수동 입력 (보조) -->
+              <details class="training-manual-details">
+                <summary>✏️ 수동 입력 (1개씩 즉시 저장 — 보조)</summary>
+                <div class="training-manual-body">
+                  <div class="training-help">
+                    저장 위치: <code>%APPDATA%/LineageMPTimer/training-data/</code>
+                    · 파일: <code>&lt;label&gt;_&lt;timestamp&gt;.png</code> + <code>.gt.txt</code>
+                  </div>
+                  <div class="training-grid">
+                    <div class="training-cell">
+                      <span class="training-label">MP <small>(예: 229/235)</small></span>
+                      <input type="text" id="train-label-mp" placeholder="현재/최대" />
+                    </div>
+                    <div class="training-cell">
+                      <span class="training-label">경험치 <small>(예: 25.6745)</small></span>
+                      <input type="text" id="train-label-exp" placeholder="소수점 % 값" />
+                    </div>
+                    <div class="training-cell">
+                      <span class="training-label">레벨 <small>(예: 28)</small></span>
+                      <input type="text" id="train-label-level" placeholder="레벨 숫자" />
+                    </div>
+                    <div class="training-cell">
+                      <span class="training-label">아데나 <small>(예: 42402)</small></span>
+                      <input type="text" id="train-label-adena" placeholder="아데나 숫자" />
+                    </div>
+                  </div>
+                  <div class="training-actions">
+                    <button type="button" class="btn-primary" id="btn-train-save-all">💾 4개 모두 저장</button>
+                    <button type="button" id="btn-train-save-adena">💰 아데나만 저장</button>
+                    <button type="button" id="btn-train-save-mp">⚡ MP만 저장</button>
+                  </div>
+                </div>
+              </details>
+
+              <div class="training-actions training-actions-meta">
+                <button type="button" id="btn-train-open-folder">📁 폴더 열기</button>
+                <button type="button" id="btn-train-stats-refresh">🔄 통계 새로고침</button>
+              </div>
+
+              <div class="training-stats" id="train-stats">
+                <div>📦 확정 — 총: <span id="train-stat-total">0</span>
+                  (MP <span id="train-stat-mp">0</span> / EXP <span id="train-stat-exp">0</span> / LV <span id="train-stat-level">0</span> / ADENA <span id="train-stat-adena">0</span>)</div>
+                <div>⏳ 대기 — 총: <span id="train-stat-pending-total">0</span>
+                  (MP <span id="train-stat-pending-mp">0</span> / EXP <span id="train-stat-pending-exp">0</span> / LV <span id="train-stat-pending-level">0</span> / ADENA <span id="train-stat-pending-adena">0</span>)</div>
+              </div>
+              <div class="training-status" id="train-status">대기 중</div>
+            </div>
+          </details>
           <div class="ad-options">
             <label class="field inline-field" title="자동 감지 루프에서 사용할 OCR 엔진. paddle은 stylized 폰트에 강함, hybrid는 두 엔진이 일치할 때만 채택해 오탐 차단 (첫 실행 시 ~30MB CDN 다운로드).">
               <span style="font-size:10px;">OCR 엔진</span>
               <select id="sel-ad-engine" style="font-size:11px; padding:2px 6px;">
+                <option value="hybrid" selected>Hybrid (paddle ∩ tesseract) — 추천</option>
                 <option value="paddle">PaddleOCR</option>
                 <option value="tesseract">Tesseract</option>
-                <option value="hybrid">Hybrid (paddle ∩ tesseract)</option>
               </select>
+            </label>
+            <label class="chk inline" title="MP를 OCR이 아닌 바 픽셀 채움 비율로 측정 (mpBarRegion 영역 지정 필수). INPUTS의 최대 MP 값을 max로 사용해 cur = max × 채움비율. 슬래시/숫자 인식 불필요, 100% 정확.">
+              <input type="checkbox" id="chk-ad-use-mp-bar" />
+              <span>📊 MP는 바 픽셀로 측정 (OCR 우회) — 추천</span>
             </label>
             <label class="chk inline">
               <input type="checkbox" id="chk-ad-auto-start" />

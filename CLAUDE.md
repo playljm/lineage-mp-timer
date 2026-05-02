@@ -144,6 +144,17 @@ onAlwaysOnTopChanged (event callback)
 ### v1.0.0 (초기)
 - MP 계산 엔진 + UI + 트래커 + 핫키 + 테마 + 프리셋
 
+## 🎯 OCR 정확도 개선 합의 방향 (2026-05-02)
+
+> 사용자 지시: "추후에는 개선이 안된다면 학습 시켜서 하는 방향으로 할게 기록 남겨줘"
+
+- **휴리스틱 기반 1차 개선** → 안 되면 → **게임 폰트 전용 traineddata 학습**
+- 동일 confusion pair가 휴리스틱 3회 패치 후에도 재발하면 학습 단계로 escalate
+- 상세: `docs/OCR-FUTURE-PLAN.md`
+
+### 알려진 confusion pair (학습 우선순위)
+0↔8, 0↔5, 3↔9, **4↔9** (2026-05-02), 6↔8, 5↔7, 1·7 누락
+
 ## 🛠️ 향후 개선 후보 (TODO)
 
 - [ ] `build/icon.ico` 생성 (SVG → ICO 변환) → 앱 아이콘 커스텀화

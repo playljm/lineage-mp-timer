@@ -1535,3 +1535,432 @@ body.state-done .stat-value.huge {
 .tab-pane > .panel:last-child {
   margin-bottom: 0;
 }
+
+/* ====================================================== */
+/* 컴팩트 모드 — 사냥 핵심 stats만 표시 (창 작게)         */
+/* ====================================================== */
+.compact-view {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: linear-gradient(135deg, rgba(40,80,120,0.18), rgba(80,40,120,0.15));
+  border-bottom: 1px solid rgba(0, 255, 200, 0.25);
+}
+.compact-view[hidden] { display: none !important; }
+.compact-row {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.compact-row-tracker {
+  padding-top: 6px;
+  border-top: 1px dashed rgba(0, 255, 200, 0.18);
+}
+.compact-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+}
+.compact-label {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.compact-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.compact-elapsed {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.compact-diff {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+.compact-diff.positive { color: var(--neon, #00ffaa); }
+.compact-diff.negative { color: #ff6b6b; }
+
+/* ====================================================== */
+/* 학습 데이터 수집 (Tesseract LSTM fine-tuning)            */
+/* ====================================================== */
+.training-section {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 200, 50, 0.05);
+  border: 1px solid rgba(255, 200, 50, 0.25);
+  border-radius: 6px;
+}
+.training-section > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--accent);
+  padding: 2px 0;
+  user-select: none;
+}
+.training-section[open] > summary {
+  margin-bottom: 10px;
+}
+.training-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.training-help {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.training-help code {
+  background: rgba(0, 0, 0, 0.4);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+}
+.training-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.training-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.training-label {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.training-label small {
+  color: rgba(255, 255, 255, 0.4);
+  font-weight: normal;
+  text-transform: none;
+}
+.training-cell input[type="text"] {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  padding: 4px 8px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 200, 50, 0.3);
+  border-radius: 3px;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+.training-cell input[type="text"]:focus {
+  outline: none;
+  border-color: rgba(255, 200, 50, 0.7);
+  background: rgba(0, 0, 0, 0.5);
+}
+.training-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.training-actions button {
+  font-size: 11px;
+  padding: 5px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid rgba(255, 200, 50, 0.4);
+  background: rgba(255, 200, 50, 0.1);
+  color: #fff;
+}
+.training-actions button:hover {
+  background: rgba(255, 200, 50, 0.25);
+}
+.training-actions button.btn-primary {
+  background: rgba(255, 200, 50, 0.35);
+  font-weight: 600;
+}
+.training-stats {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 4px 8px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 3px;
+}
+.training-stats span {
+  color: var(--accent);
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+}
+.training-status {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: 'JetBrains Mono', monospace;
+  min-height: 16px;
+}
+.training-status.success { color: var(--neon, #00ffaa); }
+.training-status.error { color: #ff6b6b; }
+
+.training-quick {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  background: rgba(0, 255, 170, 0.05);
+  border: 1px solid rgba(0, 255, 170, 0.25);
+  border-radius: 5px;
+}
+.training-quick-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+.training-cell-mp {
+  flex: 0 0 200px;
+}
+.btn-quick-save {
+  flex: 1;
+  font-size: 13px !important;
+  padding: 8px 14px !important;
+  background: rgba(0, 255, 170, 0.25) !important;
+  border-color: rgba(0, 255, 170, 0.5) !important;
+  font-weight: 700 !important;
+}
+.btn-quick-save:hover {
+  background: rgba(0, 255, 170, 0.4) !important;
+}
+.training-divider {
+  border: none;
+  border-top: 1px dashed rgba(255, 255, 255, 0.15);
+  margin: 4px 0;
+}
+.training-manual-details {
+  padding: 4px 0;
+}
+.training-manual-details > summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--muted);
+  padding: 4px 0;
+  user-select: none;
+}
+.training-manual-details[open] > summary {
+  margin-bottom: 8px;
+  color: var(--accent);
+}
+.training-manual-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 10px;
+  border-left: 2px solid rgba(255, 255, 255, 0.08);
+}
+.training-actions-meta {
+  margin-top: 4px;
+}
+.training-help kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+/* 단계별 워크플로우 (자동 캡처 → 라벨링 → 정리) */
+.training-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: rgba(0, 200, 255, 0.04);
+  border-left: 3px solid rgba(0, 200, 255, 0.4);
+  border-radius: 4px;
+}
+.training-stage-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.3px;
+}
+.training-stage-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.training-stage-controls > button {
+  font-size: 11px;
+  padding: 5px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid rgba(255, 200, 50, 0.4);
+  background: rgba(255, 200, 50, 0.1);
+  color: #fff;
+}
+.training-stage-controls > button:hover {
+  background: rgba(255, 200, 50, 0.25);
+}
+.training-stage-controls .btn-primary {
+  background: rgba(0, 255, 170, 0.2) !important;
+  border-color: rgba(0, 255, 170, 0.5) !important;
+  font-weight: 600;
+}
+.training-stage-controls .btn-primary:hover {
+  background: rgba(0, 255, 170, 0.35) !important;
+}
+.btn-capture-toggle.active {
+  background: rgba(255, 80, 80, 0.3) !important;
+  border-color: rgba(255, 80, 80, 0.6) !important;
+  animation: blink-rec 1.5s ease-in-out infinite;
+}
+@keyframes blink-rec {
+  0%, 100% { box-shadow: 0 0 4px rgba(255, 80, 80, 0.6); }
+  50% { box-shadow: 0 0 10px rgba(255, 80, 80, 1); }
+}
+.training-capture-status {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: 'JetBrains Mono', monospace;
+}
+.training-capture-status.active { color: #ff6b6b; }
+
+/* 라벨링 패널 */
+.training-labeling-panel {
+  margin-top: 10px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(0, 255, 170, 0.3);
+  border-radius: 5px;
+}
+.training-labeling-panel[hidden] { display: none; }
+.training-labeling-progress {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.training-labeling-progress span {
+  color: var(--accent);
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+}
+.training-labeling-row {
+  display: flex;
+  gap: 14px;
+  align-items: stretch;
+}
+.training-labeling-thumb-wrap {
+  flex: 0 0 240px;
+  background: #000;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 80px;
+}
+.training-labeling-thumb-wrap img {
+  max-width: 100%;
+  max-height: 200px;
+  image-rendering: pixelated;
+  background: #000;
+}
+.training-labeling-form {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.training-labeling-region {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+  text-transform: uppercase;
+}
+.training-labeling-meta {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: 'JetBrains Mono', monospace;
+}
+.training-labeling-form input[type="text"] {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 16px;
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(0, 255, 170, 0.4);
+  border-radius: 3px;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+.training-labeling-form input[type="text"]:focus {
+  outline: none;
+  border-color: rgba(0, 255, 170, 0.8);
+  background: rgba(0, 0, 0, 0.7);
+  box-shadow: 0 0 8px rgba(0, 255, 170, 0.3);
+}
+.training-labeling-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.training-labeling-actions button {
+  font-size: 11px;
+  padding: 5px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+}
+.training-labeling-actions button:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+.training-labeling-actions .btn-primary {
+  background: rgba(0, 255, 170, 0.25);
+  border-color: rgba(0, 255, 170, 0.5);
+  font-weight: 600;
+}
+.training-labeling-actions .btn-primary:hover {
+  background: rgba(0, 255, 170, 0.4);
+}
+.training-stats > div {
+  margin: 2px 0;
+}
+
+/* compact-mode 활성 시 — summary-bar, tab-bar, content 전부 숨김 */
+body.compact-mode .summary-bar,
+body.compact-mode .tab-bar,
+body.compact-mode .content,
+body.compact-mode .footer-status {
+  display: none !important;
+}
+body.compact-mode .compact-view {
+  display: flex;
+}
+body.compact-mode {
+  overflow: hidden;
+}
+body.compact-mode .titlebar {
+  padding: 4px 10px;
+}
+body.compact-mode .titlebar .title {
+  font-size: 11px;
+}
+body.compact-mode .titlebar .app-version {
+  display: none;
+}
