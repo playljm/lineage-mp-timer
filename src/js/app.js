@@ -1693,7 +1693,23 @@
     }
   }
 
-  function preprocessCanvas(canvas) {
+  /**
+   * 캔버스 전처리 — 그레이스케일 + 자동 반전 + 콘트라스트 스트레치 + (옵션) 샤프닝/이진화
+   *
+   * @param {HTMLCanvasElement} canvas
+   * @param {object} [opts]
+   *   sharpen   (default true)  — Laplacian 샤프닝 적용 (글자 가장자리 강조)
+   *   binarize  (default false) — 콘트라스트 후 Otsu 이진화 (clean binary 이미지)
+   *   contrastLo (default 80)   — 콘트라스트 스트레치 하한
+   *   contrastHi (default 180)  — 콘트라스트 스트레치 상한
+   *
+   * 다양성을 위해 다른 옵션 조합으로 여러 변형 캔버스를 만들면 OCR voting 정확도 ↑
+   */
+  function preprocessCanvas(canvas, opts) {
+    const sharpen   = !opts || opts.sharpen !== false;
+    const binarize  = !!(opts && opts.binarize);
+    const lo        = (opts && Number.isFinite(opts.contrastLo)) ? opts.contrastLo : 80;
+    const hi        = (opts && Number.isFinite(opts.contrastHi)) ? opts.contrastHi : 180;
     const ctx = canvas.getContext('2d');
     const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const d = img.data;
@@ -1705,9 +1721,8 @@
     }
     const avg = sum / N;
     const invert = avg < 128; // 어두운 배경이면 반전
-    // 2) 콘트라스트 스트레치 (80~180 → 0~255 — 더 strict하게 글자 가장자리 또렷)
-    const lo = 80, hi = 180;
-    const range = hi - lo;
+    // 2) 콘트라스트 스트레치 (lo~hi → 0~255)
+    const range = Math.max(1, hi - lo);
     for (let i = 0; i < d.length; i += 4) {
       let v = (d[i] + d[i + 1] + d[i + 2]) / 3;
       if (invert) v = 255 - v;
@@ -1717,7 +1732,43 @@
     ctx.putImageData(img, 0, 0);
     // 3) Sharpening — 3x3 Laplacian unsharp mask로 글자 가장자리 강조
     //    4↔9, 7↔1 같은 글리프 헷갈림에 효과적 (열린 위 vs 닫힌 위 차이가 더 명확)
-    applySharpenKernel(canvas);
+    if (sharpen) applySharpenKernel(canvas);
+    // 4) Otsu 이진화 — 깔끔한 binary 이미지 (anti-aliasing 제거)
+    //    8↔5↔6 confusion 깰 가능성: anti-alias edge 제거되면 글리프 모양이 변함
+    if (binarize) applyOtsuBinarization(canvas);
+  }
+
+  /**
+   * Otsu 자동 threshold 이진화 — 픽셀 분포 분석 후 최적 임계값 산출
+   * 결과: 모든 픽셀이 0 또는 255 (anti-alias 그라데이션 완전 제거)
+   */
+  function applyOtsuBinarization(canvas) {
+    const ctx = canvas.getContext('2d');
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const d = img.data;
+    // Otsu 알고리즘 — between-class variance 최대화 threshold
+    const hist = new Array(256).fill(0);
+    for (let i = 0; i < d.length; i += 4) hist[Math.round((d[i] + d[i+1] + d[i+2]) / 3)]++;
+    const total = d.length / 4;
+    let sumAll = 0;
+    for (let t = 0; t < 256; t++) sumAll += t * hist[t];
+    let sumB = 0, wB = 0, varMax = 0, threshold = 128;
+    for (let t = 0; t < 256; t++) {
+      wB += hist[t];
+      if (wB === 0) continue;
+      const wF = total - wB;
+      if (wF === 0) break;
+      sumB += t * hist[t];
+      const mB = sumB / wB;
+      const mF = (sumAll - sumB) / wF;
+      const v = wB * wF * (mB - mF) * (mB - mF);
+      if (v > varMax) { varMax = v; threshold = t; }
+    }
+    for (let i = 0; i < d.length; i += 4) {
+      const v = (d[i] + d[i+1] + d[i+2]) / 3 > threshold ? 255 : 0;
+      d[i] = v; d[i+1] = v; d[i+2] = v;
+    }
+    ctx.putImageData(img, 0, 0);
   }
 
   function applySharpenKernel(canvas) {
@@ -1748,7 +1799,17 @@
     ctx.putImageData(dst, 0, 0);
   }
 
-  function captureRegionToCanvas(region) {
+  /**
+   * 영역을 12x 업스케일 캔버스로 캡처 + 전처리
+   * @param {object} region
+   * @param {string} [mode] 전처리 변형 모드:
+   *   undefined / 'default' — 콘트라스트 + 샤프닝 (기본)
+   *   'soft'                — 콘트라스트만 (샤프닝 OFF) — 부드러운 글리프
+   *   'otsu'                — 콘트라스트 + 샤프닝 + Otsu 이진화 — clean binary
+   *   'tight'               — 좁은 콘트라스트 (90~170) + 샤프닝 — strict edge
+   * 다양한 모드로 변형 캔버스를 만들면 voting 다양성 ↑ (agreement-misread 저항)
+   */
+  function captureRegionToCanvas(region, mode) {
     if (!region) return null;
     const cap = captureStreams.get(region.sourceId);
     if (!cap || !cap.video) {
@@ -1771,7 +1832,17 @@
     } catch (e) {
       throw new Error('캡처 실패: ' + e.message);
     }
-    if (autoDetect.preprocess !== false) preprocessCanvas(canvas);
+    if (autoDetect.preprocess !== false) {
+      if (mode === 'soft') {
+        preprocessCanvas(canvas, { sharpen: false });
+      } else if (mode === 'otsu') {
+        preprocessCanvas(canvas, { sharpen: true, binarize: true });
+      } else if (mode === 'tight') {
+        preprocessCanvas(canvas, { sharpen: true, contrastLo: 90, contrastHi: 170 });
+      } else {
+        preprocessCanvas(canvas);
+      }
+    }
     return canvas;
   }
 
@@ -2480,6 +2551,11 @@
     if (!canvas) return null;
     updatePreview(dom.adMpPreview, canvas);
     const w = await initOcrWorker();
+    // 다양한 캔버스 변형 — 6/8 confusion 같은 단일 자리 misread 깨기
+    let canvasSoft = null;
+    let canvasOtsu = null;
+    try { canvasSoft = captureRegionToCanvas(autoDetect.mpRegion, 'soft'); } catch (_) {}
+    try { canvasOtsu = captureRegionToCanvas(autoDetect.mpRegion, 'otsu'); } catch (_) {}
 
     // INPUTS에 입력된 max MP — 슬래시 인식 실패 시 폴백으로 활용
     const userMax = parseInt(dom.inMaxMp.value, 10) || 0;
@@ -2521,29 +2597,35 @@
       return { cur, max, fb };
     };
 
-    // PSM 7 (single line) + 13 (raw line) 다수결 — slash 패턴이라 PSM 8(single word)은 제외
+    // PSM 7 (single line) + 13 (raw line) — slash 패턴이라 PSM 8(single word)은 제외
+    // 캔버스 다양성(default, soft, otsu) × PSM 2개 = 최대 6개 결과 → 6/8 confusion 같은 단일 자리 misread 깨기
     const psmModes = ['7', '13'];
     const results = [];
-    for (const psm of psmModes) {
-      try {
-        await w.setParameters({
-          tessedit_char_whitelist: '0123456789/',
-          tessedit_pageseg_mode: psm,
-          load_system_dawg: '0', load_freq_dawg: '0',
-          load_unambig_dawg: '0', load_punc_dawg: '0',
-          load_number_dawg: '0', load_bigram_dawg: '0'
-        });
-        const res = await w.recognize(canvas);
-        const text = ((res && res.data && res.data.text) || '').trim();
-        const rawConf = (res && res.data && res.data.confidence);
-        const confidence = Math.max(0, Number.isFinite(rawConf) ? rawConf : 0);
-        const p = parseMpText(text);
-        results.push({ psm, text, confidence, ...p });
-        console.log('[OCR MP psm=' + psm + '] text=' + JSON.stringify(text) + ' conf=' + Math.round(confidence) + ' cur=' + p.cur + ' max=' + p.max + (p.fb ? ' (fallback)' : ''));
-      } catch (e) {
-        console.warn('[OCR MP psm=' + psm + '] failed:', e);
+    const recognizeMpOn = async (label, c) => {
+      for (const psm of psmModes) {
+        try {
+          await w.setParameters({
+            tessedit_char_whitelist: '0123456789/',
+            tessedit_pageseg_mode: psm,
+            load_system_dawg: '0', load_freq_dawg: '0',
+            load_unambig_dawg: '0', load_punc_dawg: '0',
+            load_number_dawg: '0', load_bigram_dawg: '0'
+          });
+          const res = await w.recognize(c);
+          const text = ((res && res.data && res.data.text) || '').trim();
+          const rawConf = (res && res.data && res.data.confidence);
+          const confidence = Math.max(0, Number.isFinite(rawConf) ? rawConf : 0);
+          const p = parseMpText(text);
+          results.push({ src: label, psm, text, confidence, ...p });
+          console.log('[OCR MP ' + label + ' psm=' + psm + '] text=' + JSON.stringify(text) + ' conf=' + Math.round(confidence) + ' cur=' + p.cur + ' max=' + p.max + (p.fb ? ' (fallback)' : ''));
+        } catch (e) {
+          console.warn('[OCR MP ' + label + ' psm=' + psm + '] failed:', e);
+        }
       }
-    }
+    };
+    await recognizeMpOn('pp', canvas);
+    if (canvasSoft) await recognizeMpOn('soft', canvasSoft);
+    if (canvasOtsu) await recognizeMpOn('otsu', canvasOtsu);
 
     if (results.length === 0) return null;
     const valid = results.filter((r) => Number.isFinite(r.cur) && Number.isFinite(r.max));
@@ -2659,15 +2741,18 @@
     updatePreview(dom.adAdenaPreview, canvas);
     const w = await initOcrWorker();
 
-    // 다양한 글리프 표현을 얻기 위해 두 가지 캔버스로 OCR 실행
-    //   - canvas: preprocessed (sharpen + contrast stretch) 12x — 기본
-    //   - canvasRaw: raw 16x nearest-neighbor (전처리 없음) — 4↔9 같은 confusion에 다른 의견 제공
-    //     pad: 10 — 사용자가 leading 글자(앞자리)를 살짝 잘랐을 때 보충 (digit-drop 방지)
-    // 각 캔버스 × PSM 7/8/13 = 최대 6개 결과 수집
+    // 다양한 글리프 표현을 얻기 위해 4가지 캔버스 변형으로 OCR 실행 (agreement-misread 깨기)
+    //   - canvas:      12x preprocessed (sharpen + contrast 80~180)   — 기본
+    //   - canvasSoft:  12x preprocessed, no sharpen                    — 부드러운 글리프 (anti-alias 보존)
+    //   - canvasOtsu:  12x preprocessed + Otsu 이진화                  — clean binary (anti-alias 제거)
+    //   - canvasRaw:   16x raw nearest-neighbor, pad 10                — 전처리 없음 + leading-pad
+    // 각 캔버스 × PSM 7/8/13 = 최대 12개 결과 → per-digit voting 강력해짐
+    let canvasSoft = null;
+    let canvasOtsu = null;
     let canvasRaw = null;
-    try {
-      canvasRaw = captureRegionToRawCanvas(autoDetect.adenaRegion, 16, { pad: 10 });
-    } catch (_) { canvasRaw = null; }
+    try { canvasSoft = captureRegionToCanvas(autoDetect.adenaRegion, 'soft'); } catch (_) {}
+    try { canvasOtsu = captureRegionToCanvas(autoDetect.adenaRegion, 'otsu'); } catch (_) {}
+    try { canvasRaw = captureRegionToRawCanvas(autoDetect.adenaRegion, 16, { pad: 10 }); } catch (_) {}
 
     const psmModes = ['7', '8', '13'];
     const results = [];
@@ -2695,6 +2780,8 @@
       }
     };
     await recognizeOn('pp', canvas);
+    if (canvasSoft) await recognizeOn('soft', canvasSoft);
+    if (canvasOtsu) await recognizeOn('otsu', canvasOtsu);
     if (canvasRaw) await recognizeOn('raw', canvasRaw);
 
     if (results.length === 0) return null;
@@ -2751,10 +2838,13 @@
 
     // ===== 2차: 자릿수가 모두 같을 때 자리수별(per-digit) 다수결 =====
     //   - 4↔9, 6↔8 같은 단일 자리 confusion이 모든 PSM에서 동일하게 발생해도
-    //     변형 캔버스(raw)에서 다른 의견이 한 번이라도 나오면 위치별 majority가 정답에 수렴
+    //     변형 캔버스(soft/otsu/raw)에서 다른 의견이 한 번이라도 나오면 위치별 majority가 정답에 수렴
     //   - 예: pp:39326,39326,39326 + raw:34326,39326,34326 → 자리별 [3,4|9,3,2,6] → 4 win
+    //   - tie가 있어도 perPos 자체는 보존 (template per-digit override가 fill-in 가능)
     let perDigitAdena = NaN;
     let perDigitDetail = null;
+    let perPos = [];        // 위치별 voting 결과 [{best, count, tie, dist}, ...]
+    let sameLenList = [];
     const digitsList = valid.map((r) => r.digits);
     const lenCounts = {};
     digitsList.forEach((s) => { lenCounts[s.length] = (lenCounts[s.length] || 0) + 1; });
@@ -2763,16 +2853,14 @@
       if (cnt > dominantLenCnt) { dominantLenCnt = cnt; dominantLen = parseInt(L, 10); }
     }
     if (dominantLen > 0 && dominantLenCnt >= Math.ceil(valid.length / 2)) {
-      const sameLen = digitsList.filter((s) => s.length === dominantLen);
-      const perPos = [];
+      sameLenList = digitsList.filter((s) => s.length === dominantLen);
       for (let i = 0; i < dominantLen; i++) {
         const c = {};
-        sameLen.forEach((s) => { const ch = s[i]; c[ch] = (c[ch] || 0) + 1; });
+        sameLenList.forEach((s) => { const ch = s[i]; c[ch] = (c[ch] || 0) + 1; });
         let bestCh = null, bestN = 0;
         for (const [ch, n] of Object.entries(c)) {
           if (n > bestN) { bestN = n; bestCh = ch; }
         }
-        // 단일 위치에서 동률(tie)이면 위치 다수결 무효 — 안전하게 풀-넘버로 fallback
         const tieAtPos = Object.values(c).filter((n) => n === bestN).length > 1;
         perPos.push({ best: bestCh, count: bestN, tie: tieAtPos, dist: c });
       }
@@ -2782,36 +2870,43 @@
         const n = parseInt(reconstructed, 10);
         if (Number.isFinite(n) && n >= 0 && n <= 9999999999) {
           perDigitAdena = n;
-          perDigitDetail = perPos.map((p, i) => 'pos' + i + ':' + p.best + '(' + p.count + '/' + sameLen.length + ')').join(' ');
+          perDigitDetail = perPos.map((p, i) => 'pos' + i + ':' + p.best + '(' + p.count + '/' + sameLenList.length + ')').join(' ');
         }
       }
     }
 
-    // ===== 3차: Template Matching 검증 (픽셀 폰트 직접 비교, 가변 길이) =====
-    //   픽셀 폰트의 각 자릿수는 동일한 모양 → 463개 라벨 데이터에서 추출한 템플릿과 직접 비교.
-    //   OCR이 자릿수를 잘못 세는 경우(예: 47090 → 491) 대응 위해 1~7자리 모두 시도.
-    //   가장 confidence 높은 길이를 정답으로 채택. Hamming distance 기반.
+    // ===== 3차: Template Matching — 가변 길이 + 고정 길이 =====
+    //   - 가변 길이: OCR이 자릿수를 잘못 셀 때(예: 47090 → 491) 대응
+    //   - 고정 길이: 자릿수 동의했을 때 per-position 점수로 voting tie/weak 보정
     let templateAdena = NaN;
     let templateConf = 0;
-    let templateText = null;
     let templateLen = 0;
+    let templatePerCharFixed = null;   // 고정 dominantLen에서의 per-position [{char, score, secondBest, ...}]
     if (window.TemplateMatcher && window.TemplateMatcher.isLoaded() && canvas) {
       try {
-        const ocrLen = String(bestAdena).length;
-        // 1~7자리 모두 시도 (ADENA는 1자리 ~ 7자리까지 가능)
-        // 중요: 템플릿은 preprocessed 12x 캔버스(captureRegionToCanvas)에서 추출됐으므로
-        //       동일 캔버스로 매칭해야 일치 (canvasRaw 16x 사용 시 매칭 어긋남).
+        // 가변 길이 (전체 override 후보)
         const tplResult = window.TemplateMatcher.matchVariableLength(canvas, 1, 7, '0123456789');
         if (tplResult.text && /^\d+$/.test(tplResult.text)) {
           const n = parseInt(tplResult.text, 10);
           if (Number.isFinite(n) && n >= 0 && n <= 9999999999) {
             templateAdena = n;
             templateConf = tplResult.confidence;
-            templateText = tplResult.text;
             templateLen = tplResult.length;
+            const ocrLen = String(bestAdena).length;
             const allLens = (tplResult.allLengths || []).map((a) => `len${a.length}=${a.text}(${(a.confidence*100).toFixed(0)}%)`).join(' ');
-            console.log('[OCR ADENA template] best len=' + templateLen + ' result=' + n + ' conf=' + (templateConf * 100).toFixed(1) + '% (OCR len=' + ocrLen + ')');
-            console.log('[OCR ADENA template] all lengths:', allLens);
+            console.log('[OCR ADENA template] var: best len=' + templateLen + ' result=' + n + ' conf=' + (templateConf * 100).toFixed(1) + '% (OCR len=' + ocrLen + ')');
+            console.log('[OCR ADENA template] var all lengths:', allLens);
+          }
+        }
+        // 고정 길이 (per-position 정보용)
+        if (dominantLen > 0) {
+          const fixedRes = window.TemplateMatcher.match(canvas, dominantLen, '0123456789');
+          if (fixedRes && fixedRes.perChar && fixedRes.perChar.length === dominantLen) {
+            templatePerCharFixed = fixedRes.perChar;
+            const detail = fixedRes.perChar.map((p, i) =>
+              'p' + i + ':' + (p.char || '?') + '(' + ((p.score || 0)*100).toFixed(0) + '%,gap=' +
+              (((p.score || 0) - (p.secondBest && p.secondBest.score || 0))*100).toFixed(0) + '%)').join(' ');
+            console.log('[OCR ADENA template] fixed len=' + dominantLen + ' text=' + fixedRes.text + ' detail=' + detail);
           }
         }
       } catch (e) {
@@ -2819,9 +2914,63 @@
       }
     }
 
+    // ===== 4차: Hybrid per-digit override — voting + template 결합 =====
+    //   각 위치에서:
+    //   - voting strong (margin >= 75%) AND no tie → use voting (template 무시, 라벨노이즈 영향 차단)
+    //   - voting weak/tied + template very confident (>=92%, gap>=8%) → use template
+    //   - 둘 다 약함 → use voting best (best guess)
+    //   장점: 라벨노이즈 false override 위험 최소화하면서 voting tie를 template로 메움
+    let hybridAdena = NaN;
+    let hybridDetail = null;
+    let hybridOverrides = 0;
+    if (perPos.length > 0 && perPos.length === dominantLen && sameLenList.length > 0) {
+      const finalDigits = [];
+      const overrideLogs = [];
+      const totalSame = sameLenList.length;
+      for (let i = 0; i < dominantLen; i++) {
+        const v = perPos[i];
+        const t = templatePerCharFixed ? templatePerCharFixed[i] : null;
+        const votingMargin = v.count / Math.max(1, totalSame);
+        const votingStrong = !v.tie && votingMargin >= 0.75;
+        let chosen = v.best;
+        if (!votingStrong && t && t.char) {
+          const tplScore = t.score || 0;
+          const tplGap = tplScore - ((t.secondBest && t.secondBest.score) || 0);
+          const tplStrong = tplScore >= 0.92 && tplGap >= 0.08;
+          if (tplStrong && t.char !== v.best) {
+            chosen = t.char;
+            hybridOverrides++;
+            overrideLogs.push('pos' + i + ':' + (v.best || '?') + '→' + t.char +
+              ' (v=' + v.count + '/' + totalSame + (v.tie ? ',tie' : '') +
+              ', t=' + (tplScore*100).toFixed(0) + '%/gap=' + (tplGap*100).toFixed(0) + '%)');
+          }
+        }
+        if (!chosen) { finalDigits.length = 0; break; }
+        finalDigits.push(chosen);
+      }
+      if (finalDigits.length === dominantLen) {
+        const n = parseInt(finalDigits.join(''), 10);
+        if (Number.isFinite(n) && n >= 0 && n <= 9999999999) {
+          hybridAdena = n;
+          hybridDetail = overrideLogs.length > 0 ? overrideLogs.join(' | ') : 'no override';
+        }
+      }
+    }
+
     // === 우선순위 결정 ===
-    // 1) per-digit voting 결과가 1차 다수결과 다르면 우선 (글리프 confusion 보정)
-    // 2) 그 외엔 template 결과 활용 — template confidence > 75% 이고 다수결과 다르면 override
+    // 1) hybrid (voting+template) 결과가 다수결과 다르면 우선
+    // 2) per-digit voting 결과가 다수결과 다르면 차선
+    // 3) 그 외엔 다수결 그대로
+    if (Number.isFinite(hybridAdena) && hybridAdena !== bestAdena && hybridOverrides > 0) {
+      console.log('[OCR ADENA] hybrid per-digit override: full-num=' + bestAdena + ' → hybrid=' + hybridAdena + ' (' + hybridDetail + ')');
+      const matched = valid.filter((r) => r.digits.length === dominantLen);
+      const avgConf = matched.reduce((s, r) => s + r.confidence, 0) / Math.max(1, matched.length);
+      return {
+        text: String(hybridAdena),
+        confidence: avgConf,
+        parsed: { adena: hybridAdena, agreementCount: dominantLenCnt, totalAttempts: valid.length, hybrid: true, overrides: hybridOverrides }
+      };
+    }
     if (Number.isFinite(perDigitAdena) && perDigitAdena !== bestAdena) {
       console.log('[OCR ADENA] per-digit override: full-num=' + bestAdena + ' → per-digit=' + perDigitAdena + ' (' + perDigitDetail + ')');
       const matched = valid.filter((r) => r.digits.length === dominantLen);
@@ -2832,15 +2981,11 @@
         parsed: { adena: perDigitAdena, agreementCount: dominantLenCnt, totalAttempts: valid.length, perDigit: true }
       };
     }
-    // Template override 일시 비활성화 (라벨링 노이즈로 인한 false override 발견됨)
-    //   사례: tesseract가 49065 정확히 인식했는데 template이 49051(80%)로 잘못 덮어씀
-    //   → 라벨링 시 5/6/0 confusion 들어가서 템플릿 자체가 신뢰 불가
-    //   해결책: 템플릿 재구축 필요 (검증된 데이터로) — 추후 작업
-    //   현재는 정보 로그만 출력, OCR 결과 그대로 사용
+    // 가변 길이 template 정보 로그만 (override 안 함 — 라벨노이즈 위험)
     if (Number.isFinite(templateAdena) && templateAdena !== bestAdena) {
       const ocrLen = String(bestAdena).length;
       const lenDiff = templateLen !== ocrLen;
-      console.log('[OCR ADENA] ℹ template 차이 (override 비활성): OCR=' + bestAdena + ' template=' + templateAdena + ' conf=' + (templateConf * 100).toFixed(1) + '%' + (lenDiff ? ' [길이 ' + ocrLen + '→' + templateLen + ']' : ''));
+      console.log('[OCR ADENA] ℹ template 차이 (var-length override 비활성): OCR=' + bestAdena + ' template=' + templateAdena + ' conf=' + (templateConf * 100).toFixed(1) + '%' + (lenDiff ? ' [길이 ' + ocrLen + '→' + templateLen + ']' : ''));
     }
 
     // 1차 다수결: half 미달이면 parsed null로 → 다음 틱 재시도
