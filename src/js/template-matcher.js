@@ -16,6 +16,7 @@
 
   let TEMPLATES = null;       // { '0': [Uint8Array, ...], '1': [...], ... }
   let TEMPLATE_SIZE = [16, 24];
+  let TEMPLATE_FORMAT = 'binary';  // 'binary' (Hamming) or 'grayscale' (Manhattan)
   let LOADED = false;
 
   function _hammingDistance(a, b) {
@@ -27,7 +28,27 @@
     return dist;
   }
 
-  // 0~255 popcount LUT
+  function _manhattanDistance(a, b) {
+    // Sum of absolute differences (grayscale-aware)
+    let dist = 0;
+    for (let i = 0; i < a.length; i++) {
+      const d = a[i] - b[i];
+      dist += d < 0 ? -d : d;
+    }
+    return dist;
+  }
+
+  function _distance(a, b) {
+    return TEMPLATE_FORMAT === 'grayscale' ? _manhattanDistance(a, b) : _hammingDistance(a, b);
+  }
+
+  function _maxDistance() {
+    // 최악의 거리: binary는 total bits, grayscale은 pixels * 255
+    const pixels = TEMPLATE_SIZE[0] * TEMPLATE_SIZE[1];
+    return TEMPLATE_FORMAT === 'grayscale' ? pixels * 255 : pixels;
+  }
+
+  // 0~255 popcount LUT (binary 모드 전용)
   const POPCOUNT = new Uint8Array(256);
   for (let i = 0; i < 256; i++) {
     let n = i, count = 0;
@@ -44,6 +65,7 @@
 
   /**
    * 템플릿 JSON 로드.
+   * format 자동 감지: json.format === 'grayscale'이면 Manhattan, 아니면 Hamming(binary).
    * @param {string} jsonPath digit-templates.json 경로 (Electron renderer는 file:// 또는 fetch 가능 경로)
    */
   async function load(jsonPath) {
@@ -53,6 +75,7 @@
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const json = await res.json();
       TEMPLATE_SIZE = json.size;
+      TEMPLATE_FORMAT = json.format === 'grayscale' ? 'grayscale' : 'binary';
       TEMPLATES = {};
       let total = 0;
       for (const [ch, b64list] of Object.entries(json.templates)) {
@@ -60,7 +83,8 @@
         total += TEMPLATES[ch].length;
       }
       LOADED = true;
-      console.log('[TemplateMatcher] 로드 완료:', total, '템플릿,', Object.keys(TEMPLATES).length, '글자.', TEMPLATE_SIZE[0] + 'x' + TEMPLATE_SIZE[1]);
+      console.log('[TemplateMatcher] 로드 완료:', total, '템플릿,', Object.keys(TEMPLATES).length, '글자.',
+        TEMPLATE_SIZE[0] + 'x' + TEMPLATE_SIZE[1], '(' + TEMPLATE_FORMAT + ')');
       return true;
     } catch (e) {
       console.error('[TemplateMatcher] 로드 실패:', e);
@@ -69,13 +93,20 @@
   }
 
   /**
-   * Canvas 영역(x0~x1)을 16x24 binary signature로 변환.
-   * threshold=128: 어두운 픽셀(글자) → 1, 밝은 픽셀(배경) → 0.
+   * Canvas 영역(x0~x1)을 TEMPLATE_SIZE signature로 변환.
+   *
+   * 모드별 출력 형식:
+   *   binary    — 픽셀당 1bit (gray<128=1) → packed bytes (16x24=48 / 24x36=108)
+   *   grayscale — 픽셀당 1byte 0~255 → flat bytes (16x24=384)
+   *
+   * 게임 캔버스: 어두운 글자 = 검은(낮은 값), 밝은 배경 = 흰(높은 값) — 자동 반전 필요 X
+   * (전처리 단계에서 이미 invert 처리됨)
    */
   function _canvasToSignature(canvas, x0, x1) {
     const w = TEMPLATE_SIZE[0];
     const h = TEMPLATE_SIZE[1];
-    // 임시 캔버스에 영역만 16x24로 리사이즈 (nearest-neighbor)
+    const totalPx = w * h;
+    // 임시 캔버스에 영역만 리사이즈 (nearest-neighbor)
     const tmp = document.createElement('canvas');
     tmp.width = w;
     tmp.height = h;
@@ -86,9 +117,19 @@
     ctx.drawImage(canvas, x0, 0, sw, sh, 0, 0, w, h);
     const img = ctx.getImageData(0, 0, w, h);
     const pixels = img.data;
-    // RGBA → grayscale → binary → packed bytes (48 bytes)
-    const sig = new Uint8Array(48);
-    const totalPx = w * h;
+    if (TEMPLATE_FORMAT === 'grayscale') {
+      const sig = new Uint8Array(totalPx);
+      for (let i = 0; i < totalPx; i++) {
+        const r = pixels[i * 4];
+        const g = pixels[i * 4 + 1];
+        const b = pixels[i * 4 + 2];
+        sig[i] = ((r + g + b) / 3) | 0;
+      }
+      return sig;
+    }
+    // binary
+    const packedBytes = (totalPx + 7) >>> 3;
+    const sig = new Uint8Array(packedBytes);
     for (let i = 0; i < totalPx; i++) {
       const r = pixels[i * 4];
       const g = pixels[i * 4 + 1];
@@ -103,20 +144,22 @@
 
   /**
    * 단일 자릿수 영역에서 모든 글자 템플릿과 비교 → 최고 점수.
+   * Distance: TEMPLATE_FORMAT에 따라 Hamming(binary) or Manhattan(grayscale).
    * @returns {{ char: string, score: number, dist: number, secondBest: object }}
    */
   function _matchChar(signature, allowedChars) {
-    let best = { char: null, dist: 9999, score: 0 };
-    let secondBest = { char: null, dist: 9999, score: 0 };
-    const total = signature.length * 8;
+    const maxDist = _maxDistance();
+    const INF = maxDist + 1;
+    let best = { char: null, dist: INF, score: 0 };
+    let secondBest = { char: null, dist: INF, score: 0 };
     for (const [ch, templates] of Object.entries(TEMPLATES)) {
       if (allowedChars && !allowedChars.includes(ch)) continue;
-      let minDist = 9999;
+      let minDist = INF;
       for (const tpl of templates) {
-        const d = _hammingDistance(signature, tpl);
+        const d = _distance(signature, tpl);
         if (d < minDist) minDist = d;
       }
-      const score = 1 - (minDist / total);  // 0~1
+      const score = 1 - (minDist / maxDist);  // 0~1
       if (minDist < best.dist) {
         secondBest = { ...best };
         best = { char: ch, dist: minDist, score };
