@@ -2923,12 +2923,20 @@
     }
 
     // ===== 1차: 풀-넘버 다수결 =====
+    //   동률 시 짧은 자릿수 선호 (digit-add 방지) — 같은 표 수면 "59897" vs "995897"에서 "59897" 선택
     const counts = {};
     valid.forEach((r) => { counts[r.adena] = (counts[r.adena] || 0) + 1; });
     let bestAdena = valid[0].adena;
     let bestCount = 0;
+    let bestLen = String(bestAdena).length;
     for (const [v, cnt] of Object.entries(counts)) {
-      if (cnt > bestCount) { bestCount = cnt; bestAdena = parseInt(v, 10); }
+      const vNum = parseInt(v, 10);
+      const vLen = String(vNum).length;
+      if (cnt > bestCount) {
+        bestCount = cnt; bestAdena = vNum; bestLen = vLen;
+      } else if (cnt === bestCount && vLen < bestLen) {
+        bestAdena = vNum; bestLen = vLen;
+      }
     }
 
     // ===== 1.5차: Leading-digit-drop 검출 =====
@@ -2982,7 +2990,15 @@
     digitsList.forEach((s) => { lenCounts[s.length] = (lenCounts[s.length] || 0) + 1; });
     let dominantLen = 0, dominantLenCnt = 0;
     for (const [L, cnt] of Object.entries(lenCounts)) {
-      if (cnt > dominantLenCnt) { dominantLenCnt = cnt; dominantLen = parseInt(L, 10); }
+      const lenInt = parseInt(L, 10);
+      if (cnt > dominantLenCnt) {
+        dominantLenCnt = cnt; dominantLen = lenInt;
+      } else if (cnt === dominantLenCnt && lenInt < dominantLen) {
+        // 동률 tiebreaker: 더 짧은 길이 선호
+        //   digit-add (phantom 추가 글자) 방지 — autoTrim 후에도 가끔 발생하는 케이스 대응
+        //   "995897" (6자리) vs "59897" (5자리) 동률이면 "59897" 선택
+        dominantLen = lenInt;
+      }
     }
     if (dominantLen > 0 && dominantLenCnt >= Math.ceil(valid.length / 2)) {
       sameLenList = digitsList.filter((s) => s.length === dominantLen);
@@ -3694,7 +3710,7 @@
         const sameAsLast = pVal === dr.lastVal;
         if (sameAsLast) dr.count++;
         else { dr.lastVal = pVal; dr.count = 1; }
-        const RECOVER_THRESHOLD = 3;
+        const RECOVER_THRESHOLD = 2;  // 3 → 2 (반응성 ↑, 안전성 살짝 ↓)
         const canRecover = dr.count >= RECOVER_THRESHOLD &&
                            pDigits >= 4 &&
                            pDigits === anchorDigits - 1 &&
