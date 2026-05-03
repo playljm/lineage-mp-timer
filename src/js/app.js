@@ -3090,13 +3090,16 @@
           const tplScore = t.score || 0;
           const tplGap = tplScore - ((t.secondBest && t.secondBest.score) || 0);
           const cleanBest = isClean(t.char);
-          // Tier A — DECISIVE (grayscale 16x24 score 0.85-0.95 range 기준 조정)
-          if (cleanBest && tplScore >= 0.88 && tplGap >= 0.05) tier = 'A-clean';
-          else if (tplScore >= 0.93 && tplGap >= 0.10) tier = 'A-extreme';
+          // Tier A — DECISIVE
+          //   grayscale Manhattan distance 실측 score 범위: 0.60~0.80
+          //   gap은 보통 0.02~0.08 (clean class), 0.01~0.04 (noisy class)
+          //   사용자 보고 데이터: p0:6(66%,gap=2%), p4:4(76%,gap=5%) — 정확한 매치도 76% 정도
+          if (cleanBest && tplScore >= 0.74 && tplGap >= 0.04) tier = 'A-clean';
+          else if (tplScore >= 0.80 && tplGap >= 0.08) tier = 'A-extreme';
           // Tier B — RECOVERY (voting weak only)
           else if (!votingStrong) {
-            if (cleanBest && tplScore >= 0.84 && tplGap >= 0.03) tier = 'B-clean';
-            else if (!cleanBest && tplScore >= 0.88 && tplGap >= 0.06) tier = 'B-noisy';
+            if (cleanBest && tplScore >= 0.70 && tplGap >= 0.025) tier = 'B-clean';
+            else if (!cleanBest && tplScore >= 0.74 && tplGap >= 0.04) tier = 'B-noisy';
           }
           if (tier) {
             chosen = t.char;
@@ -3678,10 +3681,39 @@
           return pr;
         }
       }
-      // 자릿수가 둘 다 anchor보다 작은 misread → reject (anchor 보존)
+      // 자릿수가 둘 다 anchor보다 작은 misread → 일반적으로 reject (anchor 보존)
+      //
+      // 단 — Cached anchor 복구 휴리스틱:
+      //   사용자 anchor가 이전 misread로 잘못 캐시된 경우 (예: 진짜 58039인데 anchor=586391),
+      //   매번 "둘 다 digit-drop" 떠도 anchor 절대 복구 안됨 → 무한 stuck.
+      //
+      //   복구 조건 (동시 충족 필요):
+      //     1. 동일한 paddle 값이 N(=3)회 연속 digit-drop으로 거부됨
+      //     2. paddle 값이 multi-digit (5+ digit)이고 plausible
+      //     3. paddle의 자릿수가 anchor보다 정확히 1자리 적음 (큰 단위 변화 아님)
+      //   → 그 paddle 값을 새 anchor로 인정 (cached misread anchor 복구)
       if (pDigits < anchorDigits && tDigits < anchorDigits) {
-        console.log('[Hybrid ADENA] both digit-drops vs anchor=' + anchor + ': p=' + pr.parsed.adena + ' t=' + tr.parsed.adena);
-        pushHybridLog('ADENA ❌ 둘 다 digit-drop vs anchor=' + anchor);
+        const pVal = pr.parsed.adena;
+        // 정적 카운터 (사용자 ADENA 영역별로)
+        if (!ocrAdenaRegionHybrid._dropRecover) ocrAdenaRegionHybrid._dropRecover = { lastVal: 0, count: 0 };
+        const dr = ocrAdenaRegionHybrid._dropRecover;
+        const sameAsLast = pVal === dr.lastVal;
+        if (sameAsLast) dr.count++;
+        else { dr.lastVal = pVal; dr.count = 1; }
+        const RECOVER_THRESHOLD = 3;
+        const canRecover = dr.count >= RECOVER_THRESHOLD &&
+                           pDigits >= 4 &&
+                           pDigits === anchorDigits - 1 &&
+                           pVal > 0;
+        if (canRecover) {
+          console.log('[Hybrid ADENA] 🔓 cached anchor 복구: paddle=' + pVal + ' (' + dr.count + '회 연속 digit-drop) vs old anchor=' + anchor);
+          pushHybridLog('🔓 ADENA cached anchor 복구: ' + anchor + ' → ' + pVal + ' (' + dr.count + '회 연속)');
+          dr.count = 0;
+          dr.lastVal = 0;
+          return pr;
+        }
+        console.log('[Hybrid ADENA] both digit-drops vs anchor=' + anchor + ': p=' + pr.parsed.adena + ' t=' + tr.parsed.adena + ' (recover ' + dr.count + '/' + RECOVER_THRESHOLD + ')');
+        pushHybridLog('ADENA ❌ 둘 다 digit-drop vs anchor=' + anchor + ' (' + dr.count + '/' + RECOVER_THRESHOLD + ')');
         return { text: 'mismatch p:' + pr.text + ' t:' + tr.text, confidence: 0, parsed: null };
       }
     }
