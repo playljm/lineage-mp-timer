@@ -1,211 +1,258 @@
-# 세션 인수인계 — 2026-05-04 v2 (OCR 99% 목표 종합 개선)
+# 세션 인수인계 — 2026-05-04 v3 (OCR 99% 종합 개선 진행)
 
 > **다음 세션 시 가장 먼저 읽어야 할 문서**
-> 이번 세션에서 3단계 종합 개선 (전처리 다양성 + Hybrid per-digit override + Grayscale 템플릿 재구축) 완료.
+> 이번 세션은 사용자 보고 → 진단 → 수정 → 사용자 재테스트 사이클을 9차례 거치며 OCR 정확도를 크게 끌어올렸습니다.
 
 ---
 
 ## ⚡ TL;DR — 30초 요약
 
-**현재 상태**: 사용자 목표 "정확도 99%" 달성을 위해 3단계 종합 개선 완료. 베이스라인 휴리스틱 위에 신규 보정 레이어 추가 (위험도 낮음, regression 가능성 최소화).
+**이번 세션 시작 상태**: 베이스라인 휴리스틱만 활성. 5만→9만, 끝자리 phantom "1" 등 misread 빈번.
 
-**적용된 변경사항**:
-1. **전처리 다양성 ↑** — ADENA: 4 캔버스(default+soft+otsu+raw)×3 PSM = 12 결과 / MP: 3 캔버스×2 PSM = 6 결과
-2. **Hybrid per-digit override** — voting 약함(margin<75%) + 템플릿 강함(score≥92%, gap≥8%)일 때만 단일 자릿수 교체 (전체 number 교체 X)
-3. **Grayscale 템플릿 재구축** — 16x24 binary → 16x24 grayscale (Manhattan distance, 라벨 노이즈 자동 제거 rank-based filter)
+**현재 상태 (사용자 직접 평가)**:
+> "점점 좋아지고 있어 아주 인식 잘하다가 중간중간 튀는 현상이 발생하고 있어 / 이제까지 제일 인식 잘 되고 있어"
 
-**테스트 필요**: 사용자 실전 사용 후 정확도 측정. 만약 regression 발견 시 commit revert로 즉시 롤백 가능.
+**주요 성과**:
+- MP/LEVEL: 안정적 (✅ 정상)
+- EXP: 0.1%p 점프 검증 큐로 misread 거의 차단
+- ADENA: cached anchor 자동 복구 + AutoTrim + 3-tier override
 
----
-
-## 📊 이번 세션의 시도/결과 (정직 보고)
-
-### 시도 1: lineage.traineddata 학습
-- **결과**: ❌ 오버피팅 (LEVEL 41/42=`28`, MP 90%=`/235`, 5000 iter 과도)
-- **증상**: 학습 후 인식이 학습 전보다 더 나빠짐 ("박살")
-- **조치**: `eng+lineage` → `eng` 단독으로 복구 (커밋 `91bb29d`)
-- **자산 보존**: WSL `/root/tesstrain/data/lineage/checkpoints/` 체크포인트 + `build/tessdata/lineage.traineddata` 파일 삭제 안 함
-
-### 시도 2: Template Matching (Hamming distance)
-- **계획**: 463개 라벨 데이터 → 자릿수 템플릿 492개 추출 → OCR 결과 검증
-- **구현**: `src/js/template-matcher.js`, `src/js/digit-templates.json` (32KB)
-- **결과**: ❌ False override 발생 — 정확한 OCR 결과(49065)를 잘못된 값(49051)으로 덮어씀
-- **원인 추정**:
-  1. Claude가 직접 라벨링한 데이터에 5/6/0/8 confusion 들어감
-  2. 픽셀 폰트의 5/6 자체가 글리프 유사
-  3. 16x24 binary 다운샘플링으로 미세한 차이 소실
-- **조치**: Override 코드 비활성화 (정보 로그만 출력, 커밋 `8b956e5`)
-- **자산 보존**: 템플릿 파일/모듈은 삭제 안 함 (재라벨링 후 재활성화 가능)
-
-### 보너스 수정
-- **MP anchor=0 첫 인식 보호** (커밋 `ae34156`): 앱 재시작 직후 anchor MP=0이면 paddle plausibility 체크 무력화되던 버그. `hasAnchor` 체크 추가.
-- **앱 재시작 시 트래커 자동 일시정지** (커밋 `fd2584f`): 사용자 불만 해결. tracker.active=true 저장 상태로 재시작해도 startedAt 자동 reset.
-- **컴팩트 모드 트래커 행 추가** (이전 세션 마무리): F3 단축키, 두 줄 레이아웃.
+**남은 한계**:
+- ADENA 가끔 phantom 추가 글자 (995897 같은)
+- EXP/ADENA 가끔 spike (verification으로 대부분 흡수됨)
+- 픽셀 폰트 OCR 본질적 한계 (특히 0/4/6/7/8/9 confusion)
 
 ---
 
-## 🆕 2026-05-04 v2 추가된 개선
+## 📊 이번 세션 누적 9개 commit
 
-### A. 전처리 다양성 확장 (`src/js/app.js`)
-- 새 함수: `applyOtsuBinarization(canvas)` — Otsu 자동 threshold 이진화
-- `preprocessCanvas(canvas, opts)` 시그니처 변경: `opts = { sharpen, binarize, contrastLo, contrastHi }`
-- `captureRegionToCanvas(region, mode)` 추가 mode: `'default' | 'soft' | 'otsu' | 'tight'`
-- ADENA OCR: 4 캔버스 × 3 PSM = 최대 12 결과 (이전 6개)
-- MP OCR: 3 캔버스 × 2 PSM = 최대 6 결과 (이전 2개)
-- **효과**: agreement-misread (양쪽 엔진 동시 misread) 깨질 확률 ↑
+```
+1976d61 fix: ADENA digit-add 방지 + cached anchor 복구 빠르게 (3→2회)
+e3191cd fix: EXP 0.1%p 점프 임계값 + 검증 큐 (사용자 요청)
+9bce20a fix: cached anchor 자동 복구 + Tier 임계값 grayscale 실측 보정
+fdf9b4b feat: 캡처 영역 가장자리 artifact 자동 trim
+20ddd12 diagnose: ADENA template 진단 정보 UI 로그 + Tier A 임계값 조정
+5ef2582 fix: ADENA leading-digit unanimous misread 정정 (class-aware 3-tier)
+e92708c docs: 세션 인수인계 v2
+570a031 feat: Grayscale 16x24 템플릿 + template-matcher 동적 format
+6a48ee8 feat: OCR 정확도 개선 — 전처리 다양성 + Hybrid per-digit override
+```
 
-### B. Hybrid per-digit override (`src/js/app.js`) — class-aware 3-tier
-- 기존 per-digit voting + 신규 templatePerCharFixed (고정 길이 템플릿 per-position 점수) 결합
-- WSL purity 리포트 기반 클래스 분류:
-  - **CLEAN** (positive avg purity): `1`, `2`, `3`, `5`, `/`, `.` — 라벨 노이즈 적음
-  - **NOISY** (negative avg purity): `0`, `4`, `6`, `7`, `8`, `9` — 라벨 노이즈 있음
-- 위치별 결정 트리:
-  - **Tier A (DECISIVE)**: clean class + score≥93%/gap≥6% OR 어느 class든 score≥97%/gap≥13% → 무조건 override
-    - 사례: "5만→9만" leading misread (모든 OCR 엔진이 동시에 "9"로 misread해도 정정)
-  - **Tier B (RECOVERY)**: voting weak/tied + (clean: ≥88%/4% OR noisy: ≥92%/8%)
-  - **Tier C (SAFE)**: voting strong + template 거부 → voting 채택
-- 안전 장치: 한 번에 2개 이상 위치 동시 override는 template hallucination 의심 → reject
-- **효과**: 전체 number override의 false positive 위험 회피하면서 unanimous misread도 단일 자릿수 정정 가능
-
-### C. Grayscale 템플릿 재구축 (`scripts/training/build_templates_grayscale.py`)
-- 16x24 binary (48 bytes) → 16x24 grayscale (384 bytes)
-- Distance metric: Hamming → Manhattan (sum-abs-diff, anti-alias 정보 보존)
-- Inter-class purity rank-based filter: 각 클래스에서 top 50 by purity 유지 (절대 임계값 X)
-- 결과: 529 templates, 268KB (이전 492 binary, 32KB)
-- **알게 된 것**: 0/4/6/7/8/9 클래스는 grayscale에서도 negative purity → 라벨 노이즈/시각적 모호성 확정
-- **하지만**: 이로 인해 hybrid override가 해당 디짓에서 score 92% 못 넘어 **자동으로 발동 안 됨** → false override 위험 ↓
-
-### D. template-matcher.js 업그레이드
-- format 자동 감지 (`json.format === 'grayscale'`)
-- `_distance()` / `_maxDistance()` 헬퍼로 binary↔grayscale 자동 분기
-- 시그니처 크기 동적 (`Uint8Array(48)` 하드코딩 제거)
-
-### E. 빌드 산출물
-- `dist/LineageMPTimer-paddle-portable-1.2.0-paddle.exe` (134MB · 02:11)
-- `dist/LineageMPTimerPaddle Setup 1.2.0-paddle.exe` (134MB)
+**최신 빌드**: `dist/LineageMPTimer-paddle-portable-1.2.0-paddle.exe` (134MB · **03:20**)
 
 ---
 
-## 🛡️ 현재 활성 OCR 보정 스택 (v2)
+## 🛡️ 현재 활성 OCR 보정 스택 (v3)
 
 ```
 [1]  Hybrid voting (paddle + tesseract)
 [2]  PSM 7/8/13 다수결
-[3]  4-canvas 다양성 (default 12x / soft 12x / otsu 12x / raw 16x+pad10) ← UPGRADED
-[4]  Per-digit majority voting (4↔9, 6↔8 같은 단일 자리 confusion)
-[5]  Leading-digit-drop suffix-match (anchor 없어도 동작)
-[6]  Anti-stuck 휴리스틱 (한쪽 anchor 고정 시 forward 우선)
+[3]  4-canvas 다양성 (default 12x / soft 12x / otsu 12x / raw 16x+pad10)
+[4]  Per-digit majority voting (4↔9, 6↔8 confusion)
+[5]  Leading-digit-drop suffix-match
+[6]  Anti-stuck 휴리스틱
 [7]  MP anchor=0 첫 인식 보호
-[8]  Pad 10px 확장 (영역 잘림 보충)
-[9]  Hybrid per-digit override (voting weak + template strong → 단일 자릿수 교체) ← NEW
-[10] Grayscale 16x24 templates with Manhattan distance ← NEW
+[8]  Pad 10px 확장
+[9]  Class-aware 3-tier hybrid override (A-clean/A-extreme/B-clean/B-noisy)
+[10] Grayscale 16x24 templates with Manhattan distance
+[11] AutoTrim 가장자리 artifact 자동 제거 (양 끝 isolated narrow group)
+[12] Cached anchor 자동 복구 (paddle 같은 값 2회 연속 → anchor 갱신)
+[13] EXP 0.1%p 점프 임계값 + 검증 큐 (큰 변화는 2회 검증 후 accept)
+[14] ADENA digit-add 방지 (자릿수 동률 시 짧은 길이 선호)
 ```
 
-비활성:
-- Lineage traineddata (`build/tessdata/lineage.traineddata` 파일 보존, worker는 `eng`만 사용)
-- Full-number Template override (가변 길이) — 라벨노이즈 위험으로 정보 로그만 출력
+---
+
+## 🆕 v3 핵심 추가 사항 상세
+
+### A. 전처리 다양성 확장 (`src/js/app.js`)
+- `preprocessCanvas(canvas, opts)` 모드 지원 (sharpen/binarize/contrastLo/contrastHi)
+- `applyOtsuBinarization()` 신규
+- `captureRegionToCanvas(region, mode)` modes: `default | soft | otsu | tight`
+- ADENA OCR: 4 캔버스 × 3 PSM = 최대 12 결과
+- MP OCR: 3 캔버스 × 2 PSM = 최대 6 결과
+
+### B. Class-aware 3-tier hybrid override
+WSL purity 리포트 기반 클래스 분류:
+- **CLEAN** (positive avg purity): `1`, `2`, `3`, `5`, `/`, `.` — 라벨 노이즈 적음
+- **NOISY** (negative avg purity): `0`, `4`, `6`, `7`, `8`, `9` — 라벨 노이즈 있음
+
+위치별 결정 트리 (grayscale 실측 score 0.60-0.80 기준 보정됨):
+```
+Tier A-clean    score≥0.74, gap≥0.04, best=clean class    → DECISIVE
+Tier A-extreme  score≥0.80, gap≥0.08                       → DECISIVE
+Tier B-clean    voting weak + score≥0.70, gap≥0.025        → RECOVERY
+Tier B-noisy    voting weak + score≥0.74, gap≥0.04         → RECOVERY
+```
+
+안전 장치: 한 번에 2개 이상 위치 동시 override는 template hallucination 의심 → reject
+
+### C. Grayscale 16x24 templates
+- 16x24 binary (48 bytes) → 16x24 grayscale (384 bytes)
+- Distance: Hamming → Manhattan (sum-abs-diff, anti-alias 정보 보존)
+- Inter-class purity rank-based filter
+- `digit-templates.json`: 268KB, 529 templates
+- `template-matcher.js`: format 자동 감지 (`json.format === 'grayscale'`)
+
+### D. AutoTrim 가장자리 artifact 자동 제거
+함수: `autoTrimEdgeArtifacts(canvas, side)` in `app.js`
+
+알고리즘:
+1. 컬럼 ink density 분석 (명/암 자동 감지)
+2. ink groups 식별
+3. 양 끝 그룹 검사:
+   - width < median × 25%
+   - gap ≥ 3px
+   - vertical extent < 60%
+4. 위 3조건 모두 충족 → trim
+
+호출 위치: `captureRegionToCanvas` + `captureRegionToRawCanvas` 둘 다
+
+UI 로그: `✂️ AutoTrim L:Xpx+R:Ypx (artifact 제거: oldW→newW px)`
+
+### E. EXP 0.1%p 점프 임계값 + 검증 큐
+사용자 요청: "한틱에 5%는 너무 높고.. 0.1% 이상도 막아줘"
+
+`ocrExpRegionHybrid()` 변경:
+- `isPlausibleForward`: 5%p → ±0.1%p
+- 둘 다 일치 시에도 anchor 대비 >0.1%p 점프면 검증 큐
+- 검증 큐: 같은 값 2회 연속 + 1회 ACCEPT (총 3회)
+- 레벨업 예외 (anchor>95% AND val<5%) → 즉시 허용
+
+UI 로그:
+- `EXP ⏳ 검증 시작 (점프 0.250%p > 0.1%p): 50.7723`
+- `EXP ⏳ 검증중 (2/3) 점프 ...`
+- `EXP 🟢 검증 통과`
+
+### F. ADENA cached anchor 자동 복구
+`ocrAdenaRegionHybrid` "둘 다 digit-drop" 분기 강화:
+- 같은 paddle 값이 **2회 연속** rejected → 자동 anchor 갱신
+- 조건: paddle 4+자리 + anchor보다 1자리 적음 + 같은 값 2회
+
+UI 로그: `🔓 ADENA cached anchor 복구: 586391 → 58039 (2회 연속)`
+
+### G. 자릿수 동률 시 짧은 길이 선호 (digit-add 방지)
+`ocrAdenaRegionTesseract` voting:
+- 풀-넘버 majority: "59897"(6표) vs "995897"(6표) 동률 → 짧은 "59897"
+- 자릿수 길이 majority: 5자리(6표) vs 6자리(6표) 동률 → 5자리
 
 ---
 
-## 🎯 다음 시도 후보 (우선순위 순)
+## 🎯 내일 작업 후보 (우선순위 순)
 
-### A. 재라벨링 + 템플릿 재구축 (가장 현실적)
-1. WSL `/root/tesstrain/data/lineage-ground-truth/` 463개 PNG 다시 검토
-2. 의심 라벨 (특히 5/6, 8/3, 4/9) 수동 재검증
-3. 검증된 라벨만으로 templates 재추출
-4. Override threshold를 매우 보수적(90%+)으로 재활성화
-5. 또는 paddle/tess 둘 다 동의하는 케이스에서만 추출 (high confidence ground truth만)
+### 🟢 P1 — 안전, 영향 큼
 
-### B. 단일 자릿수 CNN 분류기 (대안 ML)
-- 462개 자릿수 샘플 (글자별 30~50개) → 간단 CNN 학습
-- TensorFlow.js 모델로 export → 32KB 이하 가능
-- 추론 시 CPU 5ms 이내
-- 라벨 노이즈에 더 robust (학습 시 오류 평균화)
+#### 1. ADENA 큰 점프 검증 큐 (EXP와 동일 패턴)
+- 현재: ADENA는 stability check만 있음 (사용자 설정 N회 연속)
+- 추가: anchor 대비 큰 점프(예: ±50% 이상) 시 명시적 verification queue
+- 이점: 가끔 발생하는 ADENA spike (995897 같은) 더 적극적으로 차단
+- 위치: `ocrAdenaRegionHybrid` `voteHybrid` 호출 직전에 anchor-jump check
 
-### C. 데이터 다양화 후 traineddata 재학습
-- 다양한 캐릭터(다른 MP max), 다양한 LEVEL(1~99), 다양한 ADENA 자릿수
-- iteration 1500~2000으로 축소 (오버피팅 방지)
-- Validation set 분리 + 조기 종료
-- text2image로 합성 데이터 추가
+#### 2. Per-canvas outlier detection
+- 현재: 12개 결과 전체에서 majority voting
+- 추가: canvas별 (default/soft/otsu/raw) 결과 클러스터링 → outlier canvas 무시
+- 사례: raw 캔버스가 일관되게 다른 길이 결과 생성 시 outlier로 처리
+- 위치: `ocrAdenaRegionTesseract` results 분석 단계
 
-### D. Tesseract 단독 정확도 개선
-- LSTM beam_width 조정, lstm_choice_mode 조정
-- 다른 PSM 모드 (10, 11) 시도
-- 더 다양한 preprocessing variants (binarization, dilation, erosion)
+#### 3. EXP 검증 큐 tolerance 재조정
+- 현재: tol=0.001 (50.5223 vs 50.5224 매칭)
+- 고려: tol=0.01 (50.5223 vs 50.5113 같은 OCR jitter도 매칭)
+- 위험: 너무 관대하면 misread 통과 가능
 
-### E. 사용자 워크플로우 우회
-- ITEM DROPS 시스템: ADENA 수동 입력 (기존 기능, 이미 100% 정확)
-- 사용자가 OCR misread 발견 시 트래커 NOW 직접 수정 → 5초 OCR skip
+### 🟡 P2 — 효과 불확실, 시간 투자 큼
+
+#### 4. ADENA 영역 한 번에 여러 캡처 후 평균 (anti-flicker)
+- ADENA 화면이 살짝 깜박이면 OCR 결과 흔들림
+- 100ms 간격 3번 캡처 → 평균
+- 단점: OCR cycle 시간 ↑
+
+#### 5. Tesseract LSTM 단독 정확도 개선
+- `lstm_choice_mode = 2` 같은 파라미터 튜닝
+- 다른 PSM 모드 추가 (10, 11)
+
+#### 6. 신뢰도 가중 voting
+- 각 OCR 결과의 `confidence` 값 활용
+- 현재: 모든 결과 동등 가중치
+- 새: `confidence > 70`인 결과에 1.5x 가중
+
+### 🔴 P3 — 큰 변경, 위험 높음
+
+#### 7. 자릿수별 CNN 분류기 (실패한 traineddata 대체)
+- 463 라벨 데이터 → 단일 자리 CNN 학습
+- TensorFlow.js로 export → 32KB 이하
+- 추론 5ms 이내
+- 라벨 노이즈에 더 robust
+- 위험: 학습 환경 + 시간 투자 큼, 또 실패 가능성
+
+#### 8. ADENA 영역 자동 fine-tune
+- 영역을 ±1px씩 nudge하면서 OCR 일관성 측정
+- 가장 일관된 영역으로 auto-correct
+- 위험: 사용자 의도와 충돌 가능
+
+### 🚪 우회 옵션 (정확도가 정 안되면)
+
+- **ITEM DROPS 워크플로우**: ADENA OCR 끄고 수동 입력 (100% 정확)
+- 사용자 트래커 NOW 칸 직접 편집 (5초 OCR pause 자동)
 
 ---
 
-## 🗂️ 핵심 자산 위치 (변경 없음, 보존 상태)
+## 🗂️ 핵심 자산 위치
 
 ### Windows
 | 자산 | 경로 | 상태 |
 |------|------|------|
-| 빌드 산출물 (최신) | `dist/LineageMPTimer-paddle-portable-1.2.0-paddle.exe` (134MB · 01:38) | 베이스라인 휴리스틱 |
-| 학습 데이터 (라벨됨) | `%APPDATA%\Roaming\LineageMPTimer\training-data\` (463개) | 보존 |
-| traineddata (비활성) | `build/tessdata/lineage.traineddata` (11.7MB) + `.gz` (6.3MB) | 보존, 미사용 |
-| Templates JSON | `src/js/digit-templates.json` (32KB) | 보존, 호출 안 됨 |
-| Template matcher 모듈 | `src/js/template-matcher.js` | 보존, override 비활성 |
+| 빌드 | `dist/LineageMPTimer-paddle-portable-1.2.0-paddle.exe` (134MB · 03:20) | 최신 (v3) |
+| 학습 데이터 | `%APPDATA%/Roaming/LineageMPTimer/training-data/` (463개) | 보존 |
+| traineddata (비활성) | `build/tessdata/lineage.traineddata` (11.7MB) | 보존, 미사용 |
+| 현재 templates | `src/js/digit-templates.json` (268KB grayscale) | 활성 |
+| Template matcher | `src/js/template-matcher.js` | 활성 |
+| Template rebuild report | `build/tessdata/template-rebuild-report.txt` | 진단용 |
+| Python builders | `scripts/training/build_templates_grayscale.py` etc | 보존 |
 
 ### WSL Ubuntu (root)
 | 자산 | 경로 | 상태 |
 |------|------|------|
-| 학습 환경 | `/root/tesstrain/`, `/root/lineage-train/` | 보존 |
 | Ground truth | `/root/tesstrain/data/lineage-ground-truth/` (463 PNG+gt.txt) | 보존 |
-| 학습 체크포인트 | `/root/tesstrain/data/lineage/checkpoints/` (BCER 1.96%) | 보존 |
-| 추출된 raw 템플릿 PNG | `/root/templates/` (글자별 폴더) | 보존 |
-| 헬퍼 스크립트 | `/root/setup_data.sh`, `/root/extract_templates.py`, `/root/build_templates_compact.py` | 보존 |
+| Templates raw PNG | `/root/templates/` (글자별 폴더) | 보존 |
+| Template builders | `/root/build_templates_grayscale.py` etc | 보존 |
 
 ---
 
-## 📚 관련 문서
+## ⚠️ 알려진 제약 / 함정
 
-| 문서 | 내용 |
-|------|------|
-| `CLAUDE.md` | 프로젝트 전체 컨텍스트 + WSL 환경 + 단축키 (F3 컴팩트) |
-| `docs/OCR-FUTURE-PLAN.md` | OCR 개선 계획 + 사용자 지시 + 진행 history |
-| `docs/TRAINING-PIPELINE.md` | WSL 학습 파이프라인 6단계 가이드 |
-| `docs/SESSION-HANDOFF-LATEST.md` | 이 문서 (최신 세션 인수인계) |
+### Grayscale 템플릿의 점수 범위
+- **Manhattan distance 기준 score는 0.60~0.80 범위**가 정상
+- Binary Hamming의 0.85~0.95와 다르므로 임계값 헷갈리지 말 것
+- Tier A clean threshold = 0.74 (이전 0.93은 도달 불가능했던 값)
 
----
+### 라벨 노이즈
+- 463개 PNG 라벨링이 Claude 직접 작업 → 5/6, 8/3, 4/9 confusion 들어감
+- 0/4/6/7/8/9 클래스는 negative purity → 템플릿 변별력 낮음
+- Tier A는 clean class에서만 발동, noisy class는 자동 비활성화
 
-## ⚠️ 함정 / 알려진 제약
+### Cached anchor 함정
+- ADENA misread가 anchor에 캐시되면 OCR 결과 영구 거부됨
+- 자동 복구 로직 (2회 연속 같은 paddle 값) 있으나 극단 케이스 발생 가능
+- 수동 escape: "최근 아데나" 칸 직접 편집 → 5초 OCR pause
 
-### 라벨링 노이즈
-- Claude가 463개 PNG를 직접 보고 라벨링 → 5/6/0/8 confusion 일부 들어갔을 가능성 높음
-- 검증되지 않은 라벨 데이터로 ML/template은 위험
-- 다음 시도 전 라벨 audit 필수
-
-### 픽셀 폰트 글리프 유사성
-- 게임 폰트 5와 6: 둘 다 위쪽 곡선 + 아래쪽 닫힌 루프 → 유사
-- 4와 9: 위쪽 닫힌 모양 + 아래쪽 처짐 → 유사
-- 8과 5/6: 안티앨리어싱으로 차이 흐려짐
-- → 단순 이미지 비교는 한계, 컨텍스트(자릿수, anchor) 활용 중요
-
-### Tesseract.js v5 + 다중 lang
-- `eng+lineage` 사용 시 lineage가 우세하게 작용 가능 (확실치 않음)
-- 안전하게 단일 lang(`eng`)만 사용 권장 — 현재 상태
+### Git remote 미설정
+- `git push` 불가 — 로컬 commit만 누적됨
+- 필요 시: `git remote add origin <URL>` 후 push
 
 ### WSL shell escape
-- `wsl.exe -- bash -c "..."` 시 변수 expand 잘못되는 케이스 존재
-- 해결: 스크립트 파일로 작성 후 `wsl.exe -d Ubuntu -u root -- bash //path/to/script.sh` (앞에 `//` 두 개 필요, Git Bash 경로 변환 회피)
-
-### Git
-- Remote 미설정. push 하려면 GitHub repo 생성 후 `git remote add origin ...` 필요
-- 브랜치: `paddle-ocr`
+- `wsl.exe -- bash -c "..."` 시 변수 expand 깨짐
+- 해결: 스크립트 파일 작성 후 `wsl.exe -d Ubuntu -u root -- bash //path/to/script.sh` (앞 `//` 두 개 필수)
 
 ---
 
 ## 💬 사용자 컨텍스트
 
 - 한국어 응답 선호
-- 빠른 피드백 사이클 선호
-- "정확도 박살나면 즉시 롤백" 요구함 (학습 전 수준 복귀를 우선시)
-- ITEM DROPS 수동 입력보다 OCR 자동화 선호하지만, 정확도 저하 시 롤백 우선
-- 진행률/상태 명확히 보고 받길 원함
+- 빠른 피드백 사이클 선호 ("점점 좋아지고 있어")
+- "정확도 박살나면 즉시 롤백" 요구 (학습 전 수준 복귀를 우선시)
+- 직접 라벨링 작업 등 손이 많이 가는 작업은 거부 → 코드 중심 해결 선호
+- ITEM DROPS 수동 입력보다 OCR 자동화 선호 (정확도 가능한 한)
+- 임계값 등 구체적 숫자 지시 가능 (예: "0.1% 이상도 막아줘")
 
 ---
 
@@ -214,30 +261,48 @@
 ```
 1. cd C:\dev\lineage-mp-timer
 2. cat docs/SESSION-HANDOFF-LATEST.md          ← 이 문서 (가장 먼저)
-3. git log --oneline -10                        ← 최근 커밋 확인
-4. CLAUDE.md (프로젝트 구조 파악)
-5. docs/OCR-FUTURE-PLAN.md (OCR 개선 계획 + history)
+3. git log --oneline -10                        ← 최근 9개 commit 확인
+4. CLAUDE.md (프로젝트 구조)
+5. docs/OCR-FUTURE-PLAN.md (OCR 개선 history)
 6. 사용자 요청 처리
+
+테스트 이어가려면:
+  dist/LineageMPTimer-paddle-portable-1.2.0-paddle.exe 실행
+  Hybrid 결정 로그에서 새 메시지 패턴 확인:
+    ✅ Template 529개 로드
+    ✂️ AutoTrim L:Xpx+R:Ypx
+    🔍 ADENA template ... vs OCR ...
+    🔧 ADENA per-digit override
+    🔓 ADENA cached anchor 복구
+    EXP ⏳ 검증중
+    EXP 🟢 검증 통과
 ```
 
 ---
 
-## 📝 이번 세션 누적 커밋 (15개)
+## 📈 진척 측정 (사용자 평가)
 
-```
-8b956e5 fix: ADENA template override 일시 비활성화 — 라벨링 노이즈로 false override
-d70f985 fix: ADENA template matching 캔버스 불일치 + threshold 조정
-33adf9c feat: ADENA template matching 가변 길이 (OCR digit-drop 대응)
-ae34156 fix: MP hybrid voting — anchor=0 (첫 인식) 시 paddle plausibility 거부 버그
-83f2d73 feat: 픽셀 폰트 Template Matching 시스템 추가 (학습 모델 폐기 대안)
-91bb29d fix: lineage.traineddata 사용 보류 — 오버피팅으로 인식 정확도 악화
-609da35 build: lineage.traineddata.gz 추가 (gzip 압축본)
-fd2584f fix: 앱 재시작 시 세션 트래커 자동 일시정지
-494f37c docs: 인수인계 문서 보강
-ec51acb feat: 컴팩트 모드 + ADENA OCR 강화 + 게임 폰트 traineddata 통합
-```
+| 시점 | 사용자 평가 |
+|------|------------|
+| 세션 시작 | "5만 아데나를 9만 아데나로 인식해" / "포기하는게 맞을까??" |
+| AutoTrim 추가 후 | (테스트) |
+| Cached anchor 복구 후 | (테스트) |
+| EXP 0.1% 임계값 후 | "점점 좋아지고 있어 / 이제까지 제일 인식 잘 되고 있어" |
+| 추가 개선 (1976d61) | **테스트 대기 중** |
 
 ---
 
-_Last updated: 2026-05-04 01:40 · 작성: Claude (Anthropic)_
-_사용자 지시: "기록 남겨줘 compact하고 작업 다시 하려고해"_
+## 🎯 내일 시작 시 첫 액션
+
+1. 사용자에게 어제 빌드(03:20) 추가 테스트 결과 물어보기
+2. 결과 따라 다음 결정:
+   - **잘 되면**: P3-7 (CNN 분류기) 또는 finalize/release
+   - **여전히 spike 발생**: P1-1 (ADENA 큰 점프 검증) 적용
+   - **새 misread 패턴**: 진단 데이터 분석 후 fix
+
+3. 경우에 따라 OCR-FUTURE-PLAN.md 진척 history도 갱신
+
+---
+
+_Last updated: 2026-05-04 03:25 · 작성: Claude (Anthropic)_
+_사용자 지시: "내일 추가 작업하려고해 문서 작업 남겨줘"_

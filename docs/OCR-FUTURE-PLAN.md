@@ -135,10 +135,67 @@ paddle 쪽도 fine-tuning 가능하지만 도구 체인 복잡함:
   - 조치: Override 비활성, 정보 로그만 출력 (커밋 `8b956e5`)
   - 자산 보존: `digit-templates.json`, `template-matcher.js` 보존
 
-- 2026-05-04 **현재 상태**:
-  - 베이스라인 휴리스틱만 활성 (이전 세션과 동일 수준)
-  - 다음 시도 후보: ① 재라벨링+템플릿 재구축 ② CNN 분류기 ③ 데이터 다양화 후 재학습
-  - 상세: `docs/SESSION-HANDOFF-LATEST.md` § "다음 시도 후보" 참조
+- 2026-05-04 v3 **3단계 종합 개선 + UI 진단 + 검증 시스템** (commit 6a48ee8 ~ 1976d61):
+
+  **A. 전처리 다양성 확장**
+  - `preprocessCanvas` 모드 (sharpen/binarize 옵션) + Otsu 이진화 추가
+  - 4 캔버스 변형 (default/soft/otsu/raw) × 3 PSM = 12 결과
+  - MP에도 3 캔버스 적용
+  - agreement-misread (양쪽 엔진 동시 misread) 깨질 확률 ↑
+
+  **B. Class-aware 3-tier hybrid override**
+  - WSL purity 리포트 → CLEAN(1,2,3,5,/,.) vs NOISY(0,4,6,7,8,9) 분류
+  - Tier A-clean: score≥0.74/gap≥0.04 → DECISIVE override (unanimous misread도 정정)
+  - Tier A-extreme: score≥0.80/gap≥0.08 → DECISIVE
+  - Tier B (voting weak): clean ≥0.70/0.025, noisy ≥0.74/0.04
+  - 안전 장치: 2개 이상 위치 동시 override는 reject
+
+  **C. Grayscale 16x24 templates**
+  - 16x24 binary (48B/48KB) → 16x24 grayscale (384B/268KB)
+  - Hamming → Manhattan distance (anti-alias 정보 보존)
+  - Inter-class purity rank-based filter (top 50 per class)
+  - `template-matcher.js` format 자동 감지 (`json.format === 'grayscale'`)
+
+  **D. AutoTrim 가장자리 artifact 자동 제거**
+  - `autoTrimEdgeArtifacts()` 함수 신규 (column ink density 분석)
+  - 양 끝 isolated narrow group 감지 → trim
+  - 보호 조건: width<25%, gap≥3, vertical<60% (real "1" 디짓 보존)
+  - 명/암 자동 감지 (preprocessed/raw 둘 다 지원)
+  - 사용자가 영역을 정확히 못 그려도 자동 보정
+
+  **E. Cached anchor 자동 복구**
+  - 동일 paddle 값이 2회 연속 digit-drop으로 거부되면 anchor 자동 갱신
+  - 잘못된 cached anchor에서 자동 탈출 (586391 → 58039)
+
+  **F. EXP 0.1%p 점프 임계값 + 검증 큐**
+  - 사용자 요청: "한틱에 5%는 너무 높고.. 0.1% 이상도 막아줘"
+  - ±0.1%p만 즉시 허용, 그 이상은 2회 연속 같은 값 검증
+  - 레벨업 (anchor>95% → val<5%) 예외
+
+  **G. 자릿수 동률 시 짧은 길이 선호**
+  - 풀-넘버 majority 동률 → 짧은 자릿수 우선 ("59897" vs "995897" → "59897")
+  - digit-add (phantom 글자) 자동 방지
+
+  **H. UI 진단 강화**
+  - `pushHybridLog`로 모든 override/AutoTrim/검증 결정 노출
+  - F12 안 열어도 사용자가 OCR 결정 흐름 실시간 확인 가능
+
+  **결과 (사용자 평가)**:
+  > "점점 좋아지고 있어 아주 인식 잘하다가 중간중간 튀는 현상이 발생하고 있어"
+  > "이제까지 제일 인식 잘 되고 있어"
+
+  **남은 한계**:
+  - ADENA digit-add 케이스 (995897 같은) 가끔 발생
+  - EXP/ADENA spike 가끔 발생 (verification으로 대부분 흡수)
+  - 픽셀 폰트 OCR 본질적 한계 (특히 0/4/6/7/8/9 confusion)
+
+- 2026-05-04 **현재 상태 (v3)**:
+  - 9개 commit 누적, 빌드 `dist/LineageMPTimer-paddle-portable-1.2.0-paddle.exe` (134MB · 03:20)
+  - 사용자 평가: "이제까지 제일 인식 잘 되고 있어"
+  - 다음 시도 후보: `docs/SESSION-HANDOFF-LATEST.md` § "내일 작업 후보" 참조
+    P1: ADENA 큰 점프 검증 큐 / Per-canvas outlier / EXP tolerance 재조정
+    P2: anti-flicker 다중 캡처 / Tesseract LSTM 튜닝 / 신뢰도 가중 voting
+    P3: CNN 분류기 / 영역 자동 fine-tune
 
 ---
 
