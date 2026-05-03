@@ -2907,11 +2907,19 @@
               'p' + i + ':' + (p.char || '?') + '(' + ((p.score || 0)*100).toFixed(0) + '%,gap=' +
               (((p.score || 0) - (p.secondBest && p.secondBest.score || 0))*100).toFixed(0) + '%)').join(' ');
             console.log('[OCR ADENA template] fixed len=' + dominantLen + ' text=' + fixedRes.text + ' detail=' + detail);
+            // UI 로그 — 템플릿 결과가 OCR과 다르면 진단 정보로 표시
+            if (fixedRes.text !== String(bestAdena)) {
+              pushHybridLog('🔍 ADENA template ' + fixedRes.text + ' vs OCR ' + bestAdena + ' | ' + detail);
+            }
           }
         }
       } catch (e) {
         console.warn('[OCR ADENA template] match failed:', e);
       }
+    } else {
+      // 템플릿 미로딩 진단 (한 번만 표시되도록 throttle 가능하지만 일단 매번)
+      if (!window.TemplateMatcher) pushHybridLog('⚠ TemplateMatcher 모듈 미로딩');
+      else if (!window.TemplateMatcher.isLoaded()) pushHybridLog('⚠ TemplateMatcher 데이터 미로딩');
     }
 
     // ===== 4차: Hybrid per-digit override — class-aware 3-tier =====
@@ -2950,13 +2958,13 @@
           const tplScore = t.score || 0;
           const tplGap = tplScore - ((t.secondBest && t.secondBest.score) || 0);
           const cleanBest = isClean(t.char);
-          // Tier A — DECISIVE
-          if (cleanBest && tplScore >= 0.93 && tplGap >= 0.06) tier = 'A-clean';
-          else if (tplScore >= 0.97 && tplGap >= 0.13) tier = 'A-extreme';
+          // Tier A — DECISIVE (grayscale 16x24 score 0.85-0.95 range 기준 조정)
+          if (cleanBest && tplScore >= 0.88 && tplGap >= 0.05) tier = 'A-clean';
+          else if (tplScore >= 0.93 && tplGap >= 0.10) tier = 'A-extreme';
           // Tier B — RECOVERY (voting weak only)
           else if (!votingStrong) {
-            if (cleanBest && tplScore >= 0.88 && tplGap >= 0.04) tier = 'B-clean';
-            else if (!cleanBest && tplScore >= 0.92 && tplGap >= 0.08) tier = 'B-noisy';
+            if (cleanBest && tplScore >= 0.84 && tplGap >= 0.03) tier = 'B-clean';
+            else if (!cleanBest && tplScore >= 0.88 && tplGap >= 0.06) tier = 'B-noisy';
           }
           if (tier) {
             chosen = t.char;
@@ -2994,6 +3002,7 @@
     // 3) 그 외엔 다수결 그대로
     if (Number.isFinite(hybridAdena) && hybridAdena !== bestAdena && hybridOverrides > 0) {
       console.log('[OCR ADENA] hybrid per-digit override: full-num=' + bestAdena + ' → hybrid=' + hybridAdena + ' (' + hybridDetail + ')');
+      pushHybridLog('🔧 ADENA per-digit override: ' + bestAdena + ' → ' + hybridAdena + ' (' + hybridDetail + ')');
       const matched = valid.filter((r) => r.digits.length === dominantLen);
       const avgConf = matched.reduce((s, r) => s + r.confidence, 0) / Math.max(1, matched.length);
       return {
@@ -3960,8 +3969,19 @@
       // 템플릿 매처 로드 (병렬, 실패해도 OCR 동작은 가능)
       const templateLoadPromise = (window.TemplateMatcher && !window.TemplateMatcher.isLoaded())
         ? window.TemplateMatcher.load('./js/digit-templates.json')
-            .then((ok) => console.log('[AutoDetect] TemplateMatcher:', ok ? 'OK ' + window.TemplateMatcher.templateCount() + ' 템플릿' : 'failed'))
-            .catch((e) => console.warn('[AutoDetect] TemplateMatcher 로드 실패:', e))
+            .then((ok) => {
+              if (ok) {
+                console.log('[AutoDetect] TemplateMatcher: OK ' + window.TemplateMatcher.templateCount() + ' 템플릿');
+                pushHybridLog('✅ Template ' + window.TemplateMatcher.templateCount() + '개 로드');
+              } else {
+                console.warn('[AutoDetect] TemplateMatcher load returned false');
+                pushHybridLog('❌ Template 로드 실패');
+              }
+            })
+            .catch((e) => {
+              console.warn('[AutoDetect] TemplateMatcher 로드 실패:', e);
+              pushHybridLog('❌ Template 로드 예외: ' + (e.message || e));
+            })
         : Promise.resolve();
 
       if (autoDetect.ocrEngine === 'paddle') {
