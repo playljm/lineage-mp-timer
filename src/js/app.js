@@ -3196,10 +3196,14 @@
     }
     // 불일치 — max 일치 + cur 변화량이 plausible(20 이내)이면 단독 채택
     // 정상 사냥 중 MP는 한 틱(1초)에 ±20 이상 안 변함 (기본 ~+10/16s)
+    // anchor=0(첫 인식)일 땐 anchor 체크 스킵 — userMax + cur 범위만 검증
     const userMax = parseInt(dom.inMaxMp.value, 10) || 0;
     const anchorCur = parseInt(dom.inCurMp.value, 10) || 0;
-    const pPlausible = pr.parsed.max === userMax && Math.abs(pr.parsed.cur - anchorCur) <= 20 && pr.parsed.cur >= 0 && pr.parsed.cur <= userMax;
-    const tPlausible = tr.parsed.max === userMax && Math.abs(tr.parsed.cur - anchorCur) <= 20 && tr.parsed.cur >= 0 && tr.parsed.cur <= userMax;
+    const hasAnchor = anchorCur > 0;
+    const pBaseValid = pr.parsed.max === userMax && pr.parsed.cur >= 0 && pr.parsed.cur <= userMax;
+    const tBaseValid = tr.parsed.max === userMax && tr.parsed.cur >= 0 && tr.parsed.cur <= userMax;
+    const pPlausible = pBaseValid && (!hasAnchor || Math.abs(pr.parsed.cur - anchorCur) <= 20);
+    const tPlausible = tBaseValid && (!hasAnchor || Math.abs(tr.parsed.cur - anchorCur) <= 20);
     if (pPlausible && !tPlausible) {
       console.log('[Hybrid MP] paddle plausible, accept:', pr.parsed);
       pushHybridLog('MP 🟢 paddle 단독 채택: ' + pr.parsed.cur + '/' + pr.parsed.max);
