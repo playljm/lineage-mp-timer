@@ -2832,24 +2832,15 @@
         parsed: { adena: perDigitAdena, agreementCount: dominantLenCnt, totalAttempts: valid.length, perDigit: true }
       };
     }
-    // Template override: confidence threshold 동적 조정
-    //   - 길이 다름 (digit-drop) → 65% 이상이면 override (강한 신호)
-    //   - 길이 같음 (단일 자리 confusion) → 70% 이상이면 override
+    // Template override 일시 비활성화 (라벨링 노이즈로 인한 false override 발견됨)
+    //   사례: tesseract가 49065 정확히 인식했는데 template이 49051(80%)로 잘못 덮어씀
+    //   → 라벨링 시 5/6/0 confusion 들어가서 템플릿 자체가 신뢰 불가
+    //   해결책: 템플릿 재구축 필요 (검증된 데이터로) — 추후 작업
+    //   현재는 정보 로그만 출력, OCR 결과 그대로 사용
     if (Number.isFinite(templateAdena) && templateAdena !== bestAdena) {
       const ocrLen = String(bestAdena).length;
       const lenDiff = templateLen !== ocrLen;
-      const threshold = lenDiff ? 0.65 : 0.70;
-      if (templateConf >= threshold) {
-        console.log('[OCR ADENA] 🎯 template override: OCR=' + bestAdena + '(' + ocrLen + '자리) → template=' + templateAdena + '(' + templateLen + '자리) conf=' + (templateConf * 100).toFixed(1) + '%' + (lenDiff ? ' [길이 보정]' : ''));
-        pushHybridLog('ADENA 🎯 template 보정: ' + bestAdena + ' → ' + templateAdena + ' (' + (templateConf * 100).toFixed(0) + '%' + (lenDiff ? ', 자릿수 ' + ocrLen + '→' + templateLen : '') + ')');
-        return {
-          text: templateText,
-          confidence: templateConf * 100,
-          parsed: { adena: templateAdena, agreementCount: 1, totalAttempts: valid.length + 1, templateOverride: true, templateLen }
-        };
-      } else {
-        console.log('[OCR ADENA] ⚠ template 차이있으나 conf 부족: OCR=' + bestAdena + ' template=' + templateAdena + ' conf=' + (templateConf * 100).toFixed(1) + '% < ' + (threshold * 100) + '%');
-      }
+      console.log('[OCR ADENA] ℹ template 차이 (override 비활성): OCR=' + bestAdena + ' template=' + templateAdena + ' conf=' + (templateConf * 100).toFixed(1) + '%' + (lenDiff ? ' [길이 ' + ocrLen + '→' + templateLen + ']' : ''));
     }
 
     // 1차 다수결: half 미달이면 parsed null로 → 다음 틱 재시도
