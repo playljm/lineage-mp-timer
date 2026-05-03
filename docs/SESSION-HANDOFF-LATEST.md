@@ -1,112 +1,118 @@
-# 세션 인수인계 — 2026-05-03
+# 세션 인수인계 — 2026-05-04 (compact)
 
-> 이 문서는 **다음 세션에서 작업을 이어받을 때 가장 먼저 읽어야 할** 인수인계 문서입니다.
-> 이전 세션에서 진행된 모든 작업의 컨텍스트와 다음 단계가 정리되어 있습니다.
-
----
-
-## 📋 이번 세션 요약
-
-### 시작 상황
-- v1.2.0-paddle 빌드 직전 상태
-- 컴팩트 모드 일부 구현됨, ADENA OCR misread 다발
-- 사용자 요청 흐름:
-  1. 컴팩트 모드 + 트래커 행 통합 요청
-  2. ADENA 4↔9, leading-digit-drop misread 보고 (수회)
-  3. 사용자 지시: "개선이 안된다면 학습 시켜서 하는 방향으로 할게 기록 남겨줘"
-  4. 휴리스틱 한계 도달 → "B로 가야해. A는 의미없어" (학습 기반 전환)
-  5. "라벨링 작업 니가 작업해줘 claude code가 작업 가능한거 아니야?" → Claude가 직접 라벨링 수행
-  6. "wsl 설치되어있어 진행해줘" → WSL Tesseract 학습 실행
-
-### 종료 상황
-- BCER 1.96% 달성한 `lineage.traineddata` 통합 완료
-- 빌드 (127MB portable exe) 사용자 테스트 대기 중
-- 모든 변경 단일 커밋 (`ec51acb`) — remote 미설정으로 push 보류
+> **다음 세션 시 가장 먼저 읽어야 할 문서**
+> 이전 세션의 학습 시도 → 실패 → 복귀 전체 흐름과 다음 작업 시작점이 정리되어 있습니다.
 
 ---
 
-## ✅ 완료된 작업
+## ⚡ TL;DR — 30초 요약
 
-### 1. 컴팩트 모드 (UI)
-- F3 단축키 + 📦 버튼
-- 두 줄 레이아웃:
-  - Row 1: 🕐 시작 / 📈 EXP/H / 💰 ADENA/H
-  - Row 2: ⚔️ Lv NOW + 증가량 / 📊 EXP NOW + 증가량 / 🪙 아데나 NOW + 증가량
-- 창 크기 자동 조정: 560×190 (min 360×130)
-- 파일: `src/index.html` (compact-view 섹션), `src/js/app.js` (`syncCompactView`), `electron/main.js` (`app:set-compact-mode` IPC), `src/styles/neon.css`
+**현재 상태**: OCR 정확도는 **세션 시작 직전 수준** (베이스라인 휴리스틱). lineage.traineddata 학습과 template matching 모두 정확도를 악화시켜 비활성화.
 
-### 2. ADENA OCR 휴리스틱 강화 (ocrAdenaRegionTesseract)
-- **이중 캔버스**: preprocessed 12x + raw 16x
-- **PSM × 캔버스 = 6개 결과**
-- **per-digit majority voting**: 자릿수 일치 결과끼리 위치별 majority
-- **leading-digit-drop suffix-match**: 짧은 결과가 긴 결과의 suffix면 긴 쪽 채택
-- **pad 4 → 10**: 영역 사방 확장 (글자 잘림 방지)
-- 파일: `src/js/app.js` 라인 ~2144 부근
+**작동 중**: hybrid voting + per-digit voting + leading-digit-drop suffix-match + MP anchor=0 보호.
 
-### 3. 자동 캡처 + 사후 라벨링 도구
-- **단계 1 (사냥 중)**: "🎬 자동 캡처 시작" → 매 N초 PNG 저장 (라벨 없이)
-- **단계 2 (사냥 후)**: "🏷️ 라벨링 시작" → OCR 추천값 미리 채워진 input으로 Enter 연타
-- **단축키**: Enter (확정) / Tab (스킵) / Del (삭제) / Esc (종료)
-- **일괄 처리**: 💨 같은 OCR 모두 확정 / 💢 모두 삭제
-- **N-history dedup**: 최근 10개 OCR 추적, 중복 80% 절약
-- IPC: `save-pending-sample`, `list-pending-samples`, `confirm-pending-sample`, `delete-pending-sample`, `clear-all-pending`
-- 파일: `src/index.html` (training-section), `src/js/app.js` (training functions), `electron/main.js` (IPC handlers)
+**비활성**: lineage.traineddata (오버피팅), Template Override (라벨링 노이즈).
 
-### 4. 게임 폰트 traineddata 학습
-- 463개 라벨된 샘플 (사용자 일부 + Claude가 본 세션에서 라벨링)
-- WSL Ubuntu + tesstrain Makefile + Tesseract LSTM fine-tuning
-- 5000 iterations → **BCER 1.96%** (베이스 4.02% 대비 52% 개선)
-- 결과: `build/tessdata/lineage.traineddata` (11.7MB)
-- 통합: worker init `lang='eng+lineage'`
+**다음 시도 후보**: ① 재라벨링 후 템플릿 재구축 ② CNN 분류기 ③ ITEM DROPS 활용.
 
 ---
 
-## 🚧 미완료 / 사용자 검증 필요
+## 📊 이번 세션의 시도/결과 (정직 보고)
 
-### 🧪 테스트 검증 (가장 중요)
-새 portable exe로 다음 케이스 검증 필요:
+### 시도 1: lineage.traineddata 학습
+- **결과**: ❌ 오버피팅 (LEVEL 41/42=`28`, MP 90%=`/235`, 5000 iter 과도)
+- **증상**: 학습 후 인식이 학습 전보다 더 나빠짐 ("박살")
+- **조치**: `eng+lineage` → `eng` 단독으로 복구 (커밋 `91bb29d`)
+- **자산 보존**: WSL `/root/tesstrain/data/lineage/checkpoints/` 체크포인트 + `build/tessdata/lineage.traineddata` 파일 삭제 안 함
 
-1. **`LineageMPTimer-paddle-portable-1.2.0-paddle.exe` 실행** (127MB · 03:10 빌드)
-2. **자동 감지 ON** 후 OCR 정확도 확인:
-   - ADENA: 이전 misread 케이스 (49224, 49411, 42402 등) 정확히 인식?
-   - EXP: 5↔8 confusion 해결?
-   - MP: leading-digit-drop ("171/235", "187/235") 정확히 인식?
-3. **F12 콘솔 확인**: `[Tesseract] loading language traineddata` 메시지에 `eng+lineage` 표시되는지
+### 시도 2: Template Matching (Hamming distance)
+- **계획**: 463개 라벨 데이터 → 자릿수 템플릿 492개 추출 → OCR 결과 검증
+- **구현**: `src/js/template-matcher.js`, `src/js/digit-templates.json` (32KB)
+- **결과**: ❌ False override 발생 — 정확한 OCR 결과(49065)를 잘못된 값(49051)으로 덮어씀
+- **원인 추정**:
+  1. Claude가 직접 라벨링한 데이터에 5/6/0/8 confusion 들어감
+  2. 픽셀 폰트의 5/6 자체가 글리프 유사
+  3. 16x24 binary 다운샘플링으로 미세한 차이 소실
+- **조치**: Override 코드 비활성화 (정보 로그만 출력, 커밋 `8b956e5`)
+- **자산 보존**: 템플릿 파일/모듈은 삭제 안 함 (재라벨링 후 재활성화 가능)
 
-### 다음 작업 후보 (우선순위 순)
-1. **사용자 테스트 결과 반영**:
-   - 정확도 충분 → 휴리스틱 단순화 (per-digit voting, suffix-match 등 정리)
-   - 정확도 부족 → 추가 데이터 수집 + 재학습
-2. **Remote 설정 + push**: 현재 로컬 커밋만 (`ec51acb`). GitHub repo 만들면 `git remote add origin ... && git push -u origin paddle-ocr`
-3. **버전 bump**: `package.json` 1.2.0-paddle → 1.3.0 또는 v2.0.0 (메이저 변경 폭 큼)
-4. **CHANGELOG.md 작성** (현재 없음, 신규 파일 생성)
+### 보너스 수정
+- **MP anchor=0 첫 인식 보호** (커밋 `ae34156`): 앱 재시작 직후 anchor MP=0이면 paddle plausibility 체크 무력화되던 버그. `hasAnchor` 체크 추가.
+- **앱 재시작 시 트래커 자동 일시정지** (커밋 `fd2584f`): 사용자 불만 해결. tracker.active=true 저장 상태로 재시작해도 startedAt 자동 reset.
+- **컴팩트 모드 트래커 행 추가** (이전 세션 마무리): F3 단축키, 두 줄 레이아웃.
 
 ---
 
-## 🗂️ 핵심 자산 위치
+## 🛡️ 현재 활성 OCR 보정 스택
 
-### Windows 측
-| 자산 | 경로 |
-|------|------|
-| 프로젝트 루트 | `C:\dev\lineage-mp-timer\` |
-| 빌드 산출물 | `dist/LineageMPTimer-paddle-portable-1.2.0-paddle.exe` |
-| 학습 데이터 (영구) | `%APPDATA%\Roaming\LineageMPTimer\training-data\{mp,exp,level,adena}\` (463개) |
-| 학습 데이터 (대기) | `%APPDATA%\Roaming\LineageMPTimer\training-data\_pending\` (현재 비어있음) |
-| traineddata | `build\tessdata\lineage.traineddata` (11.7MB) |
-| 베이스 traineddata | `build\tessdata\eng.traineddata.gz` (10.9MB) |
+```
+[1] Hybrid voting (paddle + tesseract)
+[2] PSM 7/8/13 다수결
+[3] 이중 캔버스 (preprocessed 12x + raw 16x) → 6개 결과
+[4] Per-digit majority voting (4↔9, 6↔8 같은 단일 자리 confusion)
+[5] Leading-digit-drop suffix-match (anchor 없어도 동작)
+[6] Anti-stuck 휴리스틱 (한쪽 anchor 고정 시 forward 우선)
+[7] MP anchor=0 첫 인식 보호 ← NEW
+[8] Pad 10px 확장 (영역 잘림 보충)
+```
 
-### WSL Ubuntu 측 (root)
-| 자산 | 경로 | 크기 |
+비활성:
+- Lineage traineddata (`build/tessdata/lineage.traineddata` 파일 보존, worker는 `eng`만 사용)
+- Template override (`src/js/template-matcher.js` 코드 보존, ADENA OCR에서 호출 안 됨)
+
+---
+
+## 🎯 다음 시도 후보 (우선순위 순)
+
+### A. 재라벨링 + 템플릿 재구축 (가장 현실적)
+1. WSL `/root/tesstrain/data/lineage-ground-truth/` 463개 PNG 다시 검토
+2. 의심 라벨 (특히 5/6, 8/3, 4/9) 수동 재검증
+3. 검증된 라벨만으로 templates 재추출
+4. Override threshold를 매우 보수적(90%+)으로 재활성화
+5. 또는 paddle/tess 둘 다 동의하는 케이스에서만 추출 (high confidence ground truth만)
+
+### B. 단일 자릿수 CNN 분류기 (대안 ML)
+- 462개 자릿수 샘플 (글자별 30~50개) → 간단 CNN 학습
+- TensorFlow.js 모델로 export → 32KB 이하 가능
+- 추론 시 CPU 5ms 이내
+- 라벨 노이즈에 더 robust (학습 시 오류 평균화)
+
+### C. 데이터 다양화 후 traineddata 재학습
+- 다양한 캐릭터(다른 MP max), 다양한 LEVEL(1~99), 다양한 ADENA 자릿수
+- iteration 1500~2000으로 축소 (오버피팅 방지)
+- Validation set 분리 + 조기 종료
+- text2image로 합성 데이터 추가
+
+### D. Tesseract 단독 정확도 개선
+- LSTM beam_width 조정, lstm_choice_mode 조정
+- 다른 PSM 모드 (10, 11) 시도
+- 더 다양한 preprocessing variants (binarization, dilation, erosion)
+
+### E. 사용자 워크플로우 우회
+- ITEM DROPS 시스템: ADENA 수동 입력 (기존 기능, 이미 100% 정확)
+- 사용자가 OCR misread 발견 시 트래커 NOW 직접 수정 → 5초 OCR skip
+
+---
+
+## 🗂️ 핵심 자산 위치 (변경 없음, 보존 상태)
+
+### Windows
+| 자산 | 경로 | 상태 |
 |------|------|------|
-| 데이터 작업 폴더 | `/root/lineage-train/` | ~10MB |
-| tesstrain 워크스페이스 | `/root/tesstrain/` | ~50MB |
-| Ground truth (학습 입력) | `/root/tesstrain/data/lineage-ground-truth/` (463 PNG+gt.txt) | ~10MB |
-| 베이스 모델 (best) | `/root/tesstrain/tessdata_best/eng.traineddata` | 16MB |
-| **학습 체크포인트** | `/root/tesstrain/data/lineage/checkpoints/` (BCER별 보존) | ~30MB |
-| 최종 결과물 | `/root/tesstrain/data/lineage.traineddata` | 11.7MB |
-| 헬퍼 스크립트 | `/root/setup_data.sh`, `/root/gen_lstmf.sh`, `/root/run_train.sh` | - |
+| 빌드 산출물 (최신) | `dist/LineageMPTimer-paddle-portable-1.2.0-paddle.exe` (134MB · 01:38) | 베이스라인 휴리스틱 |
+| 학습 데이터 (라벨됨) | `%APPDATA%\Roaming\LineageMPTimer\training-data\` (463개) | 보존 |
+| traineddata (비활성) | `build/tessdata/lineage.traineddata` (11.7MB) + `.gz` (6.3MB) | 보존, 미사용 |
+| Templates JSON | `src/js/digit-templates.json` (32KB) | 보존, 호출 안 됨 |
+| Template matcher 모듈 | `src/js/template-matcher.js` | 보존, override 비활성 |
 
-체크포인트 보존되어 있어 **이어 학습 가능** (`--continue_from data/lineage/checkpoints/lineage_checkpoint`).
+### WSL Ubuntu (root)
+| 자산 | 경로 | 상태 |
+|------|------|------|
+| 학습 환경 | `/root/tesstrain/`, `/root/lineage-train/` | 보존 |
+| Ground truth | `/root/tesstrain/data/lineage-ground-truth/` (463 PNG+gt.txt) | 보존 |
+| 학습 체크포인트 | `/root/tesstrain/data/lineage/checkpoints/` (BCER 1.96%) | 보존 |
+| 추출된 raw 템플릿 PNG | `/root/templates/` (글자별 폴더) | 보존 |
+| 헬퍼 스크립트 | `/root/setup_data.sh`, `/root/extract_templates.py`, `/root/build_templates_compact.py` | 보존 |
 
 ---
 
@@ -114,36 +120,79 @@
 
 | 문서 | 내용 |
 |------|------|
-| `CLAUDE.md` | 프로젝트 전체 컨텍스트 (이번 세션 변경 반영됨) |
-| `docs/OCR-FUTURE-PLAN.md` | OCR 정확도 개선 계획 + 진행 history (사용자 지시 기록) |
-| `docs/TRAINING-PIPELINE.md` | WSL 학습 파이프라인 6단계 가이드 (이번 세션 신규) |
-| `docs/SESSION-HANDOFF-LATEST.md` | 이 문서 — 최신 세션 인수인계 |
+| `CLAUDE.md` | 프로젝트 전체 컨텍스트 + WSL 환경 + 단축키 (F3 컴팩트) |
+| `docs/OCR-FUTURE-PLAN.md` | OCR 개선 계획 + 사용자 지시 + 진행 history |
+| `docs/TRAINING-PIPELINE.md` | WSL 학습 파이프라인 6단계 가이드 |
+| `docs/SESSION-HANDOFF-LATEST.md` | 이 문서 (최신 세션 인수인계) |
 
 ---
 
-## ⚠️ 알려진 제약
+## ⚠️ 함정 / 알려진 제약
+
+### 라벨링 노이즈
+- Claude가 463개 PNG를 직접 보고 라벨링 → 5/6/0/8 confusion 일부 들어갔을 가능성 높음
+- 검증되지 않은 라벨 데이터로 ML/template은 위험
+- 다음 시도 전 라벨 audit 필수
+
+### 픽셀 폰트 글리프 유사성
+- 게임 폰트 5와 6: 둘 다 위쪽 곡선 + 아래쪽 닫힌 루프 → 유사
+- 4와 9: 위쪽 닫힌 모양 + 아래쪽 처짐 → 유사
+- 8과 5/6: 안티앨리어싱으로 차이 흐려짐
+- → 단순 이미지 비교는 한계, 컨텍스트(자릿수, anchor) 활용 중요
+
+### Tesseract.js v5 + 다중 lang
+- `eng+lineage` 사용 시 lineage가 우세하게 작용 가능 (확실치 않음)
+- 안전하게 단일 lang(`eng`)만 사용 권장 — 현재 상태
+
+### WSL shell escape
+- `wsl.exe -- bash -c "..."` 시 변수 expand 잘못되는 케이스 존재
+- 해결: 스크립트 파일로 작성 후 `wsl.exe -d Ubuntu -u root -- bash //path/to/script.sh` (앞에 `//` 두 개 필요, Git Bash 경로 변환 회피)
 
 ### Git
-- **Remote 미설정**: `git remote -v` 비어있음. push 하려면 GitHub repo 생성 후 추가 필요.
-- **브랜치**: `paddle-ocr` (master 아님)
-
-### WSL
-- `wsl.exe -- bash` 실행 시 **shell 변수 escape 이슈** — `bash -c "..."` 형태로 변수 인용 시 wsl.exe가 변수를 빈 값으로 expand. 해결책: 스크립트 파일로 작성 후 `wsl.exe -d Ubuntu -u root -- bash //path/to/script.sh` 형태로 실행 (앞에 `//` 두 개 필요, Git Bash 경로 변환 회피).
-
-### Tesseract.js v5
-- `eng+lineage` lang 사용 시 두 traineddata 모두 로드 (CDN 또는 로컬 tessdata에서). 패키징 시 `build/tessdata/`에 둘 다 있어야 함.
-- 첫 실행 시 traineddata 로드에 시간 소요 (~10초). `[Tesseract] loading language traineddata` 메시지 확인.
+- Remote 미설정. push 하려면 GitHub repo 생성 후 `git remote add origin ...` 필요
+- 브랜치: `paddle-ocr`
 
 ---
 
-## 💬 사용자 컨텍스트 / 선호도
+## 💬 사용자 컨텍스트
 
 - 한국어 응답 선호
-- 빠른 피드백 사이클 선호 (빌드 → 테스트 → 즉시 피드백)
-- "개선이 안되면 학습으로" 지시 (휴리스틱 패치 3회 후 학습 단계 escalate trigger)
-- ITEM DROPS 수동 입력보다 OCR 자동화 선호 ("A는 의미없어")
-- 작업 진행 시 명확한 진행률 보고 선호 (예: "172/255 (67%)")
+- 빠른 피드백 사이클 선호
+- "정확도 박살나면 즉시 롤백" 요구함 (학습 전 수준 복귀를 우선시)
+- ITEM DROPS 수동 입력보다 OCR 자동화 선호하지만, 정확도 저하 시 롤백 우선
+- 진행률/상태 명확히 보고 받길 원함
 
 ---
 
-_생성일: 2026-05-03 · 작성: Claude (Anthropic) · 다음 세션이 이 문서를 가장 먼저 읽어야 함_
+## 🔁 다음 세션 시작 워크플로우
+
+```
+1. cd C:\dev\lineage-mp-timer
+2. cat docs/SESSION-HANDOFF-LATEST.md          ← 이 문서 (가장 먼저)
+3. git log --oneline -10                        ← 최근 커밋 확인
+4. CLAUDE.md (프로젝트 구조 파악)
+5. docs/OCR-FUTURE-PLAN.md (OCR 개선 계획 + history)
+6. 사용자 요청 처리
+```
+
+---
+
+## 📝 이번 세션 누적 커밋 (15개)
+
+```
+8b956e5 fix: ADENA template override 일시 비활성화 — 라벨링 노이즈로 false override
+d70f985 fix: ADENA template matching 캔버스 불일치 + threshold 조정
+33adf9c feat: ADENA template matching 가변 길이 (OCR digit-drop 대응)
+ae34156 fix: MP hybrid voting — anchor=0 (첫 인식) 시 paddle plausibility 거부 버그
+83f2d73 feat: 픽셀 폰트 Template Matching 시스템 추가 (학습 모델 폐기 대안)
+91bb29d fix: lineage.traineddata 사용 보류 — 오버피팅으로 인식 정확도 악화
+609da35 build: lineage.traineddata.gz 추가 (gzip 압축본)
+fd2584f fix: 앱 재시작 시 세션 트래커 자동 일시정지
+494f37c docs: 인수인계 문서 보강
+ec51acb feat: 컴팩트 모드 + ADENA OCR 강화 + 게임 폰트 traineddata 통합
+```
+
+---
+
+_Last updated: 2026-05-04 01:40 · 작성: Claude (Anthropic)_
+_사용자 지시: "기록 남겨줘 compact하고 작업 다시 하려고해"_

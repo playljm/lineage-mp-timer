@@ -115,8 +115,30 @@ paddle 쪽도 fine-tuning 가능하지만 도구 체인 복잡함:
 - 2026-05-02 ADENA 복합 오인식 보고 (42402 → 2202): 앞자리 누락 + 중간 4→2 동시 발생
   - 위 두 패치로도 해결 안 됨 — **휴리스틱 한계 도달** ⚠️
   - 사용자 지시("개선 안되면 학습")에 의거 **학습 단계 escalate trigger 발동**
-  - 즉시 workaround: ITEM DROPS 시스템 활용 (수동 입력 100% 정확)
-  - 영구 해결: 게임 폰트 traineddata 학습 (위 § 다음 단계 참조)
+
+- 2026-05-03 **lineage.traineddata 학습 시도 (Phase 2)**:
+  - 463개 라벨 데이터 수집 (Claude가 직접 라벨링)
+  - WSL Ubuntu + tesstrain Makefile + Tesseract LSTM fine-tuning
+  - 5000 iter → BCER 4.02% → 1.96% (학습 데이터 기준 양호)
+  - **결과: 실전 적용 시 인식 더 악화 (오버피팅)** ❌
+  - 원인: 학습 데이터 편향 (LEVEL 41/42=`28`, MP 90%=`/235`, EXP 27~32% 좁은 구간)
+  - 조치: `eng+lineage` → `eng` 단독 복구 (커밋 `91bb29d`)
+  - 자산 보존: WSL 체크포인트 + `build/tessdata/lineage.traineddata` 보존, 미사용
+
+- 2026-05-04 **Template Matching 시도 (학습 모델 대안)**:
+  - 동일 463개 라벨 데이터에서 자릿수 템플릿 492개 추출 (글자별 30~50개)
+  - Hamming distance 기반 16x24 binary 매칭 → 32KB JSON
+  - 가변 길이 매칭 (1~7자리) 추가
+  - **결과: False override 발생, 정확한 OCR을 잘못 덮어씀** ❌
+  - 사례: 49065 (정확) → 49051 (틀림, 80% 확신)
+  - 원인: 라벨링 노이즈 (5/6/0/8 confusion 들어갔을 가능성) + 픽셀 폰트 글리프 유사성
+  - 조치: Override 비활성, 정보 로그만 출력 (커밋 `8b956e5`)
+  - 자산 보존: `digit-templates.json`, `template-matcher.js` 보존
+
+- 2026-05-04 **현재 상태**:
+  - 베이스라인 휴리스틱만 활성 (이전 세션과 동일 수준)
+  - 다음 시도 후보: ① 재라벨링+템플릿 재구축 ② CNN 분류기 ③ 데이터 다양화 후 재학습
+  - 상세: `docs/SESSION-HANDOFF-LATEST.md` § "다음 시도 후보" 참조
 
 ---
 
