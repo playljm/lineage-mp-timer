@@ -3683,15 +3683,9 @@
       }
       // 자릿수가 둘 다 anchor보다 작은 misread → 일반적으로 reject (anchor 보존)
       //
-      // 단 — Cached anchor 복구 휴리스틱:
-      //   사용자 anchor가 이전 misread로 잘못 캐시된 경우 (예: 진짜 58039인데 anchor=586391),
-      //   매번 "둘 다 digit-drop" 떠도 anchor 절대 복구 안됨 → 무한 stuck.
-      //
-      //   복구 조건 (동시 충족 필요):
-      //     1. 동일한 paddle 값이 N(=3)회 연속 digit-drop으로 거부됨
-      //     2. paddle 값이 multi-digit (5+ digit)이고 plausible
-      //     3. paddle의 자릿수가 anchor보다 정확히 1자리 적음 (큰 단위 변화 아님)
-      //   → 그 paddle 값을 새 anchor로 인정 (cached misread anchor 복구)
+      // 단 — Cached anchor 복구 휴리스틱 (동일 paddle 값 N회 연속 → anchor 갱신):
+      //   사용자 anchor가 이전 misread로 잘못 캐시된 경우 자동 탈출
+      //   조건: paddle 4+자리 + anchor보다 1자리 적음 + 같은 값 3회 반복
       if (pDigits < anchorDigits && tDigits < anchorDigits) {
         const pVal = pr.parsed.adena;
         // 정적 카운터 (사용자 ADENA 영역별로)
@@ -3727,17 +3721,60 @@
       return voteHybrid('EXP', pr, tr, matcher);
     }
     if (matcher(pr.parsed, tr.parsed)) {
+      // 둘 다 일치 — 단 anchor에서 0.1%p 이상 점프 시 verification 필요 (사용자 요청)
+      const anchorBoth = parseExpPct(dom.trkExpNow.value) || 0;
+      const valBoth = pr.parsed.exp;
+      if (anchorBoth > 0) {
+        const deltaBoth = valBoth - anchorBoth;
+        const isLevelUp = anchorBoth > 95 && valBoth < 5;
+        if (Math.abs(deltaBoth) > 0.1 && !isLevelUp) {
+          // 큰 점프 (둘 다 일치하지만 anchor 대비 >0.1%p) — 검증 큐에 넣기
+          if (!ocrExpRegionHybrid._verifyQueue) ocrExpRegionHybrid._verifyQueue = { val: null, count: 0 };
+          const vq = ocrExpRegionHybrid._verifyQueue;
+          const tol = 0.001;
+          if (vq.val !== null && Math.abs(vq.val - valBoth) < tol) {
+            vq.count++;
+            if (vq.count >= 2) {
+              vq.val = null; vq.count = 0;
+              pushHybridLog('EXP 🟢 검증 통과 (큰 점프 ' + deltaBoth.toFixed(3) + '%p): ' + valBoth);
+              return voteHybrid('EXP', pr, tr, matcher);
+            }
+            pushHybridLog('EXP ⏳ 검증중 (' + (vq.count + 1) + '/3) 점프 ' + deltaBoth.toFixed(3) + '%p: ' + valBoth);
+            return { text: 'verifying ' + valBoth, confidence: 0, parsed: null };
+          }
+          vq.val = valBoth; vq.count = 1;
+          pushHybridLog('EXP ⏳ 검증 시작 (점프 ' + deltaBoth.toFixed(3) + '%p > 0.1%p): ' + valBoth);
+          return { text: 'verifying ' + valBoth, confidence: 0, parsed: null };
+        }
+      }
       return voteHybrid('EXP', pr, tr, matcher);
     }
-    // 불일치 — anchor 대비 작은 전진(0~5%p) 또는 레벨업 점프(99→0~2)면 단독 채택
+    // 불일치 — anchor 대비 매우 작은 전진(±0.1%p)만 즉시 채택, 더 큰 변화는 verification 필요
+    //
+    // 사용자 지시 (2026-05-04): "한틱에 5%는 너무 높고.. 0.1% 이상도 막아줘"
+    // 변경: 0.1%p 즉시 허용 / 0.1~3%p 검증 큐 / 그 이상 reject (단 레벨업 예외)
     const anchor = parseExpPct(dom.trkExpNow.value) || 0;
     const isPlausibleForward = (val) => {
       if (anchor <= 0) return val > 0 && val <= 100;  // 첫 인식
       const delta = val - anchor;
-      // 작은 전진 0~5%p 허용 (정상 사냥 페이스)
-      if (delta > 0 && delta <= 5) return true;
-      // 레벨업 점프: prev > 95% AND new < 5%
+      // 즉시 허용: 매우 작은 전진/후진 (±0.1%p) — 정상 OCR 노이즈 범위
+      if (Math.abs(delta) <= 0.1) return true;
+      // 레벨업 점프: prev > 95% AND new < 5% (level transition)
       if (anchor > 95 && val < 5) return true;
+      return false;
+    };
+    // EXP 검증 큐 — 큰 변화는 1번 더 봐야 인정
+    if (!ocrExpRegionHybrid._verifyQueue) ocrExpRegionHybrid._verifyQueue = { val: null, count: 0 };
+    const checkVerification = (val) => {
+      const vq = ocrExpRegionHybrid._verifyQueue;
+      const tol = 0.001;
+      if (vq.val !== null && Math.abs(vq.val - val) < tol) {
+        vq.count++;
+        if (vq.count >= 2) { vq.val = null; vq.count = 0; return true; }
+      } else {
+        vq.val = val;
+        vq.count = 1;
+      }
       return false;
     };
     const pp = isPlausibleForward(pr.parsed.exp);
