@@ -1599,9 +1599,11 @@
           }
         };
         opts.errorHandler = (e) => console.error('[Tesseract worker error]', e);
-        // eng+lineage: 게임 폰트 fine-tuned 모델(lineage.traineddata) 우선 사용 + 영문 fallback
-        // build/tessdata/lineage.traineddata 가 build extraResources로 패키징됨
-        const createPromise = Tesseract.createWorker('eng+lineage', 1, opts);
+        // ⚠️ lineage.traineddata 사용 보류 — 학습 데이터 편향(MP /235 90%, LEVEL "28" 95%)으로
+        //    오버피팅 발생, 일반 숫자 인식 능력 소실 확인됨 (2026-05-04).
+        //    재학습 필요: 더 다양한 값 + 균형 잡힌 분포 + 1000~2000 iter (현재 5000은 과도).
+        //    상세: docs/SESSION-HANDOFF-LATEST.md 참조.
+        const createPromise = Tesseract.createWorker('eng', 1, opts);
 
         const timeoutPromise = new Promise((_, rej) => {
           setTimeout(() => rej(new Error(
