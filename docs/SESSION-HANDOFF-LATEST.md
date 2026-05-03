@@ -54,13 +54,18 @@
 - MP OCR: 3 캔버스 × 2 PSM = 최대 6 결과 (이전 2개)
 - **효과**: agreement-misread (양쪽 엔진 동시 misread) 깨질 확률 ↑
 
-### B. Hybrid per-digit override (`src/js/app.js`)
+### B. Hybrid per-digit override (`src/js/app.js`) — class-aware 3-tier
 - 기존 per-digit voting + 신규 templatePerCharFixed (고정 길이 템플릿 per-position 점수) 결합
+- WSL purity 리포트 기반 클래스 분류:
+  - **CLEAN** (positive avg purity): `1`, `2`, `3`, `5`, `/`, `.` — 라벨 노이즈 적음
+  - **NOISY** (negative avg purity): `0`, `4`, `6`, `7`, `8`, `9` — 라벨 노이즈 있음
 - 위치별 결정 트리:
-  - voting strong (no tie + margin ≥ 75%) → voting 채택 (template 무시)
-  - voting 약함/tied + template strong (score≥92%, gap≥8%) → template 채택
-  - 둘 다 약함 → voting best guess
-- **효과**: 전체 number override의 false positive 위험 회피하면서 단일 자릿수 confusion 보정
+  - **Tier A (DECISIVE)**: clean class + score≥93%/gap≥6% OR 어느 class든 score≥97%/gap≥13% → 무조건 override
+    - 사례: "5만→9만" leading misread (모든 OCR 엔진이 동시에 "9"로 misread해도 정정)
+  - **Tier B (RECOVERY)**: voting weak/tied + (clean: ≥88%/4% OR noisy: ≥92%/8%)
+  - **Tier C (SAFE)**: voting strong + template 거부 → voting 채택
+- 안전 장치: 한 번에 2개 이상 위치 동시 override는 template hallucination 의심 → reject
+- **효과**: 전체 number override의 false positive 위험 회피하면서 unanimous misread도 단일 자릿수 정정 가능
 
 ### C. Grayscale 템플릿 재구축 (`scripts/training/build_templates_grayscale.py`)
 - 16x24 binary (48 bytes) → 16x24 grayscale (384 bytes)

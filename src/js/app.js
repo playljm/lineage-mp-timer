@@ -2914,12 +2914,24 @@
       }
     }
 
-    // ===== 4차: Hybrid per-digit override — voting + template 결합 =====
-    //   각 위치에서:
-    //   - voting strong (margin >= 75%) AND no tie → use voting (template 무시, 라벨노이즈 영향 차단)
-    //   - voting weak/tied + template very confident (>=92%, gap>=8%) → use template
-    //   - 둘 다 약함 → use voting best (best guess)
-    //   장점: 라벨노이즈 false override 위험 최소화하면서 voting tie를 template로 메움
+    // ===== 4차: Hybrid per-digit override — class-aware 3-tier =====
+    //
+    //  WSL purity 리포트 기준 클래스 신뢰도:
+    //    CLEAN (positive avg purity): '1', '2', '3', '5', '/', '.'  → 라벨 노이즈 적음
+    //    NOISY (negative avg purity): '0', '4', '6', '7', '8', '9'  → 라벨 노이즈 있음
+    //
+    //  결정 트리 (각 위치):
+    //    [Tier A — DECISIVE]  template best가 CLEAN class + score≥93% + gap≥6%
+    //                         → 어떤 voting이든 정정 (5만→9만 같은 unanimous agreement-misread 깨기)
+    //                         OR 어느 class든 score≥97% + gap≥13% (extreme confidence)
+    //    [Tier B — RECOVERY]  voting weak/tied + (clean class score≥88%/gap≥4% OR noisy class score≥92%/gap≥8%)
+    //    [Tier C — SAFE]      voting strong + template 거부 → voting 채택
+    //
+    //  장점:
+    //   - Tier A로 unanimous misread도 정정 (특히 leading "5→9" 사례)
+    //   - 클래스별 신뢰도에 따라 차등 임계값 → noisy class false override 차단
+    const CLEAN_CLASSES = '1235/.';
+    const isClean = (ch) => ch && CLEAN_CLASSES.includes(ch);
     let hybridAdena = NaN;
     let hybridDetail = null;
     let hybridOverrides = 0;
@@ -2933,16 +2945,26 @@
         const votingMargin = v.count / Math.max(1, totalSame);
         const votingStrong = !v.tie && votingMargin >= 0.75;
         let chosen = v.best;
-        if (!votingStrong && t && t.char) {
+        let tier = null;
+        if (t && t.char && t.char !== v.best) {
           const tplScore = t.score || 0;
           const tplGap = tplScore - ((t.secondBest && t.secondBest.score) || 0);
-          const tplStrong = tplScore >= 0.92 && tplGap >= 0.08;
-          if (tplStrong && t.char !== v.best) {
+          const cleanBest = isClean(t.char);
+          // Tier A — DECISIVE
+          if (cleanBest && tplScore >= 0.93 && tplGap >= 0.06) tier = 'A-clean';
+          else if (tplScore >= 0.97 && tplGap >= 0.13) tier = 'A-extreme';
+          // Tier B — RECOVERY (voting weak only)
+          else if (!votingStrong) {
+            if (cleanBest && tplScore >= 0.88 && tplGap >= 0.04) tier = 'B-clean';
+            else if (!cleanBest && tplScore >= 0.92 && tplGap >= 0.08) tier = 'B-noisy';
+          }
+          if (tier) {
             chosen = t.char;
             hybridOverrides++;
-            overrideLogs.push('pos' + i + ':' + (v.best || '?') + '→' + t.char +
+            overrideLogs.push('[' + tier + '] pos' + i + ':' + (v.best || '?') + '→' + t.char +
               ' (v=' + v.count + '/' + totalSame + (v.tie ? ',tie' : '') +
-              ', t=' + (tplScore*100).toFixed(0) + '%/gap=' + (tplGap*100).toFixed(0) + '%)');
+              ', t=' + (tplScore*100).toFixed(0) + '%/gap=' + (tplGap*100).toFixed(0) + '%' +
+              (cleanBest ? ',CLEAN' : ',NOISY') + ')');
           }
         }
         if (!chosen) { finalDigits.length = 0; break; }
@@ -2951,8 +2973,17 @@
       if (finalDigits.length === dominantLen) {
         const n = parseInt(finalDigits.join(''), 10);
         if (Number.isFinite(n) && n >= 0 && n <= 9999999999) {
-          hybridAdena = n;
-          hybridDetail = overrideLogs.length > 0 ? overrideLogs.join(' | ') : 'no override';
+          // 안전 장치: 2개 이상 위치 동시 override는 template hallucination 의심 → reject
+          //   (보통 misread는 1자리만 발생, 2개 이상 동시 발생은 template 자체가 잘못된 케이스)
+          const maxAllowedOverrides = Math.min(2, Math.floor(dominantLen / 2));
+          if (hybridOverrides <= maxAllowedOverrides) {
+            hybridAdena = n;
+            hybridDetail = overrideLogs.length > 0 ? overrideLogs.join(' | ') : 'no override';
+          } else {
+            console.log('[OCR ADENA] ⚠ hybrid override 거부: ' + hybridOverrides + '개 위치 동시 변경은 의심스러움 (max=' + maxAllowedOverrides + ')');
+            console.log('[OCR ADENA] ⚠ 거부된 overrides:', overrideLogs.join(' | '));
+            hybridOverrides = 0;
+          }
         }
       }
     }
