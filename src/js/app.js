@@ -2795,11 +2795,13 @@
     let templateConf = 0;
     let templateText = null;
     let templateLen = 0;
-    if (window.TemplateMatcher && window.TemplateMatcher.isLoaded() && canvasRaw) {
+    if (window.TemplateMatcher && window.TemplateMatcher.isLoaded() && canvas) {
       try {
         const ocrLen = String(bestAdena).length;
         // 1~7자리 모두 시도 (ADENA는 1자리 ~ 7자리까지 가능)
-        const tplResult = window.TemplateMatcher.matchVariableLength(canvasRaw, 1, 7, '0123456789');
+        // 중요: 템플릿은 preprocessed 12x 캔버스(captureRegionToCanvas)에서 추출됐으므로
+        //       동일 캔버스로 매칭해야 일치 (canvasRaw 16x 사용 시 매칭 어긋남).
+        const tplResult = window.TemplateMatcher.matchVariableLength(canvas, 1, 7, '0123456789');
         if (tplResult.text && /^\d+$/.test(tplResult.text)) {
           const n = parseInt(tplResult.text, 10);
           if (Number.isFinite(n) && n >= 0 && n <= 9999999999) {
@@ -2830,18 +2832,24 @@
         parsed: { adena: perDigitAdena, agreementCount: dominantLenCnt, totalAttempts: valid.length, perDigit: true }
       };
     }
-    // Template override: confidence ≥ 75% & OCR 다수결과 다르면 신뢰
-    //   특히 자릿수가 다를 때 강력 (OCR이 digit-drop 한 케이스)
-    if (Number.isFinite(templateAdena) && templateAdena !== bestAdena && templateConf >= 0.75) {
+    // Template override: confidence threshold 동적 조정
+    //   - 길이 다름 (digit-drop) → 65% 이상이면 override (강한 신호)
+    //   - 길이 같음 (단일 자리 confusion) → 70% 이상이면 override
+    if (Number.isFinite(templateAdena) && templateAdena !== bestAdena) {
       const ocrLen = String(bestAdena).length;
       const lenDiff = templateLen !== ocrLen;
-      console.log('[OCR ADENA] 🎯 template override: OCR=' + bestAdena + '(' + ocrLen + '자리) → template=' + templateAdena + '(' + templateLen + '자리) conf=' + (templateConf * 100).toFixed(1) + '%' + (lenDiff ? ' [길이 보정]' : ''));
-      pushHybridLog('ADENA 🎯 template 보정: ' + bestAdena + ' → ' + templateAdena + ' (' + (templateConf * 100).toFixed(0) + '%' + (lenDiff ? ', 자릿수 보정 ' + ocrLen + '→' + templateLen : '') + ')');
-      return {
-        text: templateText,
-        confidence: templateConf * 100,
-        parsed: { adena: templateAdena, agreementCount: 1, totalAttempts: valid.length + 1, templateOverride: true, templateLen }
-      };
+      const threshold = lenDiff ? 0.65 : 0.70;
+      if (templateConf >= threshold) {
+        console.log('[OCR ADENA] 🎯 template override: OCR=' + bestAdena + '(' + ocrLen + '자리) → template=' + templateAdena + '(' + templateLen + '자리) conf=' + (templateConf * 100).toFixed(1) + '%' + (lenDiff ? ' [길이 보정]' : ''));
+        pushHybridLog('ADENA 🎯 template 보정: ' + bestAdena + ' → ' + templateAdena + ' (' + (templateConf * 100).toFixed(0) + '%' + (lenDiff ? ', 자릿수 ' + ocrLen + '→' + templateLen : '') + ')');
+        return {
+          text: templateText,
+          confidence: templateConf * 100,
+          parsed: { adena: templateAdena, agreementCount: 1, totalAttempts: valid.length + 1, templateOverride: true, templateLen }
+        };
+      } else {
+        console.log('[OCR ADENA] ⚠ template 차이있으나 conf 부족: OCR=' + bestAdena + ' template=' + templateAdena + ' conf=' + (templateConf * 100).toFixed(1) + '% < ' + (threshold * 100) + '%');
+      }
     }
 
     // 1차 다수결: half 미달이면 parsed null로 → 다음 틱 재시도
