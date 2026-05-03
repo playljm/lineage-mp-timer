@@ -1771,6 +1771,133 @@
     ctx.putImageData(img, 0, 0);
   }
 
+  /**
+   * 캔버스 양 끝의 "의심스러운 좁은 글자" 자동 trim.
+   *
+   * 문제: ADENA 영역을 1~2px 너무 넓게 그렸을 때 끝의 코인 아이콘이나 외곽 안티앨리어스가
+   *       phantom "1" 디짓으로 OCR됨 (예: 57887 → 578871).
+   * 해결: 컬럼 ink density 분석 → 양 끝의 isolated narrow 그룹 감지 → 가장자리 trim.
+   *
+   * 보존 조건 (false positive 최소화):
+   *   - 양 끝 그룹이 다른 글자 그룹들 median width의 25% 이상이면 보존 (real digit일 수 있음)
+   *   - gap이 충분히 작거나 (= 정상 spacing) 보존
+   *   - vertical extent가 60% 이상이면 보존 (full-height 문자는 진짜 digit 가능성 ↑)
+   *
+   * 매개변수: side — 'right' | 'both' (기본 'both'로 양쪽 검사)
+   */
+  function autoTrimEdgeArtifacts(canvas, side) {
+    if (!canvas || canvas.width < 30) return canvas;
+    const checkRight = side !== 'left';
+    const checkLeft = side !== 'right';
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width;
+    const h = canvas.height;
+    const img = ctx.getImageData(0, 0, w, h);
+    const d = img.data;
+
+    // 명/암 자동 감지 — 평균 휘도로 dark-on-light vs light-on-dark 판단
+    let sumLum = 0;
+    for (let i = 0; i < d.length; i += 4) sumLum += (d[i] + d[i+1] + d[i+2]) / 3;
+    const avgLum = sumLum / (d.length / 4);
+    const inkIsDark = avgLum >= 128;  // 배경이 밝으면 ink는 어두움 (gray < 128)
+    const isInk = inkIsDark
+      ? (g) => g < 128
+      : (g) => g > 128;
+    // 컬럼 ink density: 글자 픽셀 개수
+    const density = new Array(w).fill(0);
+    for (let x = 0; x < w; x++) {
+      let count = 0;
+      for (let y = 0; y < h; y++) {
+        const idx = (y * w + x) * 4;
+        const gray = (d[idx] + d[idx+1] + d[idx+2]) / 3;
+        if (isInk(gray)) count++;
+      }
+      density[x] = count;
+    }
+    const inkThreshold = Math.max(1, h * 0.10);
+    // ink groups
+    const groups = [];
+    let inGroup = false;
+    let gs = 0;
+    for (let x = 0; x < w; x++) {
+      if (density[x] >= inkThreshold) {
+        if (!inGroup) { inGroup = true; gs = x; }
+      } else {
+        if (inGroup) { groups.push({ start: gs, end: x - 1, width: x - gs }); inGroup = false; }
+      }
+    }
+    if (inGroup) groups.push({ start: gs, end: w - 1, width: w - gs });
+    if (groups.length < 2) return canvas;
+
+    // Median width 계산
+    const widths = groups.map(g => g.width).slice().sort((a, b) => a - b);
+    const median = widths[Math.floor(widths.length / 2)];
+
+    // Vertical extent helper (isInk로 명/암 자동 매칭)
+    const verticalRatio = (start, end) => {
+      let top = h, bot = -1;
+      for (let y = 0; y < h; y++) {
+        for (let x = start; x <= end; x++) {
+          const idx = (y * w + x) * 4;
+          if (isInk((d[idx] + d[idx+1] + d[idx+2]) / 3)) {
+            if (y < top) top = y;
+            if (y > bot) bot = y;
+            break;
+          }
+        }
+      }
+      return bot < 0 ? 0 : (bot - top + 1) / h;
+    };
+
+    let trimLeft = 0;
+    let trimRight = w;
+
+    // 오른쪽 끝 검사
+    if (checkRight && groups.length >= 2) {
+      const last = groups[groups.length - 1];
+      const prev = groups[groups.length - 2];
+      const gap = last.start - prev.end - 1;
+      const widthRatio = last.width / Math.max(1, median);
+      const vRatio = verticalRatio(last.start, last.end);
+      // 충분히 좁고 + 충분히 떨어져 있고 + height 짧으면 artifact
+      if (widthRatio < 0.25 && gap >= 3 && vRatio < 0.6) {
+        trimRight = prev.end + Math.floor(gap / 2) + 1;
+        console.log('[AutoTrim] right artifact: width=' + last.width + ' median=' + median + ' gap=' + gap + ' vRatio=' + vRatio.toFixed(2) + ' trim@' + trimRight);
+      }
+    }
+    // 왼쪽 끝 검사
+    if (checkLeft && groups.length >= 2) {
+      const first = groups[0];
+      const next = groups[1];
+      const gap = next.start - first.end - 1;
+      const widthRatio = first.width / Math.max(1, median);
+      const vRatio = verticalRatio(first.start, first.end);
+      if (widthRatio < 0.25 && gap >= 3 && vRatio < 0.6) {
+        trimLeft = first.end + Math.floor(gap / 2);
+        console.log('[AutoTrim] left artifact: width=' + first.width + ' median=' + median + ' gap=' + gap + ' vRatio=' + vRatio.toFixed(2) + ' trim@' + trimLeft);
+      }
+    }
+
+    // 변경 없으면 그대로 return
+    if (trimLeft === 0 && trimRight === w) return canvas;
+    const newW = Math.max(1, trimRight - trimLeft);
+    const tmp = document.createElement('canvas');
+    tmp.width = newW;
+    tmp.height = h;
+    tmp.getContext('2d').drawImage(canvas, trimLeft, 0, newW, h, 0, 0, newW, h);
+    canvas.width = newW;
+    canvas.height = h;
+    canvas.getContext('2d').drawImage(tmp, 0, 0);
+    // UI 로그 (사용자가 자동 trim 동작 확인 가능, throttle 없음 — 실제로 자주 fire하지 않음)
+    if (typeof pushHybridLog === 'function') {
+      const dirInfo = [];
+      if (trimLeft > 0) dirInfo.push('L:' + trimLeft + 'px');
+      if (trimRight < w) dirInfo.push('R:' + (w - trimRight) + 'px');
+      pushHybridLog('✂️ AutoTrim ' + dirInfo.join('+') + ' (artifact 제거: ' + w + '→' + newW + 'px)');
+    }
+    return canvas;
+  }
+
   function applySharpenKernel(canvas) {
     const ctx = canvas.getContext('2d');
     const w = canvas.width, h = canvas.height;
@@ -1842,6 +1969,8 @@
       } else {
         preprocessCanvas(canvas);
       }
+      // 자동 가장자리 artifact trim — 사용자가 영역을 1~2px 너무 넓게 그려도 자동 보정
+      autoTrimEdgeArtifacts(canvas, 'both');
     }
     return canvas;
   }
@@ -1952,6 +2081,9 @@
     if (opts && opts.removeIslands) {
       removeIslandComponents(canvas);
     }
+    // 6) 자동 가장자리 artifact trim — pad 확장으로 들어온 옆 아이콘/노이즈 제거
+    //    autoTrimEdgeArtifacts 함수는 명/암 자동 감지 → raw canvas (light-on-dark)에서도 동작
+    autoTrimEdgeArtifacts(canvas, 'both');
     return canvas;
   }
 
