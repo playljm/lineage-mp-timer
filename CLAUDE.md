@@ -104,8 +104,15 @@ onAlwaysOnTopChanged (event callback)
 ### 6. 데이터 저장
 | 데이터 | 위치 |
 |---|---|
-| 프리셋 / 설정 / 마지막 입력값 / 트래커 / 핫키 | `localStorage` (key prefix `lmp.*`) |
+| 프리셋 / 설정 / 마지막 입력값 / 트래커 / 핫키 / 자동감지 영역 | `localStorage` (key prefix `lmp.*`) |
 | 창 위치·크기 | `%APPDATA%\Roaming\LineageMPTimer\window-bounds.json` |
+| 학습 데이터 (PNG + .gt.txt) | `%APPDATA%\Roaming\LineageMPTimer\training-data\{mp,exp,level,adena}\` |
+| 미라벨 캡처 (자동 캡처 큐) | `%APPDATA%\Roaming\LineageMPTimer\training-data\_pending\{region}\` |
+| 게임 폰트 traineddata | `build\tessdata\lineage.traineddata` (빌드 자동 포함) |
+
+### 7. 단축키 추가
+- **F3**: 컴팩트 모드 ON/OFF (작은 창 + 트래커 두 줄 핵심 stats)
+- **F12**: DevTools (디버깅용)
 
 ## 📦 빌드 설정 (package.json)
 
@@ -133,13 +140,18 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.2.0-paddle (2026-05-03) — 게임 폰트 traineddata 통합
+- **컴팩트 모드** (F3): 두 줄 트래커 (시작·EXP/H·ADENA/H + 레벨·EXP·아데나 NOW + 증가량)
+- **ADENA OCR 강화**: per-digit voting (이중 캔버스 12x+16x), leading-digit-drop suffix-match, pad 4→10
+- **자동 캡처 + 사후 라벨링 도구** (3단계 워크플로우): 게임 중엔 PNG만 자동 저장 → 종료 후 라벨링 패널에서 OCR 추천값 미리 채워진 상태로 Enter 연타로 정리
+- **N-history dedup** (최근 10개 OCR 비교): 무의미 중복 80% 절약
+- **게임 폰트 traineddata 학습**: 463개 라벨 → BCER 4.02% → 1.96% (52% 개선)
+  - Worker init: `lang='eng'` → `'eng+lineage'`
+  - `build/tessdata/lineage.traineddata` (11.7MB) 빌드 extraResources 자동 포함
+
 ### v1.1.0 (2026-04-25)
 - 경험치 % 자동 포맷 디바운스 **사용자 설정화** (기본 700ms → 3000ms)
-  - SETTINGS 패널에 슬라이더 추가 (0.5s ~ 10.0s, 0.1s 단위)
-  - `lmp.settings.v1.expAutoFormatDelayMs`로 localStorage 저장
-  - 천천히 타이핑할 때 부분 입력이 `0.000X` 로 조기 포맷되는 문제 해결
-- 타이틀바에 **버전 배지** 추가 (`app.getVersion()` IPC)
-  - 새 빌드 적용 여부를 즉시 확인 가능
+- 타이틀바 **버전 배지** 추가
 
 ### v1.0.0 (초기)
 - MP 계산 엔진 + UI + 트래커 + 핫키 + 테마 + 프리셋
@@ -171,18 +183,57 @@ onAlwaysOnTopChanged (event callback)
 - `npm test` → `test/engine.test.js` 실행 (assert 기반, 36 케이스)
 - 주요 케이스: WIS별 회복량, 파란물약 보너스, 위치 보너스, 틱 주기, 복합 버프, 블록 상태, 커스텀 위치 보너스, 포맷팅, breakdown 일치성
 
+## 🤖 WSL 학습 환경 (게임 폰트 traineddata)
+
+### 환경 위치
+| 항목 | 경로 |
+|------|------|
+| WSL 배포판 | Ubuntu (`wsl.exe -d Ubuntu -u root` 으로 root 접근) |
+| 학습 데이터 (Windows) | `C:\Users\<user>\AppData\Roaming\LineageMPTimer\training-data\` |
+| 학습 데이터 (WSL 복사본) | `/root/lineage-train/{mp,exp,level,adena}/` |
+| tesstrain 워크스페이스 | `/root/tesstrain/` |
+| Ground truth (학습용) | `/root/tesstrain/data/lineage-ground-truth/` |
+| 학습 체크포인트 | `/root/tesstrain/data/lineage/checkpoints/` |
+| 베이스 모델 (best) | `/root/tesstrain/tessdata_best/eng.traineddata` |
+| 최종 결과물 | `/root/tesstrain/data/lineage.traineddata` (→ Windows `build/tessdata/`) |
+
+### 설치된 패키지 (apt)
+- `tesseract-ocr` (5.3.4) + `tesseract-ocr-eng` + `libtesseract-dev`
+- `python3-pil`, `python3-pip`, `make`
+- 학습 도구: `lstmtraining`, `combine_tessdata` (`/usr/bin/`에 설치됨)
+
+### 재학습 방법 (정확도 향상 필요시)
+```bash
+# 1. 추가 데이터 라벨링 (앱에서 수집 → %APPDATA%/.../training-data/ 에 누적)
+# 2. WSL에서 데이터 동기화
+wsl.exe -d Ubuntu -u root -- bash //root/setup_data.sh   # ground-truth 폴더 갱신
+# 3. 추가 학습 (체크포인트에서 이어 학습)
+wsl.exe -d Ubuntu -u root -- bash -c "cd /root/tesstrain && make training MODEL_NAME=lineage START_MODEL=eng TESSDATA=/root/tesstrain/tessdata_best MAX_ITERATIONS=15000 PSM=7"
+# 4. 결과 복사
+wsl.exe -d Ubuntu -u root -- cp /root/tesstrain/data/lineage.traineddata /mnt/c/dev/lineage-mp-timer/build/tessdata/
+# 5. 앱 재빌드
+cd /c/dev/lineage-mp-timer && npm run build
+```
+
+### 학습 메트릭 추적
+- BCER (Best Character Error Rate): 낮을수록 정확. 0.01 이하 권장.
+- 첫 학습 (2026-05-03, 463 sample, 5000 iter): **BCER 1.96%**
+
+상세: `docs/TRAINING-PIPELINE.md`
+
 ## 🔁 세션 재개 가이드
 
 새 세션에서 추가 작업 요청 시:
 1. `cd C:\dev\lineage-mp-timer`
 2. `git log --oneline -10` 으로 최근 변경 확인
-3. 이 문서(`CLAUDE.md`)로 전체 구조 파악
-4. 변경 후 **반드시**:
+3. **이 문서(`CLAUDE.md`)로 전체 구조 파악** + `docs/SESSION-HANDOFF-LATEST.md` (최근 세션 인수인계)
+4. **`docs/OCR-FUTURE-PLAN.md` 진행 history**로 OCR 작업 흐름 파악
+5. 변경 후 **반드시**:
    - `npm test` (엔진 회귀)
    - `node -c src/js/app.js` (문법 체크)
    - `npm run build` (사용자가 앱 실행 중이면 먼저 종료 요청)
-5. 커밋 + (필요 시) 사용자 안내
+6. 커밋 + (필요 시) 사용자 안내
 
 ---
 
-_Last updated: 2026-04-16 · 작성: Claude (Anthropic)_
+_Last updated: 2026-05-03 · 작성: Claude (Anthropic)_
