@@ -197,6 +197,16 @@
     tickTimerId: null
   };
   let tracker = S.loadTracker();
+  // 🔧 앱 재시작 시 트래커 자동 일시정지 — startedAt이 과거 timestamp라
+  //   `Date.now() - startedAt` 으로 계산되는 elapsed 시간이 무한히 증가하는 버그 방지.
+  //   사용자가 명시적으로 [Start] 버튼을 눌러야 새로운 세션이 시작됨.
+  //   start/current 값은 유지 (마지막 사냥 종료 시점 상태를 표시).
+  if (tracker && (tracker.active || tracker.startedAt)) {
+    tracker.active = false;
+    tracker.startedAt = null;
+    S.saveTracker(tracker);
+    console.log('[Tracker] 앱 재시작 감지 — 세션 타이머 자동 일시정지. Start 버튼으로 새 세션 시작 가능.');
+  }
   let hotkeys = S.loadHotkeys();
   let items = S.loadItems();
   let autoDetect = S.loadAutoDetect();
