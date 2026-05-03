@@ -1,0 +1,74 @@
+=== Template Rebuild Report (GRAYSCALE, 16x24, 384 bytes/template) ===
+Total templates: 529, distance metric: Manhattan (sum-abs-diff)
+
+=== '0' ===
+  total: 42, kept: 42, pos purity: 0, neg: 42
+  best  purity:   -12736 (intra=  29024 inter=  16288)
+  worst kept:     -26711 (intra=  32766 inter=   6055)
+  avg purity:     -17312
+
+=== '1' ===
+  total: 96, kept: 50, pos purity: 62, neg: 34
+  best  purity:    +9519 (intra=  10867 inter=  20386)
+  worst kept:      +7711 (intra=  12323 inter=  20034)
+  avg purity:      +9149
+
+=== '2' ===
+  total: 145, kept: 50, pos purity: 65, neg: 80
+  best  purity:    +1251 (intra=  15688 inter=  16939)
+  worst kept:       +581 (intra=  15731 inter=  16312)
+  avg purity:       +820
+
+=== '3' ===
+  total: 128, kept: 50, pos purity: 60, neg: 68
+  best  purity:     +896 (intra=  16498 inter=  17394)
+  worst kept:        +93 (intra=  16466 inter=  16559)
+  avg purity:       +345
+
+=== '4' ===
+  total: 56, kept: 50, pos purity: 0, neg: 56
+  best  purity:    -1173 (intra=  27414 inter=  26241)
+  worst kept:     -20340 (intra=  21210 inter=    870)
+  avg purity:      -8634
+
+=== '5' ===
+  total: 122, kept: 50, pos purity: 65, neg: 57
+  best  purity:    +3661 (intra=  15110 inter=  18771)
+  worst kept:      +2535 (intra=  14823 inter=  17358)
+  avg purity:      +2898
+
+=== '6' ===
+  total: 46, kept: 46, pos purity: 0, neg: 46
+  best  purity:   -17899 (intra=  24033 inter=   6134)
+  worst kept:     -25974 (intra=  31165 inter=   5191)
+  avg purity:     -21040
+
+=== '7' ===
+  total: 52, kept: 50, pos purity: 0, neg: 52
+  best  purity:    -1102 (intra=  22988 inter=  21886)
+  worst kept:     -22493 (intra=  22831 inter=    338)
+  avg purity:      -9139
+
+=== '8' ===
+  total: 39, kept: 39, pos purity: 0, neg: 39
+  best  purity:    -9989 (intra=  29878 inter=  19889)
+  worst kept:     -34873 (intra=  56753 inter=  21880)
+  avg purity:     -21077
+
+=== '9' ===
+  total: 62, kept: 50, pos purity: 0, neg: 62
+  best  purity:    -9167 (intra=  29766 inter=  20599)
+  worst kept:     -23689 (intra=  31028 inter=   7339)
+  avg purity:     -17963
+
+=== '.' ===
+  total: 2, kept: 2, pos purity: 2, neg: 0
+  best  purity:   +14121 (intra=   1020 inter=  15141)
+  worst kept:     +13101 (intra=   1020 inter=  14121)
+  avg purity:     +13611
+
+=== '/' ===
+  total: 72, kept: 50, pos purity: 65, neg: 7
+  best  purity:   +16489 (intra=   5063 inter=  21552)
+  worst kept:     +15167 (intra=   5199 inter=  20366)
+  avg purity:     +15970

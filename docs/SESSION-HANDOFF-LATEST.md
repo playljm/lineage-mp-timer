@@ -1,19 +1,20 @@
-# 세션 인수인계 — 2026-05-04 (compact)
+# 세션 인수인계 — 2026-05-04 v2 (OCR 99% 목표 종합 개선)
 
 > **다음 세션 시 가장 먼저 읽어야 할 문서**
-> 이전 세션의 학습 시도 → 실패 → 복귀 전체 흐름과 다음 작업 시작점이 정리되어 있습니다.
+> 이번 세션에서 3단계 종합 개선 (전처리 다양성 + Hybrid per-digit override + Grayscale 템플릿 재구축) 완료.
 
 ---
 
 ## ⚡ TL;DR — 30초 요약
 
-**현재 상태**: OCR 정확도는 **세션 시작 직전 수준** (베이스라인 휴리스틱). lineage.traineddata 학습과 template matching 모두 정확도를 악화시켜 비활성화.
+**현재 상태**: 사용자 목표 "정확도 99%" 달성을 위해 3단계 종합 개선 완료. 베이스라인 휴리스틱 위에 신규 보정 레이어 추가 (위험도 낮음, regression 가능성 최소화).
 
-**작동 중**: hybrid voting + per-digit voting + leading-digit-drop suffix-match + MP anchor=0 보호.
+**적용된 변경사항**:
+1. **전처리 다양성 ↑** — ADENA: 4 캔버스(default+soft+otsu+raw)×3 PSM = 12 결과 / MP: 3 캔버스×2 PSM = 6 결과
+2. **Hybrid per-digit override** — voting 약함(margin<75%) + 템플릿 강함(score≥92%, gap≥8%)일 때만 단일 자릿수 교체 (전체 number 교체 X)
+3. **Grayscale 템플릿 재구축** — 16x24 binary → 16x24 grayscale (Manhattan distance, 라벨 노이즈 자동 제거 rank-based filter)
 
-**비활성**: lineage.traineddata (오버피팅), Template Override (라벨링 노이즈).
-
-**다음 시도 후보**: ① 재라벨링 후 템플릿 재구축 ② CNN 분류기 ③ ITEM DROPS 활용.
+**테스트 필요**: 사용자 실전 사용 후 정확도 측정. 만약 regression 발견 시 commit revert로 즉시 롤백 가능.
 
 ---
 
@@ -43,22 +44,61 @@
 
 ---
 
-## 🛡️ 현재 활성 OCR 보정 스택
+## 🆕 2026-05-04 v2 추가된 개선
+
+### A. 전처리 다양성 확장 (`src/js/app.js`)
+- 새 함수: `applyOtsuBinarization(canvas)` — Otsu 자동 threshold 이진화
+- `preprocessCanvas(canvas, opts)` 시그니처 변경: `opts = { sharpen, binarize, contrastLo, contrastHi }`
+- `captureRegionToCanvas(region, mode)` 추가 mode: `'default' | 'soft' | 'otsu' | 'tight'`
+- ADENA OCR: 4 캔버스 × 3 PSM = 최대 12 결과 (이전 6개)
+- MP OCR: 3 캔버스 × 2 PSM = 최대 6 결과 (이전 2개)
+- **효과**: agreement-misread (양쪽 엔진 동시 misread) 깨질 확률 ↑
+
+### B. Hybrid per-digit override (`src/js/app.js`)
+- 기존 per-digit voting + 신규 templatePerCharFixed (고정 길이 템플릿 per-position 점수) 결합
+- 위치별 결정 트리:
+  - voting strong (no tie + margin ≥ 75%) → voting 채택 (template 무시)
+  - voting 약함/tied + template strong (score≥92%, gap≥8%) → template 채택
+  - 둘 다 약함 → voting best guess
+- **효과**: 전체 number override의 false positive 위험 회피하면서 단일 자릿수 confusion 보정
+
+### C. Grayscale 템플릿 재구축 (`scripts/training/build_templates_grayscale.py`)
+- 16x24 binary (48 bytes) → 16x24 grayscale (384 bytes)
+- Distance metric: Hamming → Manhattan (sum-abs-diff, anti-alias 정보 보존)
+- Inter-class purity rank-based filter: 각 클래스에서 top 50 by purity 유지 (절대 임계값 X)
+- 결과: 529 templates, 268KB (이전 492 binary, 32KB)
+- **알게 된 것**: 0/4/6/7/8/9 클래스는 grayscale에서도 negative purity → 라벨 노이즈/시각적 모호성 확정
+- **하지만**: 이로 인해 hybrid override가 해당 디짓에서 score 92% 못 넘어 **자동으로 발동 안 됨** → false override 위험 ↓
+
+### D. template-matcher.js 업그레이드
+- format 자동 감지 (`json.format === 'grayscale'`)
+- `_distance()` / `_maxDistance()` 헬퍼로 binary↔grayscale 자동 분기
+- 시그니처 크기 동적 (`Uint8Array(48)` 하드코딩 제거)
+
+### E. 빌드 산출물
+- `dist/LineageMPTimer-paddle-portable-1.2.0-paddle.exe` (134MB · 02:11)
+- `dist/LineageMPTimerPaddle Setup 1.2.0-paddle.exe` (134MB)
+
+---
+
+## 🛡️ 현재 활성 OCR 보정 스택 (v2)
 
 ```
-[1] Hybrid voting (paddle + tesseract)
-[2] PSM 7/8/13 다수결
-[3] 이중 캔버스 (preprocessed 12x + raw 16x) → 6개 결과
-[4] Per-digit majority voting (4↔9, 6↔8 같은 단일 자리 confusion)
-[5] Leading-digit-drop suffix-match (anchor 없어도 동작)
-[6] Anti-stuck 휴리스틱 (한쪽 anchor 고정 시 forward 우선)
-[7] MP anchor=0 첫 인식 보호 ← NEW
-[8] Pad 10px 확장 (영역 잘림 보충)
+[1]  Hybrid voting (paddle + tesseract)
+[2]  PSM 7/8/13 다수결
+[3]  4-canvas 다양성 (default 12x / soft 12x / otsu 12x / raw 16x+pad10) ← UPGRADED
+[4]  Per-digit majority voting (4↔9, 6↔8 같은 단일 자리 confusion)
+[5]  Leading-digit-drop suffix-match (anchor 없어도 동작)
+[6]  Anti-stuck 휴리스틱 (한쪽 anchor 고정 시 forward 우선)
+[7]  MP anchor=0 첫 인식 보호
+[8]  Pad 10px 확장 (영역 잘림 보충)
+[9]  Hybrid per-digit override (voting weak + template strong → 단일 자릿수 교체) ← NEW
+[10] Grayscale 16x24 templates with Manhattan distance ← NEW
 ```
 
 비활성:
 - Lineage traineddata (`build/tessdata/lineage.traineddata` 파일 보존, worker는 `eng`만 사용)
-- Template override (`src/js/template-matcher.js` 코드 보존, ADENA OCR에서 호출 안 됨)
+- Full-number Template override (가변 길이) — 라벨노이즈 위험으로 정보 로그만 출력
 
 ---
 
