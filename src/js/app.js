@@ -2787,7 +2787,35 @@
       }
     }
 
-    // 2차가 1차와 다른 결과를 도출하면 자릿수별 다수결을 우선 (글리프 confusion 보정)
+    // ===== 3차: Template Matching 검증 (픽셀 폰트 직접 비교) =====
+    //   픽셀 폰트의 각 자릿수는 동일한 모양 → 463개 라벨 데이터에서 추출한 템플릿과 직접 비교.
+    //   OCR 다수결 결과의 자릿수와 다른 결과를 도출하면 override.
+    //   Hamming distance 기반 (16x24 binary) → ~ms 단위 빠름.
+    let templateAdena = NaN;
+    let templateConf = 0;
+    let templateText = null;
+    if (window.TemplateMatcher && window.TemplateMatcher.isLoaded() && canvasRaw) {
+      try {
+        // 1차 다수결로 나온 자릿수를 expectedLength로 사용
+        const expectedLen = String(bestAdena).length;
+        const tplResult = window.TemplateMatcher.match(canvasRaw, expectedLen, '0123456789');
+        if (tplResult.text && /^\d+$/.test(tplResult.text)) {
+          const n = parseInt(tplResult.text, 10);
+          if (Number.isFinite(n) && n >= 0 && n <= 9999999999) {
+            templateAdena = n;
+            templateConf = tplResult.confidence;
+            templateText = tplResult.text;
+            console.log('[OCR ADENA template] result=' + n + ' conf=' + (templateConf * 100).toFixed(1) + '% perChar=', tplResult.perChar.map((c, i) => `pos${i}:${c.char}(${(c.score*100).toFixed(0)}%)`).join(' '));
+          }
+        }
+      } catch (e) {
+        console.warn('[OCR ADENA template] match failed:', e);
+      }
+    }
+
+    // === 우선순위 결정 ===
+    // 1) per-digit voting 결과가 1차 다수결과 다르면 우선 (글리프 confusion 보정)
+    // 2) 그 외엔 template 결과 활용 — template confidence > 75% 이고 다수결과 다르면 override
     if (Number.isFinite(perDigitAdena) && perDigitAdena !== bestAdena) {
       console.log('[OCR ADENA] per-digit override: full-num=' + bestAdena + ' → per-digit=' + perDigitAdena + ' (' + perDigitDetail + ')');
       const matched = valid.filter((r) => r.digits.length === dominantLen);
@@ -2796,6 +2824,16 @@
         text: String(perDigitAdena),
         confidence: avgConf,
         parsed: { adena: perDigitAdena, agreementCount: dominantLenCnt, totalAttempts: valid.length, perDigit: true }
+      };
+    }
+    // Template override: confidence ≥ 75% & OCR 다수결과 다르면 신뢰
+    if (Number.isFinite(templateAdena) && templateAdena !== bestAdena && templateConf >= 0.75) {
+      console.log('[OCR ADENA] 🎯 template override: OCR=' + bestAdena + ' → template=' + templateAdena + ' (conf=' + (templateConf * 100).toFixed(1) + '%)');
+      pushHybridLog('ADENA 🎯 template 보정: OCR=' + bestAdena + ' → ' + templateAdena + ' (' + (templateConf * 100).toFixed(0) + '%)');
+      return {
+        text: templateText,
+        confidence: templateConf * 100,
+        parsed: { adena: templateAdena, agreementCount: 1, totalAttempts: valid.length + 1, templateOverride: true }
       };
     }
 
@@ -3733,20 +3771,27 @@
       });
       await setupCaptureStreams();
       console.log('[AutoDetect] capture streams OK, count=', captureStreams.size);
+      // 템플릿 매처 로드 (병렬, 실패해도 OCR 동작은 가능)
+      const templateLoadPromise = (window.TemplateMatcher && !window.TemplateMatcher.isLoaded())
+        ? window.TemplateMatcher.load('./js/digit-templates.json')
+            .then((ok) => console.log('[AutoDetect] TemplateMatcher:', ok ? 'OK ' + window.TemplateMatcher.templateCount() + ' 템플릿' : 'failed'))
+            .catch((e) => console.warn('[AutoDetect] TemplateMatcher 로드 실패:', e))
+        : Promise.resolve();
+
       if (autoDetect.ocrEngine === 'paddle') {
         if (dom.adInitStatus) dom.adInitStatus.textContent = '⏳ PaddleOCR 모델 로드 중... (첫 실행 시 ~30MB CDN 다운로드)';
         if (!window.MpPaddle) throw new Error('paddle-ocr.js 미로드 (script tag 누락)');
-        await window.MpPaddle.init();
+        await Promise.all([window.MpPaddle.init(), templateLoadPromise]);
         console.log('[AutoDetect] paddle ready');
       } else if (autoDetect.ocrEngine === 'hybrid') {
-        if (dom.adInitStatus) dom.adInitStatus.textContent = '⏳ Hybrid: paddle + tesseract 동시 초기화...';
+        if (dom.adInitStatus) dom.adInitStatus.textContent = '⏳ Hybrid: paddle + tesseract + 템플릿 동시 초기화...';
         if (!window.MpPaddle) throw new Error('paddle-ocr.js 미로드 (script tag 누락)');
-        await Promise.all([window.MpPaddle.init(), initOcrWorker()]);
-        console.log('[AutoDetect] hybrid (paddle + tesseract) ready');
+        await Promise.all([window.MpPaddle.init(), initOcrWorker(), templateLoadPromise]);
+        console.log('[AutoDetect] hybrid (paddle + tesseract + template) ready');
       } else {
-        if (dom.adInitStatus) dom.adInitStatus.textContent = '⏳ Tesseract 워커 초기화...';
-        await initOcrWorker();
-        console.log('[AutoDetect] tesseract worker OK');
+        if (dom.adInitStatus) dom.adInitStatus.textContent = '⏳ Tesseract 워커 + 템플릿 초기화...';
+        await Promise.all([initOcrWorker(), templateLoadPromise]);
+        console.log('[AutoDetect] tesseract worker + template OK');
       }
       autoDetect.enabled = true;
       S.saveAutoDetect(autoDetect);
