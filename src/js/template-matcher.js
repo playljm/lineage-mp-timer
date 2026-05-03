@@ -138,13 +138,14 @@
   function match(canvas, expectedLength, allowedChars) {
     if (!LOADED || !TEMPLATES) return { text: null, confidence: 0, error: 'not loaded' };
     if (!canvas || expectedLength <= 0) return { text: null, confidence: 0, error: 'invalid input' };
+    return _matchWithLength(canvas, expectedLength, allowedChars);
+  }
 
-    // bbox로 좌우 빈 공간 제거 (canvas의 글자 영역만 사용)
+  function _matchWithLength(canvas, expectedLength, allowedChars) {
     const trimmed = _trimWhitespace(canvas);
     if (!trimmed) return { text: null, confidence: 0, error: 'all white' };
     const { x0, x1 } = trimmed;
     const charWidth = (x1 - x0) / expectedLength;
-
     const result = [];
     let totalScore = 0;
     for (let i = 0; i < expectedLength; i++) {
@@ -157,7 +158,37 @@
     }
     const avgScore = totalScore / expectedLength;
     const text = result.map((r) => r.char || '?').join('');
-    return { text, confidence: avgScore, perChar: result };
+    return { text, confidence: avgScore, perChar: result, length: expectedLength };
+  }
+
+  /**
+   * 가변 길이 매칭 — 여러 길이(minLen~maxLen)를 모두 시도해서 confidence 최고 선택.
+   * OCR이 자릿수를 잘못 셀 때(예: 47090 → 491) 효과적.
+   *
+   * @param {HTMLCanvasElement} canvas
+   * @param {number} minLen 최소 자릿수 (기본 1)
+   * @param {number} maxLen 최대 자릿수 (기본 8)
+   * @param {string} [allowedChars]
+   * @returns 최고 confidence 결과 + 모든 길이 시도 결과
+   */
+  function matchVariableLength(canvas, minLen, maxLen, allowedChars) {
+    if (!LOADED || !TEMPLATES) return { text: null, confidence: 0, error: 'not loaded' };
+    if (!canvas) return { text: null, confidence: 0, error: 'no canvas' };
+    minLen = Math.max(1, minLen || 1);
+    maxLen = Math.max(minLen, maxLen || 8);
+
+    const all = [];
+    let best = { text: null, confidence: 0, length: 0 };
+    for (let n = minLen; n <= maxLen; n++) {
+      const r = _matchWithLength(canvas, n, allowedChars);
+      if (r && r.text) {
+        all.push({ length: n, text: r.text, confidence: r.confidence });
+        if (r.confidence > best.confidence) {
+          best = r;
+        }
+      }
+    }
+    return { ...best, allLengths: all };
   }
 
   /**
@@ -195,6 +226,7 @@
   global.TemplateMatcher = {
     load,
     match,
+    matchVariableLength,
     isLoaded,
     templateCount
   };

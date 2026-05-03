@@ -2787,25 +2787,29 @@
       }
     }
 
-    // ===== 3차: Template Matching 검증 (픽셀 폰트 직접 비교) =====
+    // ===== 3차: Template Matching 검증 (픽셀 폰트 직접 비교, 가변 길이) =====
     //   픽셀 폰트의 각 자릿수는 동일한 모양 → 463개 라벨 데이터에서 추출한 템플릿과 직접 비교.
-    //   OCR 다수결 결과의 자릿수와 다른 결과를 도출하면 override.
-    //   Hamming distance 기반 (16x24 binary) → ~ms 단위 빠름.
+    //   OCR이 자릿수를 잘못 세는 경우(예: 47090 → 491) 대응 위해 1~7자리 모두 시도.
+    //   가장 confidence 높은 길이를 정답으로 채택. Hamming distance 기반.
     let templateAdena = NaN;
     let templateConf = 0;
     let templateText = null;
+    let templateLen = 0;
     if (window.TemplateMatcher && window.TemplateMatcher.isLoaded() && canvasRaw) {
       try {
-        // 1차 다수결로 나온 자릿수를 expectedLength로 사용
-        const expectedLen = String(bestAdena).length;
-        const tplResult = window.TemplateMatcher.match(canvasRaw, expectedLen, '0123456789');
+        const ocrLen = String(bestAdena).length;
+        // 1~7자리 모두 시도 (ADENA는 1자리 ~ 7자리까지 가능)
+        const tplResult = window.TemplateMatcher.matchVariableLength(canvasRaw, 1, 7, '0123456789');
         if (tplResult.text && /^\d+$/.test(tplResult.text)) {
           const n = parseInt(tplResult.text, 10);
           if (Number.isFinite(n) && n >= 0 && n <= 9999999999) {
             templateAdena = n;
             templateConf = tplResult.confidence;
             templateText = tplResult.text;
-            console.log('[OCR ADENA template] result=' + n + ' conf=' + (templateConf * 100).toFixed(1) + '% perChar=', tplResult.perChar.map((c, i) => `pos${i}:${c.char}(${(c.score*100).toFixed(0)}%)`).join(' '));
+            templateLen = tplResult.length;
+            const allLens = (tplResult.allLengths || []).map((a) => `len${a.length}=${a.text}(${(a.confidence*100).toFixed(0)}%)`).join(' ');
+            console.log('[OCR ADENA template] best len=' + templateLen + ' result=' + n + ' conf=' + (templateConf * 100).toFixed(1) + '% (OCR len=' + ocrLen + ')');
+            console.log('[OCR ADENA template] all lengths:', allLens);
           }
         }
       } catch (e) {
@@ -2827,13 +2831,16 @@
       };
     }
     // Template override: confidence ≥ 75% & OCR 다수결과 다르면 신뢰
+    //   특히 자릿수가 다를 때 강력 (OCR이 digit-drop 한 케이스)
     if (Number.isFinite(templateAdena) && templateAdena !== bestAdena && templateConf >= 0.75) {
-      console.log('[OCR ADENA] 🎯 template override: OCR=' + bestAdena + ' → template=' + templateAdena + ' (conf=' + (templateConf * 100).toFixed(1) + '%)');
-      pushHybridLog('ADENA 🎯 template 보정: OCR=' + bestAdena + ' → ' + templateAdena + ' (' + (templateConf * 100).toFixed(0) + '%)');
+      const ocrLen = String(bestAdena).length;
+      const lenDiff = templateLen !== ocrLen;
+      console.log('[OCR ADENA] 🎯 template override: OCR=' + bestAdena + '(' + ocrLen + '자리) → template=' + templateAdena + '(' + templateLen + '자리) conf=' + (templateConf * 100).toFixed(1) + '%' + (lenDiff ? ' [길이 보정]' : ''));
+      pushHybridLog('ADENA 🎯 template 보정: ' + bestAdena + ' → ' + templateAdena + ' (' + (templateConf * 100).toFixed(0) + '%' + (lenDiff ? ', 자릿수 보정 ' + ocrLen + '→' + templateLen : '') + ')');
       return {
         text: templateText,
         confidence: templateConf * 100,
-        parsed: { adena: templateAdena, agreementCount: 1, totalAttempts: valid.length + 1, templateOverride: true }
+        parsed: { adena: templateAdena, agreementCount: 1, totalAttempts: valid.length + 1, templateOverride: true, templateLen }
       };
     }
 
