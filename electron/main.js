@@ -284,7 +284,16 @@ app.on('will-quit', () => {
 
 // ========== IPC ==========
 ipcMain.handle('app:set-always-on-top', (_, value) => {
-  if (mainWindow) mainWindow.setAlwaysOnTop(!!value);
+  if (mainWindow) {
+    // [v1.3.1] level='screen-saver' — Always on top 최고 레벨 (게임 fullscreen/borderless 위에 떠 있게)
+    //   기본 'floating'은 일부 게임 창보다 낮아 뒤로 빠지는 문제. 'screen-saver'가 가장 높음.
+    mainWindow.setAlwaysOnTop(!!value, 'screen-saver');
+    if (value) {
+      // 켤 때는 즉시 위로 올리고 포커스 — 사용자 클릭이 의도한 결과
+      try { mainWindow.moveTop(); } catch (_) {}
+      try { mainWindow.focus(); } catch (_) {}
+    }
+  }
   return !!(mainWindow && mainWindow.isAlwaysOnTop());
 });
 

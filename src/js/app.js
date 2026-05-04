@@ -3435,7 +3435,9 @@
 
   async function ocrExpRegionTesseract() {
     if (!autoDetect.expRegion) return null;
-    const canvas = captureRegionToCanvas(autoDetect.expRegion);
+    // [v1.3.1] chromaMask: true — 경험치 진행 바의 노란/주황 색상 픽셀 차단
+    //   사용자 보고: "경험치바 뒤에 색상때문에 6→8 misread"
+    const canvas = captureRegionToCanvas(autoDetect.expRegion, undefined, { chromaMask: true });
     if (!canvas) return null;
     updatePreview(dom.adExpPreview, canvas);
     const w = await initOcrWorker();
@@ -3643,6 +3645,8 @@
     if (!autoDetect.expRegion) return null;
     const canvas = captureRegionToRawCanvas(autoDetect.expRegion, 1, { pad: 2 });
     if (!canvas) return null;
+    // [v1.3.1] 경험치 바 색상 픽셀 차단 — paddle도 동일 영향 받음 (게이팅 1% 자동 적용)
+    maskChromaPixels(canvas);
     updatePreview(dom.adExpPreview, canvas);
     if (!window.MpPaddle) return null;
     try {
