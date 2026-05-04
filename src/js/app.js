@@ -3776,7 +3776,24 @@
     return voteHybrid('LEVEL', pr, tr, (a, b) => a.level === b.level);
   }
   async function ocrAdenaRegionHybrid() {
-    const [pr, tr] = await Promise.all([ocrAdenaRegionPaddle(), ocrAdenaRegionTesseract()]);
+    let [pr, tr] = await Promise.all([ocrAdenaRegionPaddle(), ocrAdenaRegionTesseract()]);
+
+    // [v15] tess override 결과 자릿수 sanity — paddle과 자릿수 다르면 tess 폐기
+    //   per-digit / hybrid override는 5자리 strong template으로 4자리 OCR을 5자리로 확장 가능.
+    //   paddle이 정상 4자리인데 tess override가 5자리면 misread 의심 → tess 폐기 후 paddle 단독.
+    //   사용자 케이스(2026-05-04): paddle "6096" 4자리 vs tess hybrid "70098" 5자리
+    //                              → paddle 우선 → 정상 인식 + cached anchor 자동 회복 가능
+    if (tr && tr.parsed && (tr.parsed.hybrid || tr.parsed.perDigit) &&
+        pr && pr.parsed && Number.isFinite(pr.parsed.adena)) {
+      const pDig = String(pr.parsed.adena).length;
+      const tDig = String(tr.parsed.adena).length;
+      if (pDig !== tDig) {
+        const overrideKind = tr.parsed.hybrid ? 'hybrid' : 'per-digit';
+        pushHybridLog('ADENA ❌ tess ' + overrideKind + ' 자릿수 mismatch (paddle=' + pDig + '자리 vs tess=' + tDig + '자리): tess 폐기 → paddle 단독');
+        tr = { text: tr.text, confidence: 0, parsed: null };
+      }
+    }
+
     // 1) 둘 다 실패 / 한 쪽만 성공은 voteHybrid 기본 로직 통과
     if (!pr || !tr || !pr.parsed || !tr.parsed) {
       return voteHybrid('ADENA', pr, tr, (a, b) => a.adena === b.adena);
