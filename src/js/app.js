@@ -3964,6 +3964,24 @@
       const anchorAd = parseInt(dom.trkAdenaNow.value, 10) || 0;
       const valBoth = pr.parsed.adena;
       if (anchorAd > 0) {
+        // [v1.3.13] anchor 자릿수 > OCR 자릿수면 anchor가 잘못 큰 값으로 굳었을 가능성
+        //   사용자 케이스: anchor "238571" (6자리) vs OCR "24258" (5자리, 일관)
+        //   2회 연속 같은 값 → anchor 자동 복구 (cached anchor 복구 패턴)
+        const anchorDig = String(anchorAd).length;
+        const valDig = String(valBoth).length;
+        if (anchorDig > valDig && valDig >= 4) {
+          if (!ocrAdenaRegionHybrid._matchRecover) ocrAdenaRegionHybrid._matchRecover = { lastVal: 0, count: 0 };
+          const mr = ocrAdenaRegionHybrid._matchRecover;
+          if (mr.lastVal === valBoth) mr.count++;
+          else { mr.lastVal = valBoth; mr.count = 1; }
+          if (mr.count >= 2) {
+            pushHybridLog('🔓 ADENA anchor 자동 복구 (paddle/tess 일치 + 자릿수 작음 ' + valDig + '<' + anchorDig + ', 2회 연속): ' + anchorAd.toLocaleString() + ' → ' + valBoth.toLocaleString());
+            mr.count = 0; mr.lastVal = 0;
+            return voteHybrid('ADENA', pr, tr, (a, b) => a.adena === b.adena);
+          }
+          pushHybridLog('ADENA ⏳ anchor 복구 검증 (' + (mr.count + 1) + '/3) ' + valBoth.toLocaleString() + ' (anchor=' + anchorAd.toLocaleString() + ', 자릿수 ' + valDig + '<' + anchorDig + ')');
+          return { text: 'verifying ' + valBoth, confidence: 0, parsed: null };
+        }
         const delta = Math.abs(valBoth - anchorAd);
         const ABS_JUMP = 1000;
         if (delta >= ABS_JUMP) {
