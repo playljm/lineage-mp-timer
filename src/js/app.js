@@ -3435,9 +3435,10 @@
 
   async function ocrExpRegionTesseract() {
     if (!autoDetect.expRegion) return null;
-    // [v1.3.1] chromaMask: true — 경험치 진행 바의 노란/주황 색상 픽셀 차단
-    //   사용자 보고: "경험치바 뒤에 색상때문에 6→8 misread"
-    const canvas = captureRegionToCanvas(autoDetect.expRegion, undefined, { chromaMask: true });
+    // [v1.3.2] chromaMask 제거 — v1.3.1 사용자 케이스 "67.1189 → 1.1891" 부작용
+    //   EXP 영역 글자가 게임 진행 막대와 너무 가까워 chroma masking이 글자 첫 자리까지 마스킹
+    //   다시 v1.3.0 동작으로 rollback (chromaMask 옵션 사용 안 함)
+    const canvas = captureRegionToCanvas(autoDetect.expRegion);
     if (!canvas) return null;
     updatePreview(dom.adExpPreview, canvas);
     const w = await initOcrWorker();
@@ -3645,8 +3646,7 @@
     if (!autoDetect.expRegion) return null;
     const canvas = captureRegionToRawCanvas(autoDetect.expRegion, 1, { pad: 2 });
     if (!canvas) return null;
-    // [v1.3.1] 경험치 바 색상 픽셀 차단 — paddle도 동일 영향 받음 (게이팅 1% 자동 적용)
-    maskChromaPixels(canvas);
+    // [v1.3.2] maskChromaPixels 제거 — 부작용 (글자 첫 자리 손상)
     updatePreview(dom.adExpPreview, canvas);
     if (!window.MpPaddle) return null;
     try {
