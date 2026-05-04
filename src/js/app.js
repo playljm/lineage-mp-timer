@@ -1959,7 +1959,10 @@
     const w = canvas.width, h = canvas.height;
     const img = ctx.getImageData(0, 0, w, h);
     const d = img.data;
-    const T = (threshold && threshold > 0) ? threshold : 200;
+    // [v1.3.7] default 200 → 150 — 회색/연한 글자도 살림
+    //   사용자 진단 리포트 (2026-05-04 v1.3.6): EXP "67.2445" 글자가 회색이라 T=200으로 검정 처리됨 → 손상
+    //   T=150이면 회색 글자 (R/G/B≈170) 보존, 진행 막대 (B=40) 여전히 차단
+    const T = (threshold && threshold > 0) ? threshold : 150;
     for (let i = 0; i < d.length; i += 4) {
       const r = d[i], g = d[i + 1], b = d[i + 2];
       if (r >= T && g >= T && b >= T) {
