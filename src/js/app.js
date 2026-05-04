@@ -1800,13 +1800,29 @@
     const w = canvas.width, h = canvas.height;
     const img = ctx.getImageData(0, 0, w, h);
     const d = img.data;
-    // 임계값 60 — 게임 글자 안티앨리어싱(채도 ≤30~40)은 보호, 노란 금화(190)/빨간 별(100~150)만 잡음
-    const SAT_THRESHOLD = 60;
-    // 평균 휘도 → 배경 명암 결정
+    // 임계값 100 — 게임 글자 안티앨리어싱(채도 ≤60)은 절대 안 잡힘.
+    // 노란 금화(190+), 빨간 별(100~150)만 잡음.
+    const SAT_THRESHOLD = 100;
+    // 게이팅 비율 5% — 영역에 컬러 그래픽이 실제로 있을 때만 마스킹 발동.
+    // 깨끗한 글자 영역(예: "8806")에는 채도≥100 픽셀이 거의 없으므로 스킵 → 글자 보존.
+    const TRIGGER_RATIO = 0.05;
+    // 1차 패스 — 채도 분포 + 평균 휘도 동시 측정
     let sumLum = 0;
-    for (let i = 0; i < d.length; i += 4) sumLum += (d[i] + d[i + 1] + d[i + 2]) / 3;
-    const avgLum = sumLum / (d.length / 4);
+    let highSatCount = 0;
+    const totalPx = (d.length / 4) | 0;
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i], g = d[i + 1], b = d[i + 2];
+      sumLum += (r + g + b) / 3;
+      if (Math.max(r, g, b) - Math.min(r, g, b) >= SAT_THRESHOLD) highSatCount++;
+    }
+    const colorRatio = highSatCount / Math.max(1, totalPx);
+    if (colorRatio < TRIGGER_RATIO) {
+      // 컬러 그래픽 없음 — 마스킹 스킵 (글자만 있는 깨끗한 영역 보호)
+      return canvas;
+    }
+    const avgLum = sumLum / totalPx;
     const maskColor = avgLum < 128 ? 0 : 255;
+    // 2차 패스 — 트리거된 경우만 실제 마스킹
     let maskedCount = 0;
     for (let i = 0; i < d.length; i += 4) {
       const r = d[i], g = d[i + 1], b = d[i + 2];
@@ -1815,10 +1831,9 @@
         maskedCount++;
       }
     }
-    if (maskedCount > 0) {
-      ctx.putImageData(img, 0, 0);
-      console.log('[ChromaMask] ' + maskedCount + ' colored px masked → ' + maskColor + ' (avgLum=' + avgLum.toFixed(0) + ')');
-    }
+    ctx.putImageData(img, 0, 0);
+    console.log('[ChromaMask] ' + maskedCount + ' colored px masked → ' + maskColor +
+      ' (avgLum=' + avgLum.toFixed(0) + ', ratio=' + (colorRatio * 100).toFixed(1) + '%)');
     return canvas;
   }
 
