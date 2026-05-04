@@ -43,7 +43,8 @@ e92708c docs: 세션 인수인계 v2
 6a48ee8 feat: OCR 정확도 개선 — 전처리 다양성 + Hybrid per-digit override
 ```
 
-**최신 빌드 (v5)**: `dist/LineageMPTimer-paddle-portable-1.2.0-paddle.exe` (128MB · **11:00**) ← 현재
+**최신 빌드 (v6)**: `dist/LineageMPTimer-paddle-portable-1.2.0-paddle.exe` (128MB · **11:11**) ← 현재
+**이전 빌드 (v5)**: 11:00 — chroma mask가 MP/LEVEL 글자도 마스킹해버림 (영역 너무 광범위 + 임계값 너무 낮음)
 **이전 빌드 (v4)**: 10:37 — 4자리 ADENA에서 노란 금화 픽셀이 OCR에 "8"로 오인됨
 **이전 빌드 (v3)**: 03:20 — phantom digit 차단 누락 케이스 발견됨
 
@@ -373,7 +374,8 @@ UI 로그: `🔓 ADENA cached anchor 복구: 586391 → 58039 (2회 연속)`
 | EXP 0.1% 임계값 후 | "점점 좋아지고 있어 / 이제까지 제일 인식 잘 되고 있어" |
 | v3 빌드 (03:20) | "아데나 4자리되면 뒤에 그림 때문에 탐지 오류 / 경험치도 자꾸 오류" |
 | v4 빌드 (10:37) | "인식이 됐다 안됐다 / 4자리 숫잔데 OCR은 5자리로 봐" (노란 금화 → "8" 오인) |
-| **v5 빌드 (11:00)** | **테스트 대기 중** — column-level chroma run + chroma pixel masking |
+| v5 빌드 (11:00) | "아데나 배경 날라가긴하는데... MP랑 레벨이 너무 하얘" (chroma mask 너무 광범위) |
+| **v6 빌드 (11:11)** | **테스트 대기 중** — chroma mask를 ADENA에만 + 임계값 30→60 |
 
 ---
 
@@ -389,7 +391,8 @@ UI 로그: `🔓 ADENA cached anchor 복구: 586391 → 58039 (2회 연속)`
 
 ---
 
-_Last updated: 2026-05-04 11:05 (v5) · 작성: Claude (Anthropic)_
+_Last updated: 2026-05-04 11:15 (v6) · 작성: Claude (Anthropic)_
 _v3 사용자 지시: "내일 추가 작업하려고해 문서 작업 남겨줘"_
 _v4 사용자 지시: "아데나 4자리되면 뒤에 그림 때문에 탐지 오류 / 경험치도 자꾸 오류"_
 _v5 사용자 지시: "4자리 숫잔데 OCR은 5자리 숫자로 보는거야" (노란 금화 픽셀이 "8"로 오인)_
+_v6 사용자 지시: "아데나 배경 날라가긴하는데 MP/레벨이 너무 하얗게 됐어" (chroma mask 범위 축소)_

@@ -1800,7 +1800,8 @@
     const w = canvas.width, h = canvas.height;
     const img = ctx.getImageData(0, 0, w, h);
     const d = img.data;
-    const SAT_THRESHOLD = 30;
+    // 임계값 60 — 게임 글자 안티앨리어싱(채도 ≤30~40)은 보호, 노란 금화(190)/빨간 별(100~150)만 잡음
+    const SAT_THRESHOLD = 60;
     // 평균 휘도 → 배경 명암 결정
     let sumLum = 0;
     for (let i = 0; i < d.length; i += 4) sumLum += (d[i] + d[i + 1] + d[i + 2]) / 3;
@@ -2056,7 +2057,7 @@
    *   'tight'               — 좁은 콘트라스트 (90~170) + 샤프닝 — strict edge
    * 다양한 모드로 변형 캔버스를 만들면 voting 다양성 ↑ (agreement-misread 저항)
    */
-  function captureRegionToCanvas(region, mode) {
+  function captureRegionToCanvas(region, mode, opts) {
     if (!region) return null;
     const cap = captureStreams.get(region.sourceId);
     if (!cap || !cap.video) {
@@ -2082,7 +2083,10 @@
     if (autoDetect.preprocess !== false) {
       // 컬러 픽셀 마스킹 (preprocessCanvas 전에) — ADENA 영역 노란 금화/빨간 별 등
       // 채도 그래픽을 배경에 흡수시켜 OCR 글자만 보이게 함
-      maskChromaPixels(canvas);
+      // 기본 OFF (MP/EXP/LEVEL 글자 안티앨리어싱이 영향 받지 않도록), ADENA 호출에서만 명시적 ON
+      if (opts && opts.chromaMask) {
+        maskChromaPixels(canvas);
+      }
 
       if (mode === 'soft') {
         preprocessCanvas(canvas, { sharpen: false });
@@ -2992,7 +2996,7 @@
 
   async function ocrAdenaRegionTesseract() {
     if (!autoDetect.adenaRegion) return null;
-    const canvas = captureRegionToCanvas(autoDetect.adenaRegion);
+    const canvas = captureRegionToCanvas(autoDetect.adenaRegion, undefined, { chromaMask: true });
     if (!canvas) return null;
     updatePreview(dom.adAdenaPreview, canvas);
     const w = await initOcrWorker();
@@ -3006,9 +3010,12 @@
     let canvasSoft = null;
     let canvasOtsu = null;
     let canvasRaw = null;
-    try { canvasSoft = captureRegionToCanvas(autoDetect.adenaRegion, 'soft'); } catch (_) {}
-    try { canvasOtsu = captureRegionToCanvas(autoDetect.adenaRegion, 'otsu'); } catch (_) {}
-    try { canvasRaw = captureRegionToRawCanvas(autoDetect.adenaRegion, 16, { pad: 10 }); } catch (_) {}
+    try { canvasSoft = captureRegionToCanvas(autoDetect.adenaRegion, 'soft', { chromaMask: true }); } catch (_) {}
+    try { canvasOtsu = captureRegionToCanvas(autoDetect.adenaRegion, 'otsu', { chromaMask: true }); } catch (_) {}
+    try {
+      canvasRaw = captureRegionToRawCanvas(autoDetect.adenaRegion, 16, { pad: 10 });
+      if (canvasRaw) maskChromaPixels(canvasRaw);  // 노란 금화 등 컬러 그래픽 제거
+    } catch (_) {}
 
     const psmModes = ['7', '8', '13'];
     const results = [];
@@ -3501,6 +3508,8 @@
     // pad: 10 — 사용자가 leading 글자(앞자리)를 살짝 잘랐을 때 보충 (digit-drop 방지)
     const canvas = captureRegionToRawCanvas(autoDetect.adenaRegion, 1, { pad: 10 });
     if (!canvas) return null;
+    // 노란 금화/빨간 별 등 컬러 그래픽 제거 — paddle도 이 영향을 받음
+    maskChromaPixels(canvas);
     updatePreview(dom.adAdenaPreview, canvas);
     if (!window.MpPaddle) return null;
     try {
