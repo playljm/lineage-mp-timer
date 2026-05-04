@@ -1849,6 +1849,26 @@
       return bot < 0 ? 0 : (bot - top + 1) / h;
     };
 
+    // Chroma score — 그룹 평균 채도 (max-min RGB). 게임 숫자는 거의 무채색(<10),
+    // 빨간 별/아이템 아이콘 등 컬러 artifact는 채도 ≥ 30. ink 픽셀만 카운트.
+    const chromaScore = (start, end) => {
+      let sumSat = 0;
+      let count = 0;
+      for (let y = 0; y < h; y++) {
+        for (let x = start; x <= end; x++) {
+          const idx = (y * w + x) * 4;
+          const r = d[idx], gPx = d[idx + 1], bPx = d[idx + 2];
+          const gray = (r + gPx + bPx) / 3;
+          if (!isInk(gray)) continue;  // 배경 제외, ink 픽셀만
+          const mx = Math.max(r, gPx, bPx);
+          const mn = Math.min(r, gPx, bPx);
+          sumSat += (mx - mn);
+          count++;
+        }
+      }
+      return count > 5 ? sumSat / count : 0;
+    };
+
     let trimLeft = 0;
     let trimRight = w;
 
@@ -1859,10 +1879,16 @@
       const gap = last.start - prev.end - 1;
       const widthRatio = last.width / Math.max(1, median);
       const vRatio = verticalRatio(last.start, last.end);
-      // 충분히 좁고 + 충분히 떨어져 있고 + height 짧으면 artifact
-      if (widthRatio < 0.25 && gap >= 3 && vRatio < 0.6) {
+      const chroma = chromaScore(last.start, last.end);
+      // 트리거 조건 (둘 중 하나):
+      //   (A) 기존 small-geometric: 좁고 + 떨어져 + 짧음
+      //   (B) chroma-based: 채도 평균 ≥ 30 + gap ≥ 2 (컬러 별/아이콘)
+      const isGeometric = (widthRatio < 0.25 && gap >= 3 && vRatio < 0.6);
+      const isChromatic = (chroma >= 30 && gap >= 2);
+      if (isGeometric || isChromatic) {
         trimRight = prev.end + Math.floor(gap / 2) + 1;
-        console.log('[AutoTrim] right artifact: width=' + last.width + ' median=' + median + ' gap=' + gap + ' vRatio=' + vRatio.toFixed(2) + ' trim@' + trimRight);
+        const reason = isChromatic ? 'chroma=' + chroma.toFixed(0) : 'geometric';
+        console.log('[AutoTrim] right artifact (' + reason + '): width=' + last.width + ' median=' + median + ' gap=' + gap + ' vRatio=' + vRatio.toFixed(2) + ' chroma=' + chroma.toFixed(0) + ' trim@' + trimRight);
       }
     }
     // 왼쪽 끝 검사
@@ -1872,9 +1898,13 @@
       const gap = next.start - first.end - 1;
       const widthRatio = first.width / Math.max(1, median);
       const vRatio = verticalRatio(first.start, first.end);
-      if (widthRatio < 0.25 && gap >= 3 && vRatio < 0.6) {
+      const chroma = chromaScore(first.start, first.end);
+      const isGeometric = (widthRatio < 0.25 && gap >= 3 && vRatio < 0.6);
+      const isChromatic = (chroma >= 30 && gap >= 2);
+      if (isGeometric || isChromatic) {
         trimLeft = first.end + Math.floor(gap / 2);
-        console.log('[AutoTrim] left artifact: width=' + first.width + ' median=' + median + ' gap=' + gap + ' vRatio=' + vRatio.toFixed(2) + ' trim@' + trimLeft);
+        const reason = isChromatic ? 'chroma=' + chroma.toFixed(0) : 'geometric';
+        console.log('[AutoTrim] left artifact (' + reason + '): width=' + first.width + ' median=' + median + ' gap=' + gap + ' vRatio=' + vRatio.toFixed(2) + ' chroma=' + chroma.toFixed(0) + ' trim@' + trimLeft);
       }
     }
 
@@ -3529,7 +3559,25 @@
   }
 
   async function ocrMpRegionHybrid() {
-    const [pr, tr] = await Promise.all([ocrMpRegionPaddle(), ocrMpRegionTesseract()]);
+    const [prRaw, trRaw] = await Promise.all([ocrMpRegionPaddle(), ocrMpRegionTesseract()]);
+    let pr = prRaw, tr = trRaw;
+
+    // === Slash-drop sanity check (paddle "37/235" → "377235" 같은 slash 무시 차단) ===
+    // userMax(INPUTS) 자릿수보다 max가 +2 이상 길면 slash drop misread → 해당 엔진 결과 폐기.
+    // 이렇게 하면 mismatch 표시 안 되고 자연스럽게 single-source로 전환됨.
+    const userMaxEarly = parseInt(dom.inMaxMp.value, 10) || 0;
+    if (userMaxEarly > 0) {
+      const maxLen = String(userMaxEarly).length;
+      if (pr && pr.parsed && pr.parsed.max && String(pr.parsed.max).length >= maxLen + 2) {
+        pushHybridLog('MP ❌ paddle slash-drop 의심 (max=' + pr.parsed.max + ' >> userMax=' + userMaxEarly + '): paddle 폐기');
+        pr = { text: pr.text, confidence: 0, parsed: null };
+      }
+      if (tr && tr.parsed && tr.parsed.max && String(tr.parsed.max).length >= maxLen + 2) {
+        pushHybridLog('MP ❌ tess slash-drop 의심 (max=' + tr.parsed.max + ' >> userMax=' + userMaxEarly + '): tess 폐기');
+        tr = { text: tr.text, confidence: 0, parsed: null };
+      }
+    }
+
     if (!pr || !tr || !pr.parsed || !tr.parsed) {
       return voteHybrid('MP', pr, tr, (a, b) => a.cur === b.cur && a.max === b.max);
     }
@@ -3731,8 +3779,42 @@
     return voteHybrid('ADENA', pr, tr, (a, b) => a.adena === b.adena);
   }
   async function ocrExpRegionHybrid() {
-    const [pr, tr] = await Promise.all([ocrExpRegionPaddle(), ocrExpRegionTesseract()]);
+    const [prRaw, trRaw] = await Promise.all([ocrExpRegionPaddle(), ocrExpRegionTesseract()]);
+    let pr = prRaw, tr = trRaw;
     const matcher = (a, b) => Math.abs(a.exp - b.exp) < 0.01;
+
+    // === Phantom digit sanity check (paddle 51.0432 → 51.84321 같은 phantom "1" 추가 차단) ===
+    // anchor가 N자리 소수점이면 OCR 결과도 N자리여야 함. anchor 대비 자릿수 +1 이상 +
+    // anchor와 0.3%p 이상 떨어진 결과는 phantom digit으로 판정 → 해당 엔진 결과 폐기.
+    const anchorEarly = parseExpPct(dom.trkExpNow.value) || 0;
+    if (anchorEarly > 0) {
+      const expDecimalDigits = (val) => {
+        if (!Number.isFinite(val)) return 0;
+        const s = String(val).replace(/0+$/, '');
+        const dot = s.indexOf('.');
+        return dot < 0 ? 0 : s.length - dot - 1;
+      };
+      const ad = expDecimalDigits(anchorEarly);
+      if (ad >= 2) {
+        if (pr && pr.parsed) {
+          const pd = expDecimalDigits(pr.parsed.exp);
+          const pDelta = Math.abs(pr.parsed.exp - anchorEarly);
+          if (pd > ad && pDelta > 0.3) {
+            pushHybridLog('EXP ❌ paddle phantom digit (자릿수 ' + pd + ' > anchor ' + ad + ', Δ' + pDelta.toFixed(3) + '%p): paddle 폐기');
+            pr = { text: pr.text, confidence: 0, parsed: null };
+          }
+        }
+        if (tr && tr.parsed) {
+          const td = expDecimalDigits(tr.parsed.exp);
+          const tDelta = Math.abs(tr.parsed.exp - anchorEarly);
+          if (td > ad && tDelta > 0.3) {
+            pushHybridLog('EXP ❌ tess phantom digit (자릿수 ' + td + ' > anchor ' + ad + ', Δ' + tDelta.toFixed(3) + '%p): tess 폐기');
+            tr = { text: tr.text, confidence: 0, parsed: null };
+          }
+        }
+      }
+    }
+
     if (!pr || !tr || !pr.parsed || !tr.parsed) {
       return voteHybrid('EXP', pr, tr, matcher);
     }

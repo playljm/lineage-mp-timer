@@ -1,7 +1,7 @@
-# 세션 인수인계 — 2026-05-04 v3 (OCR 99% 종합 개선 진행)
+# 세션 인수인계 — 2026-05-04 v4 (4자리 ADENA + EXP/MP phantom digit 차단)
 
 > **다음 세션 시 가장 먼저 읽어야 할 문서**
-> 이번 세션은 사용자 보고 → 진단 → 수정 → 사용자 재테스트 사이클을 9차례 거치며 OCR 정확도를 크게 끌어올렸습니다.
+> v3 빌드 사용자 테스트 후 발견된 잔여 misread 패턴 3건 (4자리 ADENA + 빨간 별 아이콘 / EXP phantom digit / MP slash-drop) 추가 차단.
 
 ---
 
@@ -24,9 +24,14 @@
 
 ---
 
-## 📊 이번 세션 누적 9개 commit
+## 📊 누적 commit (v3 9개 + v4 1개 = 10개)
 
 ```
+v4 (이번 새션) — 사용자 추가 보고 패턴 차단
+[NEW]   fix: 채도 기반 autoTrim + EXP/MP phantom digit sanity check
+
+v3 (어제 새벽) — 9 commits
+e3d58b5 docs: 세션 인수인계 v3
 1976d61 fix: ADENA digit-add 방지 + cached anchor 복구 빠르게 (3→2회)
 e3191cd fix: EXP 0.1%p 점프 임계값 + 검증 큐 (사용자 요청)
 9bce20a fix: cached anchor 자동 복구 + Tier 임계값 grayscale 실측 보정
@@ -38,11 +43,54 @@ e92708c docs: 세션 인수인계 v2
 6a48ee8 feat: OCR 정확도 개선 — 전처리 다양성 + Hybrid per-digit override
 ```
 
-**최신 빌드**: `dist/LineageMPTimer-paddle-portable-1.2.0-paddle.exe` (134MB · **03:20**)
+**최신 빌드 (v4)**: `dist/LineageMPTimer-paddle-portable-1.2.0-paddle.exe` (128MB · **10:37**) ← 현재
+**이전 빌드 (v3)**: 03:20 — 사용자 테스트 후 잔여 패턴 발견됨 (4자리 ADENA + EXP/MP phantom)
 
 ---
 
-## 🛡️ 현재 활성 OCR 보정 스택 (v3)
+## 🔥 v4 변경 사항 — 사용자 보고 → 즉시 수정
+
+### 사용자 보고 (v3 빌드 테스트 후)
+1. **ADENA 4자리 + 뒷 그림**: 캡처 영역 78×22에 "5734" + 빨간 별 아이콘이 함께 들어가서 OCR 흔들림
+2. **EXP 자꾸 mismatch**: paddle "51.84321" (5자리) vs 캡처 이미지 "51.0432" (anchor 4자리) — phantom "1" 추가
+3. **MP slash-drop**: paddle "377235" (6자리) vs userMax 235 — slash 무시 misread
+
+### 수정 내역
+
+#### 1. autoTrim 채도 기반 검출 (`autoTrimEdgeArtifacts`)
+**문제**: 빨간 별/스파클 아이콘은 `vRatio ≥ 0.6` (위아래 다 참) → 기존 geometric 조건 통과 못함
+**해결**:
+- 컬럼 그룹별 평균 채도(max−min RGB) 계산하는 `chromaScore(start, end)` 헬퍼 추가
+- 게임 숫자: chroma < 10 (거의 무채색)
+- 빨간 별: chroma ≥ 30 (높은 채도)
+- 트리거 조건: `(geometric) OR (chroma ≥ 30 && gap ≥ 2)`
+- 양 끝 group 모두 적용
+
+UI 로그: `✂️ AutoTrim R:Xpx (artifact 제거: ...)` + console 디버그 `chroma=ZZ`
+
+#### 2. EXP phantom digit sanity (`ocrExpRegionHybrid`)
+**문제**: paddle이 "51.0432" → "51.84321" 같은 디지트 추가 misread
+**해결**:
+- ocrExpRegionHybrid 진입 직후 paddle/tess 결과의 소수점 자릿수 검증
+- 조건: 자릿수 `> anchor 자릿수` AND 값 차이 `> 0.3%p` → 해당 엔진 결과 폐기
+- anchor 자릿수 ≥ 2일 때만 발동 (첫 인식 보호)
+
+UI 로그: `EXP ❌ paddle phantom digit (자릿수 5 > anchor 4, Δ0.800%p): paddle 폐기`
+
+#### 3. MP slash-drop sanity (`ocrMpRegionHybrid`)
+**문제**: paddle이 "37/235" → "377235" 같은 slash 무시 misread
+**해결**:
+- ocrMpRegionHybrid 진입 직후 paddle/tess의 max 자릿수 검증
+- 조건: max 자릿수 `≥ userMax 자릿수 + 2` → 해당 엔진 결과 폐기
+- userMax > 0일 때만 발동
+
+UI 로그: `MP ❌ paddle slash-drop 의심 (max=377235 >> userMax=235): paddle 폐기`
+
+이렇게 하면 mismatch 표시가 줄어들고 single-source(다른 엔진)로 자연스럽게 전환됨.
+
+---
+
+## 🛡️ 현재 활성 OCR 보정 스택 (v4 — 17 layers)
 
 ```
 [1]  Hybrid voting (paddle + tesseract)
@@ -55,10 +103,13 @@ e92708c docs: 세션 인수인계 v2
 [8]  Pad 10px 확장
 [9]  Class-aware 3-tier hybrid override (A-clean/A-extreme/B-clean/B-noisy)
 [10] Grayscale 16x24 templates with Manhattan distance
-[11] AutoTrim 가장자리 artifact 자동 제거 (양 끝 isolated narrow group)
+[11] AutoTrim 가장자리 artifact 자동 제거 (geometric 양 끝 isolated narrow group)
 [12] Cached anchor 자동 복구 (paddle 같은 값 2회 연속 → anchor 갱신)
 [13] EXP 0.1%p 점프 임계값 + 검증 큐 (큰 변화는 2회 검증 후 accept)
 [14] ADENA digit-add 방지 (자릿수 동률 시 짧은 길이 선호)
+[15] AutoTrim 채도 기반 컬러 artifact 검출 ★v4 (빨간 별/아이콘 잡기, geometric OR chroma)
+[16] EXP phantom digit sanity ★v4 (anchor 자릿수 +1 + Δ>0.3%p → 폐기)
+[17] MP slash-drop sanity ★v4 (max 자릿수 ≥ userMax+2 → 폐기)
 ```
 
 ---
@@ -288,7 +339,8 @@ UI 로그: `🔓 ADENA cached anchor 복구: 586391 → 58039 (2회 연속)`
 | AutoTrim 추가 후 | (테스트) |
 | Cached anchor 복구 후 | (테스트) |
 | EXP 0.1% 임계값 후 | "점점 좋아지고 있어 / 이제까지 제일 인식 잘 되고 있어" |
-| 추가 개선 (1976d61) | **테스트 대기 중** |
+| v3 빌드 (03:20) | "아데나 4자리되면 뒤에 그림 때문에 탐지 오류 / 경험치도 자꾸 오류" |
+| **v4 빌드 (10:37)** | **테스트 대기 중** — 채도 trim + EXP/MP phantom digit sanity |
 
 ---
 
@@ -304,5 +356,6 @@ UI 로그: `🔓 ADENA cached anchor 복구: 586391 → 58039 (2회 연속)`
 
 ---
 
-_Last updated: 2026-05-04 03:25 · 작성: Claude (Anthropic)_
-_사용자 지시: "내일 추가 작업하려고해 문서 작업 남겨줘"_
+_Last updated: 2026-05-04 10:40 (v4) · 작성: Claude (Anthropic)_
+_v3 사용자 지시: "내일 추가 작업하려고해 문서 작업 남겨줘"_
+_v4 사용자 지시: "아데나 4자리되면 뒤에 그림 때문에 탐지 오류 / 경험치도 자꾸 오류"_
