@@ -96,15 +96,22 @@ function resolveIcon() {
 
 function createMainWindow() {
   const icon = resolveIcon();
-  const fitted = fitToWorkArea(580, 980);
+  // 새 default — 1280x900 (이전 580x980은 OCR 탭 컨텐츠 컬럼이 5개라 가로 부족)
+  const fitted = fitToWorkArea(1280, 900);
   const last = loadBounds();
 
   const useLastSize = last && Number.isFinite(last.width) && Number.isFinite(last.height);
   const useLastPos = last && isWithinDisplay(last.x, last.y);
 
+  // last 사이즈도 workArea로 클램프 (이전 빌드에서 사용자가 가로 1920+ 까지 늘려 저장된 경우
+  // 새 모니터 환경에서 화면 밖으로 나가는 문제 방지)
+  const candW = useLastSize ? Math.max(440, last.width) : fitted.width;
+  const candH = useLastSize ? Math.max(560, last.height) : fitted.height;
+  const finalSize = fitToWorkArea(candW, candH);
+
   const opts = {
-    width: useLastSize ? Math.max(440, last.width) : fitted.width,
-    height: useLastSize ? Math.max(560, last.height) : fitted.height,
+    width: finalSize.width,
+    height: finalSize.height,
     minWidth: 440,
     minHeight: 540,
     title: 'Lineage MP Timer',

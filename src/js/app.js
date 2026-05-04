@@ -3740,8 +3740,33 @@
     if (!pr || !tr || !pr.parsed || !tr.parsed) {
       return voteHybrid('ADENA', pr, tr, (a, b) => a.adena === b.adena);
     }
-    // 2) 일치하면 채택
+    // 2) 일치하면 채택 — 단 anchor 대비 큰 점프(±1,000원 이상) 시 verification queue
     if (pr.parsed.adena === tr.parsed.adena) {
+      // 사용자 컨텍스트(2026-05-04): "한 마리 최대 +700원, 거래는 큰 점프 → verify로 처리"
+      // 1,000원 threshold = 700 max + 300 안전 마진. 검증 큐는 같은 값 2회 연속 → ACCEPT.
+      const anchorAd = parseInt(dom.trkAdenaNow.value, 10) || 0;
+      const valBoth = pr.parsed.adena;
+      if (anchorAd > 0) {
+        const delta = Math.abs(valBoth - anchorAd);
+        const ABS_JUMP = 1000;
+        if (delta >= ABS_JUMP) {
+          if (!ocrAdenaRegionHybrid._verifyQueue) ocrAdenaRegionHybrid._verifyQueue = { val: null, count: 0 };
+          const vq = ocrAdenaRegionHybrid._verifyQueue;
+          if (vq.val !== null && vq.val === valBoth) {
+            vq.count++;
+            if (vq.count >= 2) {
+              vq.val = null; vq.count = 0;
+              pushHybridLog('ADENA 🟢 검증 통과 (큰 점프 ±' + delta.toLocaleString() + '): ' + valBoth.toLocaleString());
+              return voteHybrid('ADENA', pr, tr, (a, b) => a.adena === b.adena);
+            }
+            pushHybridLog('ADENA ⏳ 검증중 (' + (vq.count + 1) + '/3) ±' + delta.toLocaleString() + ': ' + valBoth.toLocaleString());
+            return { text: 'verifying ' + valBoth, confidence: 0, parsed: null };
+          }
+          vq.val = valBoth; vq.count = 1;
+          pushHybridLog('ADENA ⏳ 검증 시작 (큰 점프 ±' + delta.toLocaleString() + '): ' + valBoth.toLocaleString());
+          return { text: 'verifying ' + valBoth, confidence: 0, parsed: null };
+        }
+      }
       return voteHybrid('ADENA', pr, tr, (a, b) => a.adena === b.adena);
     }
     // 3) 불일치 — ADENA 특별 처리
