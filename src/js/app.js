@@ -2017,6 +2017,18 @@
 
     // 변경 없으면 그대로 return
     if (trimLeft === 0 && trimRight === w) return canvas;
+
+    // 안전 가드 — 좌+우 합쳐 50% 이상 자르려고 하면 reject (글자 본문까지 잘림 위험)
+    // v10 사용자 테스트: 노란 점이 글자 양 끝에 흩어져 column-level trim이 73% 자름 → 글자 손상
+    const totalTrim = trimLeft + (w - trimRight);
+    if (totalTrim / w > 0.5) {
+      console.warn('[AutoTrim] excessive trim rejected: L=' + trimLeft + ' R=' + (w - trimRight) + ' (' + ((totalTrim/w)*100).toFixed(0) + '% > 50%) — 글자 보호');
+      if (typeof pushHybridLog === 'function') {
+        pushHybridLog('⚠️ AutoTrim 과도 거부 (' + ((totalTrim/w)*100).toFixed(0) + '%): 글자 보호');
+      }
+      return canvas;
+    }
+
     const newW = Math.max(1, trimRight - trimLeft);
     const tmp = document.createElement('canvas');
     tmp.width = newW;
