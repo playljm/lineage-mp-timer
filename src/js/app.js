@@ -54,6 +54,7 @@
     btnStart: $('btn-start'), btnPause: $('btn-pause'), btnReset: $('btn-reset'),
     btnPin: $('btn-pin'), btnTray: $('btn-tray'), btnQuit: $('btn-quit'),
     btnCompact: $('btn-compact'),
+    btnDiagnosticReport: $('btn-diagnostic-report'),
     compactView: $('compact-view'),
     compactStartTime: $('compact-start-time'),
     compactElapsed: $('compact-elapsed'),
@@ -5085,6 +5086,92 @@
     });
     if (dom.btnCompact) {
       dom.btnCompact.addEventListener('click', () => toggleCompactMode());
+    }
+
+    // [v1.3.6] 진단 리포트 생성 — 캡처 4개 + report.json 저장 후 폴더 자동 열기
+    if (dom.btnDiagnosticReport) {
+      dom.btnDiagnosticReport.addEventListener('click', async () => {
+        const btn = dom.btnDiagnosticReport;
+        const oldText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '⏳ 생성 중...';
+        try {
+          if (!api || !api.saveDiagnosticReport) {
+            flashHint('❌ 이 빌드에는 진단 리포트 기능이 없습니다 (재빌드 필요)');
+            return;
+          }
+          // 미리보기 4개 → ArrayBuffer 변환
+          const captures = {};
+          const previewMap = {
+            mp: dom.adMpPreview,
+            exp: dom.adExpPreview,
+            level: dom.adLevelPreview,
+            adena: dom.adAdenaPreview,
+          };
+          for (const [name, img] of Object.entries(previewMap)) {
+            try {
+              if (img && img.src && img.src.startsWith('data:image')) {
+                const res = await fetch(img.src);
+                const blob = await res.blob();
+                captures[name] = await blob.arrayBuffer();
+              }
+            } catch (_) { /* skip */ }
+          }
+          // 메타데이터 + 로그
+          const safeText = (el, max) => (el && el.textContent ? el.textContent.slice(0, max || 5000) : '');
+          const report = {
+            version: dom.appVersion ? dom.appVersion.textContent : 'v?',
+            timestamp: new Date().toISOString(),
+            regions: {
+              mp: autoDetect.mpRegion || null,
+              mpBar: autoDetect.mpBarRegion || null,
+              exp: autoDetect.expRegion || null,
+              level: autoDetect.levelRegion || null,
+              adena: autoDetect.adenaRegion || null,
+            },
+            anchors: {
+              mpCur: dom.inCurMp ? dom.inCurMp.value : '',
+              mpMax: dom.inMaxMp ? dom.inMaxMp.value : '',
+              levelStart: dom.trkLevelStart ? dom.trkLevelStart.value : '',
+              levelNow: dom.trkLevelNow ? dom.trkLevelNow.value : '',
+              expStart: dom.trkExpStart ? dom.trkExpStart.value : '',
+              expNow: dom.trkExpNow ? dom.trkExpNow.value : '',
+              adenaStart: dom.trkAdenaStart ? dom.trkAdenaStart.value : '',
+              adenaNow: dom.trkAdenaNow ? dom.trkAdenaNow.value : '',
+            },
+            autoDetect: {
+              active: !!autoDetect.active,
+              ocrEngine: autoDetect.ocrEngine,
+              stabilityRequired: autoDetect.stabilityRequired,
+              useMpBar: !!autoDetect.useMpBar,
+              levelOffset: autoDetect.levelOffset || 0,
+              autoStartTracker: !!autoDetect.autoStartTracker,
+              showPreview: !!autoDetect.showPreview,
+            },
+            hybridLog: (typeof _hybridLogQueue !== 'undefined') ? _hybridLogQueue.slice(0, 100) : [],
+            paddleDebug: safeText(dom.paddleDebugInfo, 8000),
+            adInitStatus: safeText(dom.adInitStatus, 1000),
+            adMpLast: safeText(dom.adMpLast, 500),
+            adExpLast: safeText(dom.adExpLast, 500),
+            adLevelLast: safeText(dom.adLevelLast, 500),
+            adAdenaLast: safeText(dom.adAdenaLast, 500),
+            userAgent: navigator.userAgent,
+            screen: { width: screen.width, height: screen.height, dpr: window.devicePixelRatio || 1 },
+          };
+          const result = await api.saveDiagnosticReport({ imageBuffers: captures, report });
+          if (result && result.ok) {
+            flashHint('✅ 진단 리포트 저장 + 폴더 열림: ' + result.path.split(/[\\/]/).pop());
+          } else {
+            flashHint('❌ 저장 실패: ' + (result && result.error || 'unknown'));
+          }
+        } catch (e) {
+          console.error('[diagnostic-report] failed:', e);
+          flashHint('❌ 생성 실패: ' + e.message);
+        } finally {
+          btn.disabled = false;
+          btn.textContent = oldText;
+        }
+      });
     }
     setupTrainingControls();
     dom.btnQuit.addEventListener('click', () => {

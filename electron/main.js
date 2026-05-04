@@ -301,6 +301,31 @@ ipcMain.handle('app:get-always-on-top', () => {
   return !!(mainWindow && mainWindow.isAlwaysOnTop());
 });
 
+// [v1.3.6] 진단 리포트 저장 — 캡처 4개 + report.json + 폴더 자동 열기
+ipcMain.handle('app:save-diagnostic-report', async (_, payload) => {
+  try {
+    const { imageBuffers, report } = payload || {};
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const dir = path.join(app.getPath('userData'), 'diagnostic', ts);
+    fs.mkdirSync(dir, { recursive: true });
+
+    if (imageBuffers && typeof imageBuffers === 'object') {
+      for (const [region, buf] of Object.entries(imageBuffers)) {
+        if (buf && buf.byteLength > 0) {
+          fs.writeFileSync(path.join(dir, region + '.png'), Buffer.from(buf));
+        }
+      }
+    }
+    fs.writeFileSync(path.join(dir, 'report.json'), JSON.stringify(report || {}, null, 2), 'utf-8');
+
+    // 탐색기에서 폴더 자동 열기
+    try { shell.openPath(dir); } catch (_) {}
+    return { ok: true, path: dir };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.handle('app:minimize-to-tray', () => {
   if (mainWindow) mainWindow.hide();
 });

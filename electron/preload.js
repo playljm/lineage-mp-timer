@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('api', {
   confirmPendingSample: (payload) => ipcRenderer.invoke('app:confirm-pending-sample', payload),
   deletePendingSample: (payload) => ipcRenderer.invoke('app:delete-pending-sample', payload),
   clearAllPending: () => ipcRenderer.invoke('app:clear-all-pending'),
+  saveDiagnosticReport: (payload) => ipcRenderer.invoke('app:save-diagnostic-report', payload),
   quit: () => ipcRenderer.invoke('app:quit'),
   onAlwaysOnTopChanged: (cb) => {
     ipcRenderer.on('always-on-top-changed', (_, value) => {
