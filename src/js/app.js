@@ -3697,8 +3697,10 @@
     // userMax(INPUTS) 자릿수보다 max가 +2 이상 길면 slash drop misread → 해당 엔진 결과 폐기.
     // [v13] cur 자릿수 sanity 추가 — "219/235"를 "21972/235"로 보는 OCR 미스리드 차단
     //       (사용자 케이스: cur=21972 >> userMax=235, 자릿수 차이 +2)
+    // [v14] userMax 가드 — 비정상 작은 값(<10, 예: 사용자가 max=3 입력)에서 sanity 무력화
+    //       (사용자 케이스: userMax=3 + 정상 max=235 → +2 자릿수로 잘못 판정 → 정상 결과 폐기)
     const userMaxEarly = parseInt(dom.inMaxMp.value, 10) || 0;
-    if (userMaxEarly > 0) {
+    if (userMaxEarly >= 10) {
       const maxLen = String(userMaxEarly).length;
       // paddle max 자릿수 (slash-drop)
       if (pr && pr.parsed && pr.parsed.max && String(pr.parsed.max).length >= maxLen + 2) {
