@@ -4388,8 +4388,17 @@
       }
       // 경험치 영역
       if (autoDetect.expRegion) {
+        // [v1.3.11] 진단용 — EXP loop 진입 카운터 (10회 단위로 push, hybridLog 폭주 방지)
+        if (!runDetectionTick._expEntryCount) runDetectionTick._expEntryCount = 0;
+        runDetectionTick._expEntryCount++;
+        if (runDetectionTick._expEntryCount === 1 || runDetectionTick._expEntryCount % 30 === 0) {
+          pushHybridLog('🔬 EXP loop 진입 #' + runDetectionTick._expEntryCount);
+        }
         try {
           const r = await ocrExpRegion();
+          if (runDetectionTick._expEntryCount === 1 || runDetectionTick._expEntryCount % 30 === 0) {
+            pushHybridLog('🔬 EXP loop r=' + (r ? (r.parsed ? 'parsed=' + (r.parsed.exp || '?') : 'no-parse') : 'null'));
+          }
           if (r) {
             const validParsed = isValidExpParsed(r.parsed);
             const passConfidence = r.confidence >= threshold;
