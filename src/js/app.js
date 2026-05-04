@@ -4130,6 +4130,31 @@
     let pr = prRaw, tr = trRaw;
     const matcher = (a, b) => Math.abs(a.exp - b.exp) < 0.01;
 
+    // [v1.3.12] EXP 정수부 자릿수 sanity
+    //   사용자 케이스: paddle "6.2871" (정수 1자리) vs anchor 67 (2자리) → paddle 미스리드
+    //   ADENA의 자릿수 sanity와 동일 패턴 — anchor 정수부 자릿수 매치 안 하면 폐기
+    //   레벨업 예외: anchor>95 AND val<5 (99% → 1% 같은 정상 transition)
+    const anchorIntCheck = parseExpPct(dom.trkExpNow.value) || 0;
+    if (anchorIntCheck >= 1) {
+      const anchorIntDig = String(Math.floor(anchorIntCheck)).length;
+      if (pr && pr.parsed && Number.isFinite(pr.parsed.exp)) {
+        const pIntDig = String(Math.floor(pr.parsed.exp)).length;
+        const isLevelUp = anchorIntCheck > 95 && pr.parsed.exp < 5;
+        if (pIntDig !== anchorIntDig && !isLevelUp) {
+          pushHybridLog('EXP ❌ paddle 정수부 자릿수 mismatch (p=' + pIntDig + '자리 ' + pr.parsed.exp + ' vs anchor=' + anchorIntDig + '자리 ' + anchorIntCheck.toFixed(2) + '): paddle 폐기');
+          pr = { text: pr.text, confidence: 0, parsed: null };
+        }
+      }
+      if (tr && tr.parsed && Number.isFinite(tr.parsed.exp)) {
+        const tIntDig = String(Math.floor(tr.parsed.exp)).length;
+        const isLevelUp = anchorIntCheck > 95 && tr.parsed.exp < 5;
+        if (tIntDig !== anchorIntDig && !isLevelUp) {
+          pushHybridLog('EXP ❌ tess 정수부 자릿수 mismatch (t=' + tIntDig + '자리 ' + tr.parsed.exp + '): tess 폐기');
+          tr = { text: tr.text, confidence: 0, parsed: null };
+        }
+      }
+    }
+
     // === Phantom digit sanity check (paddle 51.0432 → 51.84321 같은 phantom "1" 추가 차단) ===
     // anchor가 N자리 소수점이면 OCR 결과도 N자리여야 함. anchor 대비 자릿수 +1 이상 +
     // anchor와 0.3%p 이상 떨어진 결과는 phantom digit으로 판정 → 해당 엔진 결과 폐기.
