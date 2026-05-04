@@ -1912,6 +1912,10 @@
     //   EXP: T=130 (진행 막대 색상 차단, 글자 안티앨리어싱(채도 100~120) 보존)
     const SAT_THRESHOLD = (opts && opts.threshold && opts.threshold > 0) ? opts.threshold : 100;
     const TRIGGER_RATIO = (opts && opts.gateRatio && opts.gateRatio > 0) ? opts.gateRatio : 0.01;
+    // [v1.3.9] opts.maskColor — 색상 픽셀을 어떤 색으로 변환할지 강제
+    //   ADENA: null (자동, 평균 휘도 < 128이면 검정 / 이상이면 흰색)
+    //   EXP: 255 (흰색 강제) — 글자가 검은색이라 진행 막대를 흰 배경으로 변환해야 OCR 인식
+    const FORCE_MASK_COLOR = (opts && typeof opts.maskColor === 'number') ? opts.maskColor : null;
     // 1차 패스 — 채도 분포 + 평균 휘도 동시 측정
     let sumLum = 0;
     let highSatCount = 0;
@@ -1927,7 +1931,7 @@
       return canvas;
     }
     const avgLum = sumLum / totalPx;
-    const maskColor = avgLum < 128 ? 0 : 255;
+    const maskColor = (FORCE_MASK_COLOR !== null) ? FORCE_MASK_COLOR : (avgLum < 128 ? 0 : 255);
     // 2차 패스 — 트리거된 경우만 실제 마스킹
     let maskedCount = 0;
     for (let i = 0; i < d.length; i += 4) {
@@ -3493,10 +3497,10 @@
     if (!autoDetect.expRegion) return null;
     const canvas = captureRegionToCanvas(autoDetect.expRegion);
     if (!canvas) return null;
-    // [v1.3.8] chroma masking T=130 — EXP 글자가 회색/outline 폰트라 white-extraction 부적합
-    //   T=130: 진행 막대 색상(채도 190+) 차단, 글자 무채색(채도 ~60) 그대로 보존
-    //   안티앨리어싱 가장자리(채도 100~120)도 임계값 130 미만이라 안전
-    maskChromaPixels(canvas, { threshold: 130 });
+    // [v1.3.9] EXP 진행 막대 → 흰색 강제 (maskColor: 255)
+    //   글자 본체가 검은색 + 진행 막대 색상 → 검정 변환되면 글자가 배경에 흡수됨
+    //   maskColor 255로 강제 → 흰 배경 + 검은 글자 → tesseract 정상 인식
+    maskChromaPixels(canvas, { threshold: 130, maskColor: 255 });
     updatePreview(dom.adExpPreview, canvas);
     const w = await initOcrWorker();
 
@@ -3703,8 +3707,8 @@
     if (!autoDetect.expRegion) return null;
     const canvas = captureRegionToRawCanvas(autoDetect.expRegion, 1, { pad: 2 });
     if (!canvas) return null;
-    // [v1.3.8] paddle도 동일 — chroma masking T=130
-    maskChromaPixels(canvas, { threshold: 130 });
+    // [v1.3.9] paddle도 동일 — 진행 막대 → 흰색 강제
+    maskChromaPixels(canvas, { threshold: 130, maskColor: 255 });
     updatePreview(dom.adExpPreview, canvas);
     if (!window.MpPaddle) return null;
     try {
