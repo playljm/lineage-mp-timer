@@ -4219,6 +4219,14 @@
         const deltaBoth = valBoth - anchorBoth;
         const absDelta = Math.abs(deltaBoth);
         const isLevelUp = anchorBoth > 95 && valBoth < 5;
+        // [v1.3.14] EXP 큰 점프(±5%p 이상) 영원히 reject — 사용자 직접 보정만 큰 변화 허용
+        //   사용자 케이스: "70.1122" → "10.1122" (7↔1 misread, 정수부 자릿수는 매치)
+        //   정상 사냥 1초당 변화 0.001~0.1%p이므로 5%p+는 misread 확률 압도적
+        //   레벨업 예외 (anchor>95 + val<5)는 그대로 통과
+        if (absDelta > 5 && !isLevelUp) {
+          pushHybridLog('EXP ❌ 큰 점프 자동 거부 (' + deltaBoth.toFixed(2) + '%p > ±5%p): ' + valBoth + ' (anchor=' + anchorBoth.toFixed(2) + ', 직접 보정 필요)');
+          return { text: 'jump rejected ' + valBoth, confidence: 0, parsed: null };
+        }
         if (absDelta > 0.1 && !isLevelUp) {
           // 동적 횟수: 0.1~1%p=2회 / 1~3%p=3회 / 3~10%p=5회 / 10%p+=10회
           const requiredCount = absDelta < 1 ? 2 : absDelta < 3 ? 3 : absDelta < 10 ? 5 : 10;
