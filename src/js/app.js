@@ -232,7 +232,31 @@
   // 사용자가 트래커 NOW 칸 직접 편집할 때 그 영역 OCR 일시 정지 (덮어쓰기 방지)
   // blur 후 5초 grace period — 그 사이 같은 칸 다시 클릭하면 grace 갱신
   const userEditUntil = { exp: 0, level: 0, adena: 0, mp: 0 };
-  function markUserEdit(key) { userEditUntil[key] = Date.now() + 5000; }
+  function markUserEdit(key) {
+    userEditUntil[key] = Date.now() + 5000;
+    // [v1.3.3] verify queue + stability 리셋 — OCR이 캐시된 misread로 즉시 anchor 덮어쓰기 차단
+    //   사용자 편집 후 OCR은 처음부터 N회 일관 검증 누적해야 통과
+    try {
+      if (key === 'exp') {
+        if (typeof ocrExpRegionHybrid === 'function' && ocrExpRegionHybrid._verifyQueue) {
+          ocrExpRegionHybrid._verifyQueue = { val: null, count: 0 };
+        }
+        if (typeof expStableLast !== 'undefined') { expStableLast = null; expStableCount = 0; }
+      } else if (key === 'adena') {
+        if (typeof ocrAdenaRegionHybrid === 'function' && ocrAdenaRegionHybrid._verifyQueue) {
+          ocrAdenaRegionHybrid._verifyQueue = { val: null, count: 0 };
+        }
+        if (typeof ocrAdenaRegionHybrid === 'function' && ocrAdenaRegionHybrid._dropRecover) {
+          ocrAdenaRegionHybrid._dropRecover = { lastVal: 0, count: 0 };
+        }
+        if (typeof adenaStableLast !== 'undefined') { adenaStableLast = null; adenaStableCount = 0; }
+      } else if (key === 'level') {
+        if (typeof levelStableLast !== 'undefined') { levelStableLast = null; levelStableCount = 0; }
+      } else if (key === 'mp') {
+        if (typeof mpStableLast !== 'undefined') { mpStableLast = null; mpStableCount = 0; }
+      }
+    } catch (_) { /* 함수 호이스팅 전 호출 안전 가드 */ }
+  }
   function isUserEditing(key) { return Date.now() < (userEditUntil[key] || 0); }
   // 트래커 자동 시작이 in-flight 일 때 중복 트리거 방지 (RESET 후 재시작 포함)
   let autoStartInProgress = false;
