@@ -233,7 +233,10 @@
   // blur 후 5초 grace period — 그 사이 같은 칸 다시 클릭하면 grace 갱신
   const userEditUntil = { exp: 0, level: 0, adena: 0, mp: 0 };
   function markUserEdit(key) {
-    userEditUntil[key] = Date.now() + 5000;
+    // [v1.3.4] 5초 → 60초 — 사용자 명시적 anchor 편집은 강한 신호.
+    //   OCR이 일관 misread 응답하면 5초 후 통과되어 사용자 편집이 무력화되는 문제.
+    //   60초 동안 anchor 절대 보호 → 사용자가 영역 재지정/조치할 시간 확보.
+    userEditUntil[key] = Date.now() + 60000;
     // [v1.3.3] verify queue + stability 리셋 — OCR이 캐시된 misread로 즉시 anchor 덮어쓰기 차단
     //   사용자 편집 후 OCR은 처음부터 N회 일관 검증 누적해야 통과
     try {
