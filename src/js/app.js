@@ -1901,19 +1901,17 @@
    *   - 게임 글자는 거의 무채색 (R≈G≈B)이라 영향 없음
    *   - autoTrim의 column-level chroma trim보다 더 강력 (영역 전체 컬러 픽셀 제거)
    */
-  function maskChromaPixels(canvas) {
+  function maskChromaPixels(canvas, opts) {
     if (!canvas) return canvas;
     const ctx = canvas.getContext('2d');
     const w = canvas.width, h = canvas.height;
     const img = ctx.getImageData(0, 0, w, h);
     const d = img.data;
-    // 임계값 100 — 게임 글자 안티앨리어싱(채도 ≤60)은 절대 안 잡힘.
-    // 노란 금화(190+), 빨간 별(100~150)만 잡음.
-    const SAT_THRESHOLD = 100;
-    // 게이팅 비율 1% — 작은 노란 점 잔재(글자 옆 흩어진 안티앨리어싱)도 잡음.
-    // 깨끗한 글자 영역에는 채도≥100 픽셀이 0% (게임 글자 안티앨리어싱은 채도 ≤60)이므로 스킵.
-    // v9 (5%) 사용자 테스트: "9942" 좌측 노란 점들이 5% 미만이라 마스킹 스킵 → 9→7 오인.
-    const TRIGGER_RATIO = 0.01;
+    // [v1.3.8] opts.threshold / opts.gateRatio 지원 — 영역별 다른 임계값
+    //   ADENA: default T=100 (노란 금화 명확히 차단)
+    //   EXP: T=130 (진행 막대 색상 차단, 글자 안티앨리어싱(채도 100~120) 보존)
+    const SAT_THRESHOLD = (opts && opts.threshold && opts.threshold > 0) ? opts.threshold : 100;
+    const TRIGGER_RATIO = (opts && opts.gateRatio && opts.gateRatio > 0) ? opts.gateRatio : 0.01;
     // 1차 패스 — 채도 분포 + 평균 휘도 동시 측정
     let sumLum = 0;
     let highSatCount = 0;
@@ -3495,11 +3493,10 @@
     if (!autoDetect.expRegion) return null;
     const canvas = captureRegionToCanvas(autoDetect.expRegion);
     if (!canvas) return null;
-    // [v1.3.5] White-extraction — EXP 진행 막대 배경 색상 차단
-    //   사용자 게임: 67% EXP면 배경이 67% 차오르는 주황 막대 → 글자 OCR 방해
-    //   chroma masking은 안티앨리어싱 가장자리(채도 100+)까지 마스킹해 글자 손상 부작용
-    //   white-extraction은 색조 무관 — R/G/B 모두 200 이상만 흰색, 나머지 검정
-    applyWhiteExtraction(canvas);
+    // [v1.3.8] chroma masking T=130 — EXP 글자가 회색/outline 폰트라 white-extraction 부적합
+    //   T=130: 진행 막대 색상(채도 190+) 차단, 글자 무채색(채도 ~60) 그대로 보존
+    //   안티앨리어싱 가장자리(채도 100~120)도 임계값 130 미만이라 안전
+    maskChromaPixels(canvas, { threshold: 130 });
     updatePreview(dom.adExpPreview, canvas);
     const w = await initOcrWorker();
 
@@ -3706,8 +3703,8 @@
     if (!autoDetect.expRegion) return null;
     const canvas = captureRegionToRawCanvas(autoDetect.expRegion, 1, { pad: 2 });
     if (!canvas) return null;
-    // [v1.3.5] White-extraction — paddle도 진행 막대 색상 영향 받음
-    applyWhiteExtraction(canvas);
+    // [v1.3.8] paddle도 동일 — chroma masking T=130
+    maskChromaPixels(canvas, { threshold: 130 });
     updatePreview(dom.adExpPreview, canvas);
     if (!window.MpPaddle) return null;
     try {
