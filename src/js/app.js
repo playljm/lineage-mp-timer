@@ -1785,6 +1785,42 @@
    *
    * 매개변수: side — 'right' | 'both' (기본 'both'로 양쪽 검사)
    */
+  /**
+   * 채도(saturation) 픽셀을 배경색으로 강제 마스킹.
+   *   ADENA 영역에 들어오는 노란/주황 금화 더미, 빨간 별, 아이템 아이콘 등 컬러
+   *   그래픽이 OCR에서 추가 글자(예: 금화 → "8")로 오인되는 케이스 차단.
+   *   - 채도(max-min RGB) ≥ 30인 픽셀을 영역 명암 기반 배경색으로 변환
+   *   - light-on-dark (avgLum<128) → 검정, dark-on-light → 흰색
+   *   - 게임 글자는 거의 무채색 (R≈G≈B)이라 영향 없음
+   *   - autoTrim의 column-level chroma trim보다 더 강력 (영역 전체 컬러 픽셀 제거)
+   */
+  function maskChromaPixels(canvas) {
+    if (!canvas) return canvas;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    const img = ctx.getImageData(0, 0, w, h);
+    const d = img.data;
+    const SAT_THRESHOLD = 30;
+    // 평균 휘도 → 배경 명암 결정
+    let sumLum = 0;
+    for (let i = 0; i < d.length; i += 4) sumLum += (d[i] + d[i + 1] + d[i + 2]) / 3;
+    const avgLum = sumLum / (d.length / 4);
+    const maskColor = avgLum < 128 ? 0 : 255;
+    let maskedCount = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i], g = d[i + 1], b = d[i + 2];
+      if (Math.max(r, g, b) - Math.min(r, g, b) >= SAT_THRESHOLD) {
+        d[i] = maskColor; d[i + 1] = maskColor; d[i + 2] = maskColor;
+        maskedCount++;
+      }
+    }
+    if (maskedCount > 0) {
+      ctx.putImageData(img, 0, 0);
+      console.log('[ChromaMask] ' + maskedCount + ' colored px masked → ' + maskColor + ' (avgLum=' + avgLum.toFixed(0) + ')');
+    }
+    return canvas;
+  }
+
   function autoTrimEdgeArtifacts(canvas, side) {
     if (!canvas || canvas.width < 30) return canvas;
     const checkRight = side !== 'left';
@@ -1803,16 +1839,25 @@
     const isInk = inkIsDark
       ? (g) => g < 128
       : (g) => g > 128;
-    // 컬럼 ink density: 글자 픽셀 개수
+    // 컬럼 ink density + color density (한 패스로 둘 다 계산)
+    //   density       — ink 픽셀 개수 (글자 위치 검출용)
+    //   colorDensity  — ink 중 채도 높은(>=30) 픽셀 비율 (별/아이콘 검출용)
     const density = new Array(w).fill(0);
+    const colorDensity = new Array(w).fill(0);
+    const COLOR_PIXEL_SAT = 30;
     for (let x = 0; x < w; x++) {
-      let count = 0;
+      let inkCount = 0;
+      let colorInkCount = 0;
       for (let y = 0; y < h; y++) {
         const idx = (y * w + x) * 4;
-        const gray = (d[idx] + d[idx+1] + d[idx+2]) / 3;
-        if (isInk(gray)) count++;
+        const r = d[idx], gPx = d[idx + 1], bPx = d[idx + 2];
+        const gray = (r + gPx + bPx) / 3;
+        if (!isInk(gray)) continue;
+        inkCount++;
+        if (Math.max(r, gPx, bPx) - Math.min(r, gPx, bPx) >= COLOR_PIXEL_SAT) colorInkCount++;
       }
-      density[x] = count;
+      density[x] = inkCount;
+      colorDensity[x] = inkCount > 0 ? colorInkCount / inkCount : 0;
     }
     const inkThreshold = Math.max(1, h * 0.10);
     // ink groups
@@ -1908,6 +1953,51 @@
       }
     }
 
+    // === 2차: Column-level chroma trim (별이 글자에 붙어있어 group으로 합쳐진 케이스) ===
+    // group-based 검사는 별이 글자에 0~2px로 붙으면 같은 group으로 합쳐져 평균 채도가
+    // 글자에 의해 희석되어 detect 못함. 컬럼 단위로 colored ink 비율 50%↑인 columns가
+    // 좌/우 끝에서 연속 run으로 발견되면 그 만큼 추가 trim.
+    {
+      const COLOR_DENSITY_THRESHOLD = 0.5;  // 컬럼이 "colored"로 분류되려면 ink 픽셀 절반 이상이 채도 ≥30
+      const SEARCH_LIMIT = Math.floor(w * 0.35);  // 좌/우 35% 영역만 검사 (중앙 본 글자 보호)
+      // 좌측 끝에서 colored column run 찾기
+      if (checkLeft) {
+        let lastColorX = -1;
+        for (let x = 0; x < SEARCH_LIMIT; x++) {
+          if (colorDensity[x] >= COLOR_DENSITY_THRESHOLD) {
+            lastColorX = x;
+          } else if (lastColorX >= 0 && x - lastColorX >= 2) {
+            break;  // 비컬러 픽셀 2개 연속 → run 종료
+          }
+        }
+        if (lastColorX >= 0) {
+          const newLeft = lastColorX + 1;
+          if (newLeft > trimLeft) {
+            trimLeft = newLeft;
+            console.log('[AutoTrim] left chroma column run: trimLeft=' + trimLeft + ' (colorDensity[0..' + lastColorX + '])');
+          }
+        }
+      }
+      // 우측 끝에서 colored column run 찾기
+      if (checkRight) {
+        let firstColorX = -1;
+        for (let x = w - 1; x >= w - SEARCH_LIMIT; x--) {
+          if (colorDensity[x] >= COLOR_DENSITY_THRESHOLD) {
+            firstColorX = x;
+          } else if (firstColorX >= 0 && firstColorX - x >= 2) {
+            break;
+          }
+        }
+        if (firstColorX >= 0) {
+          const newRight = firstColorX;
+          if (newRight < trimRight) {
+            trimRight = newRight;
+            console.log('[AutoTrim] right chroma column run: trimRight=' + trimRight + ' (colorDensity[' + firstColorX + '..])');
+          }
+        }
+      }
+    }
+
     // 변경 없으면 그대로 return
     if (trimLeft === 0 && trimRight === w) return canvas;
     const newW = Math.max(1, trimRight - trimLeft);
@@ -1990,6 +2080,10 @@
       throw new Error('캡처 실패: ' + e.message);
     }
     if (autoDetect.preprocess !== false) {
+      // 컬러 픽셀 마스킹 (preprocessCanvas 전에) — ADENA 영역 노란 금화/빨간 별 등
+      // 채도 그래픽을 배경에 흡수시켜 OCR 글자만 보이게 함
+      maskChromaPixels(canvas);
+
       if (mode === 'soft') {
         preprocessCanvas(canvas, { sharpen: false });
       } else if (mode === 'otsu') {

@@ -43,8 +43,9 @@ e92708c docs: 세션 인수인계 v2
 6a48ee8 feat: OCR 정확도 개선 — 전처리 다양성 + Hybrid per-digit override
 ```
 
-**최신 빌드 (v4)**: `dist/LineageMPTimer-paddle-portable-1.2.0-paddle.exe` (128MB · **10:37**) ← 현재
-**이전 빌드 (v3)**: 03:20 — 사용자 테스트 후 잔여 패턴 발견됨 (4자리 ADENA + EXP/MP phantom)
+**최신 빌드 (v5)**: `dist/LineageMPTimer-paddle-portable-1.2.0-paddle.exe` (128MB · **11:00**) ← 현재
+**이전 빌드 (v4)**: 10:37 — 4자리 ADENA에서 노란 금화 픽셀이 OCR에 "8"로 오인됨
+**이전 빌드 (v3)**: 03:20 — phantom digit 차단 누락 케이스 발견됨
 
 ---
 
@@ -90,7 +91,7 @@ UI 로그: `MP ❌ paddle slash-drop 의심 (max=377235 >> userMax=235): paddle 
 
 ---
 
-## 🛡️ 현재 활성 OCR 보정 스택 (v4 — 17 layers)
+## 🛡️ 현재 활성 OCR 보정 스택 (v5 — 19 layers)
 
 ```
 [1]  Hybrid voting (paddle + tesseract)
@@ -110,7 +111,38 @@ UI 로그: `MP ❌ paddle slash-drop 의심 (max=377235 >> userMax=235): paddle 
 [15] AutoTrim 채도 기반 컬러 artifact 검출 ★v4 (빨간 별/아이콘 잡기, geometric OR chroma)
 [16] EXP phantom digit sanity ★v4 (anchor 자릿수 +1 + Δ>0.3%p → 폐기)
 [17] MP slash-drop sanity ★v4 (max 자릿수 ≥ userMax+2 → 폐기)
+[18] AutoTrim column-level chroma run ★v5 (별이 글자에 붙어 group으로 합쳐진 케이스)
+[19] Chroma pixel masking ★v5 (preprocessCanvas 전, 채도≥30 픽셀 → 배경색 강제)
 ```
+
+---
+
+## 🆕 v5 핵심 추가 사항 — 노란 금화 픽셀 차단
+
+### 문제 진단 (v4 빌드 사용자 테스트 후)
+사용자 케이스: ADENA "8768" (4자리, 흰 글자) + 슬롯 위에 **노란 금화 더미 그래픽**.
+v4의 group-based chroma 검출은:
+- 별/금화가 글자에 0~2px 붙으면 → **같은 ink group으로 합쳐짐**
+- 평균 채도가 글자(거의 0)에 의해 희석되어 < 30 → **trim 못함**
+- 결과: OCR이 노란 금화 픽셀을 "8"로 오인 → "88768" (5자리 misread)
+
+### 수정 내역 (`src/js/app.js`)
+
+#### 1. AutoTrim column-level chroma run
+- `density` 루프와 통합해서 컬럼별 `colorDensity` (colored ink 비율 0~1) 계산
+- 좌/우 35% 영역 내 colorDensity ≥ 0.5 컬럼이 연속 run으로 발견되면 그 만큼 추가 trim
+- group-based가 못 잡는 케이스(별이 글자에 붙어있음) 보완
+- UI 로그: `✂️ AutoTrim L:Xpx (artifact 제거)` (column run trim 시에도 발동)
+
+#### 2. Chroma pixel masking (`maskChromaPixels`)
+- 새 헬퍼 함수: 채도(max−min RGB) ≥ 30 픽셀을 영역 명암 기반 배경색으로 강제 변경
+  - light-on-dark (avgLum<128) → **검정**
+  - dark-on-light → **흰색**
+- `captureRegionToCanvas`에서 `preprocessCanvas` 호출 직전에 적용 (raw 캔버스는 제외)
+- 게임 글자는 거의 무채색(R≈G≈B)이라 영향 없음
+- 노란 금화(R230/G180/B40 → 채도 190), 빨간 별(채도 100~150) 모두 잡힘
+- 영역 전체에 퍼져있는 컬러 픽셀까지 정리 (column-level trim의 한계 보완)
+- console 디버그: `[ChromaMask] N colored px masked → 0 (avgLum=42)`
 
 ---
 
@@ -340,7 +372,8 @@ UI 로그: `🔓 ADENA cached anchor 복구: 586391 → 58039 (2회 연속)`
 | Cached anchor 복구 후 | (테스트) |
 | EXP 0.1% 임계값 후 | "점점 좋아지고 있어 / 이제까지 제일 인식 잘 되고 있어" |
 | v3 빌드 (03:20) | "아데나 4자리되면 뒤에 그림 때문에 탐지 오류 / 경험치도 자꾸 오류" |
-| **v4 빌드 (10:37)** | **테스트 대기 중** — 채도 trim + EXP/MP phantom digit sanity |
+| v4 빌드 (10:37) | "인식이 됐다 안됐다 / 4자리 숫잔데 OCR은 5자리로 봐" (노란 금화 → "8" 오인) |
+| **v5 빌드 (11:00)** | **테스트 대기 중** — column-level chroma run + chroma pixel masking |
 
 ---
 
@@ -356,6 +389,7 @@ UI 로그: `🔓 ADENA cached anchor 복구: 586391 → 58039 (2회 연속)`
 
 ---
 
-_Last updated: 2026-05-04 10:40 (v4) · 작성: Claude (Anthropic)_
+_Last updated: 2026-05-04 11:05 (v5) · 작성: Claude (Anthropic)_
 _v3 사용자 지시: "내일 추가 작업하려고해 문서 작업 남겨줘"_
 _v4 사용자 지시: "아데나 4자리되면 뒤에 그림 때문에 탐지 오류 / 경험치도 자꾸 오류"_
+_v5 사용자 지시: "4자리 숫잔데 OCR은 5자리 숫자로 보는거야" (노란 금화 픽셀이 "8"로 오인)_
