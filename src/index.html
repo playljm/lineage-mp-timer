@@ -59,6 +59,7 @@
     <div class="compact-view" id="compact-view" hidden>
       <div class="compact-row">
         <div class="compact-item">
+          <span class="compact-ocr-dot" id="compact-ocr-dot" title="OCR 인식 상태">⚪</span>
           <span class="compact-label">🕐 시작</span>
           <span class="compact-value" id="compact-start-time">--:--</span>
           <span class="compact-elapsed" id="compact-elapsed">(00:00)</span>
@@ -87,6 +88,22 @@
           <span class="compact-label">🪙</span>
           <span class="compact-value" id="compact-adena">--</span>
           <span class="compact-diff" id="compact-adena-diff">+0</span>
+        </div>
+      </div>
+      <!-- v16: MP 게이지 + 레벨업 예상 + 다음 1% 도달 예상 -->
+      <div class="compact-row compact-row-projection">
+        <div class="compact-item">
+          <span class="compact-label">💧 MP</span>
+          <span class="compact-value"><span id="compact-mp-cur">--</span><span class="sep">/</span><span id="compact-mp-max">--</span></span>
+          <span class="compact-diff" id="compact-mp-pct">--%</span>
+        </div>
+        <div class="compact-item" title="다음 레벨업까지 예상 남은 시간 (현재 EXP/H 기준)">
+          <span class="compact-label">⏳ <span id="compact-next-level">Lv--</span></span>
+          <span class="compact-value" id="compact-levelup-eta">--:--:--</span>
+        </div>
+        <div class="compact-item" title="다음 1%p 도달까지 예상 시간 (현재 EXP/H 기준)">
+          <span class="compact-label">📍 +1%</span>
+          <span class="compact-value" id="compact-next1-eta">--:--</span>
         </div>
       </div>
     </div>

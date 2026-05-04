@@ -65,6 +65,14 @@
     compactExpDiff: $('compact-exp-diff'),
     compactAdena: $('compact-adena'),
     compactAdenaDiff: $('compact-adena-diff'),
+    // v16: 컴팩트 3행 — MP / 레벨업 예상 / 다음 1%
+    compactOcrDot: $('compact-ocr-dot'),
+    compactMpCur: $('compact-mp-cur'),
+    compactMpMax: $('compact-mp-max'),
+    compactMpPct: $('compact-mp-pct'),
+    compactNextLevel: $('compact-next-level'),
+    compactLevelupEta: $('compact-levelup-eta'),
+    compactNext1Eta: $('compact-next1-eta'),
     appVersion: $('app-version'),
     presetName: $('preset-name'), btnPresetSave: $('btn-preset-save'),
     presetList: $('preset-list'),
@@ -1030,6 +1038,77 @@
       if (dom.compactAdena) dom.compactAdena.textContent = formatNumber(current.adena);
     } else if (dom.compactAdena) dom.compactAdena.textContent = '--';
     setDiff(dom.compactAdenaDiff, dAdena || 0);
+
+    // === v16: 3행 — MP / 레벨업 예상 / 다음 1% ===
+    // (a) MP 게이지 — 메인 탭의 MP 영역에서 가져옴
+    const mpCur = parseInt(dom.inCurMp && dom.inCurMp.value, 10);
+    const mpMax = parseInt(dom.inMaxMp && dom.inMaxMp.value, 10);
+    if (Number.isFinite(mpCur) && Number.isFinite(mpMax) && mpMax > 0) {
+      if (dom.compactMpCur) dom.compactMpCur.textContent = String(mpCur);
+      if (dom.compactMpMax) dom.compactMpMax.textContent = String(mpMax);
+      if (dom.compactMpPct) dom.compactMpPct.textContent = (mpCur / mpMax * 100).toFixed(1) + '%';
+    } else {
+      if (dom.compactMpCur) dom.compactMpCur.textContent = '--';
+      if (dom.compactMpMax) dom.compactMpMax.textContent = '--';
+      if (dom.compactMpPct) dom.compactMpPct.textContent = '--%';
+    }
+
+    // (b) 레벨업 예상 시간 = (100 - 현재EXP%) / EXP/H * 3600초
+    // (c) 다음 +1% 예상 시간 = 1% / EXP/H * 3600초
+    const expRatePerHour = elapsedSec >= 30 && tracker.active ? (dExp / (elapsedSec / 3600)) : 0;
+    const currentLevel = (current && Number.isFinite(current.level)) ? current.level : null;
+    const currentExp = (current && Number.isFinite(current.exp)) ? current.exp : null;
+    if (currentLevel !== null && dom.compactNextLevel) {
+      dom.compactNextLevel.textContent = 'Lv' + (currentLevel + 1);
+    } else if (dom.compactNextLevel) {
+      dom.compactNextLevel.textContent = 'Lv--';
+    }
+    if (expRatePerHour > 0.0001 && currentExp !== null && currentExp < 100) {
+      const remainingPct = 100 - currentExp;
+      const levelupSec = remainingPct / expRatePerHour * 3600;
+      const next1Sec = 1 / expRatePerHour * 3600;
+      if (dom.compactLevelupEta) dom.compactLevelupEta.textContent = formatEta(levelupSec, true);
+      if (dom.compactNext1Eta) dom.compactNext1Eta.textContent = formatEta(next1Sec, false);
+    } else {
+      if (dom.compactLevelupEta) dom.compactLevelupEta.textContent = '--:--:--';
+      if (dom.compactNext1Eta) dom.compactNext1Eta.textContent = '--:--';
+    }
+
+    // (d) OCR 상태 점 — autoDetect.active + recent 결과 valid 여부
+    if (dom.compactOcrDot) {
+      let dot = '⚪';
+      let title = 'OCR 비활성';
+      if (autoDetect && autoDetect.active) {
+        // verify queue가 진행 중이면 노란색
+        const expVerifying = ocrExpRegionHybrid && ocrExpRegionHybrid._verifyQueue &&
+                             ocrExpRegionHybrid._verifyQueue.val !== null;
+        const adenaVerifying = ocrAdenaRegionHybrid && ocrAdenaRegionHybrid._verifyQueue &&
+                               ocrAdenaRegionHybrid._verifyQueue.val !== null;
+        if (expVerifying || adenaVerifying) {
+          dot = '🟡';
+          title = 'OCR 검증 중 (큰 점프 발견)';
+        } else {
+          dot = '🟢';
+          title = 'OCR 정상 동작';
+        }
+      }
+      dom.compactOcrDot.textContent = dot;
+      dom.compactOcrDot.title = title;
+    }
+  }
+
+  // ETA 포맷 — long: HH:MM:SS / short: MM:SS (1시간 미만은 short, 이상은 long)
+  function formatEta(seconds, long) {
+    if (!Number.isFinite(seconds) || seconds < 0) return long ? '--:--:--' : '--:--';
+    if (seconds > 99 * 3600) return long ? '99:59:59+' : '99:59+';  // 너무 오래
+    const s = Math.floor(seconds);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (long || h > 0) {
+      return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
+    }
+    return String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
   }
 
   // 컴팩트 모드 토글 — body.compact-mode + 컴팩트 뷰 표시 + 창 크기 조정

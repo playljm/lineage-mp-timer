@@ -2041,3 +2041,45 @@ body.compact-mode .titlebar .app-version {
   font-size: 11px;
   color: var(--text-dim, #88aa99);
 }
+
+/* ============================================== */
+/* v16 컴팩트 모드 3행 (2026-05-04) — MP/레벨업/+1% */
+/* ============================================== */
+
+.compact-row-projection {
+  /* 1, 2행과 동일 layout, 시각적 위계만 살짝 */
+  border-top: 1px dashed rgba(120, 220, 160, 0.12);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+.compact-row-projection .compact-label {
+  color: var(--text-dim, #88aa99);
+}
+
+/* OCR 상태 점 — 1행 좌측 끝 작은 인디케이터 */
+.compact-ocr-dot {
+  font-size: 10px;
+  margin-right: 4px;
+  user-select: none;
+  cursor: help;
+}
+
+/* MP 게이지 sep "/" 스타일 (메인 탭 sep 동일) */
+.compact-row-projection .sep {
+  color: var(--text-dim, #88aa99);
+  margin: 0 2px;
+}
+
+/* MP 퍼센트 — diff와 동일 위치, 단 색은 중립 */
+#compact-mp-pct {
+  color: var(--accent, #5cf09b);
+  font-weight: 600;
+}
+
+/* ETA 값 — monospace로 가지런히 */
+#compact-levelup-eta,
+#compact-next1-eta {
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  letter-spacing: 0.5px;
+}
