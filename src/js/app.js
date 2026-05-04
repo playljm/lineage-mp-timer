@@ -3695,16 +3695,27 @@
 
     // === Slash-drop sanity check (paddle "37/235" → "377235" 같은 slash 무시 차단) ===
     // userMax(INPUTS) 자릿수보다 max가 +2 이상 길면 slash drop misread → 해당 엔진 결과 폐기.
-    // 이렇게 하면 mismatch 표시 안 되고 자연스럽게 single-source로 전환됨.
+    // [v13] cur 자릿수 sanity 추가 — "219/235"를 "21972/235"로 보는 OCR 미스리드 차단
+    //       (사용자 케이스: cur=21972 >> userMax=235, 자릿수 차이 +2)
     const userMaxEarly = parseInt(dom.inMaxMp.value, 10) || 0;
     if (userMaxEarly > 0) {
       const maxLen = String(userMaxEarly).length;
+      // paddle max 자릿수 (slash-drop)
       if (pr && pr.parsed && pr.parsed.max && String(pr.parsed.max).length >= maxLen + 2) {
         pushHybridLog('MP ❌ paddle slash-drop 의심 (max=' + pr.parsed.max + ' >> userMax=' + userMaxEarly + '): paddle 폐기');
         pr = { text: pr.text, confidence: 0, parsed: null };
       }
       if (tr && tr.parsed && tr.parsed.max && String(tr.parsed.max).length >= maxLen + 2) {
         pushHybridLog('MP ❌ tess slash-drop 의심 (max=' + tr.parsed.max + ' >> userMax=' + userMaxEarly + '): tess 폐기');
+        tr = { text: tr.text, confidence: 0, parsed: null };
+      }
+      // [v13] cur 자릿수 sanity — cur가 userMax보다 자릿수 +2 이상이면 OCR 미스리드 → 폐기
+      if (pr && pr.parsed && pr.parsed.cur && String(pr.parsed.cur).length >= maxLen + 2) {
+        pushHybridLog('MP ❌ paddle cur 자릿수 over (cur=' + pr.parsed.cur + ' >> userMax=' + userMaxEarly + '): paddle 폐기');
+        pr = { text: pr.text, confidence: 0, parsed: null };
+      }
+      if (tr && tr.parsed && tr.parsed.cur && String(tr.parsed.cur).length >= maxLen + 2) {
+        pushHybridLog('MP ❌ tess cur 자릿수 over (cur=' + tr.parsed.cur + ' >> userMax=' + userMaxEarly + '): tess 폐기');
         tr = { text: tr.text, confidence: 0, parsed: null };
       }
     }
