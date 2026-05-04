@@ -1944,6 +1944,33 @@
     return canvas;
   }
 
+  /**
+   * White-extraction — 흰색 글자만 추출, 나머지 모두 검정.
+   *   EXP 진행 막대처럼 영역 배경이 색상으로 채워지는 케이스 처리.
+   *   chroma masking보다 더 robust — 색조와 무관하게 동작.
+   *   - R≥T AND G≥T AND B≥T  → 흰색 유지 (255,255,255)
+   *   - 그 외                  → 검정 (0,0,0)
+   *   - threshold 기본 200 (게임 흰색 글자 + 안티앨리어싱 가장자리도 일부 보존)
+   */
+  function applyWhiteExtraction(canvas, threshold) {
+    if (!canvas) return canvas;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    const img = ctx.getImageData(0, 0, w, h);
+    const d = img.data;
+    const T = (threshold && threshold > 0) ? threshold : 200;
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i], g = d[i + 1], b = d[i + 2];
+      if (r >= T && g >= T && b >= T) {
+        d[i] = 255; d[i + 1] = 255; d[i + 2] = 255;
+      } else {
+        d[i] = 0; d[i + 1] = 0; d[i + 2] = 0;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return canvas;
+  }
+
   function autoTrimEdgeArtifacts(canvas, side) {
     if (!canvas || canvas.width < 30) return canvas;
     const checkRight = side !== 'left';
@@ -3462,11 +3489,13 @@
 
   async function ocrExpRegionTesseract() {
     if (!autoDetect.expRegion) return null;
-    // [v1.3.2] chromaMask 제거 — v1.3.1 사용자 케이스 "67.1189 → 1.1891" 부작용
-    //   EXP 영역 글자가 게임 진행 막대와 너무 가까워 chroma masking이 글자 첫 자리까지 마스킹
-    //   다시 v1.3.0 동작으로 rollback (chromaMask 옵션 사용 안 함)
     const canvas = captureRegionToCanvas(autoDetect.expRegion);
     if (!canvas) return null;
+    // [v1.3.5] White-extraction — EXP 진행 막대 배경 색상 차단
+    //   사용자 게임: 67% EXP면 배경이 67% 차오르는 주황 막대 → 글자 OCR 방해
+    //   chroma masking은 안티앨리어싱 가장자리(채도 100+)까지 마스킹해 글자 손상 부작용
+    //   white-extraction은 색조 무관 — R/G/B 모두 200 이상만 흰색, 나머지 검정
+    applyWhiteExtraction(canvas);
     updatePreview(dom.adExpPreview, canvas);
     const w = await initOcrWorker();
 
@@ -3673,7 +3702,8 @@
     if (!autoDetect.expRegion) return null;
     const canvas = captureRegionToRawCanvas(autoDetect.expRegion, 1, { pad: 2 });
     if (!canvas) return null;
-    // [v1.3.2] maskChromaPixels 제거 — 부작용 (글자 첫 자리 손상)
+    // [v1.3.5] White-extraction — paddle도 진행 막대 색상 영향 받음
+    applyWhiteExtraction(canvas);
     updatePreview(dom.adExpPreview, canvas);
     if (!window.MpPaddle) return null;
     try {
