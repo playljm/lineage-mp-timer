@@ -3769,29 +3769,31 @@
       return voteHybrid('ADENA', pr, tr, (a, b) => a.adena === b.adena);
     }
     // 2) 일치하면 채택 — 단 anchor 대비 큰 점프(±1,000원 이상) 시 verification queue
+    //    v12: 동적 검증 횟수 — 점프 클수록 더 많이 요구 (일관 misread 방어)
+    //    EXP에 적용한 패턴과 동일 — 사용자 케이스 "9942 → 7942" 같은 79번 일관 misread 차단
     if (pr.parsed.adena === tr.parsed.adena) {
-      // 사용자 컨텍스트(2026-05-04): "한 마리 최대 +700원, 거래는 큰 점프 → verify로 처리"
-      // 1,000원 threshold = 700 max + 300 안전 마진. 검증 큐는 같은 값 2회 연속 → ACCEPT.
       const anchorAd = parseInt(dom.trkAdenaNow.value, 10) || 0;
       const valBoth = pr.parsed.adena;
       if (anchorAd > 0) {
         const delta = Math.abs(valBoth - anchorAd);
         const ABS_JUMP = 1000;
         if (delta >= ABS_JUMP) {
+          // 동적 횟수: 1k~5k=2회 / 5k~30k=3회 / 30k~100k=5회 / 100k+=10회
+          const requiredCount = delta < 5000 ? 2 : delta < 30000 ? 3 : delta < 100000 ? 5 : 10;
           if (!ocrAdenaRegionHybrid._verifyQueue) ocrAdenaRegionHybrid._verifyQueue = { val: null, count: 0 };
           const vq = ocrAdenaRegionHybrid._verifyQueue;
           if (vq.val !== null && vq.val === valBoth) {
             vq.count++;
-            if (vq.count >= 2) {
+            if (vq.count >= requiredCount) {
               vq.val = null; vq.count = 0;
-              pushHybridLog('ADENA 🟢 검증 통과 (큰 점프 ±' + delta.toLocaleString() + '): ' + valBoth.toLocaleString());
+              pushHybridLog('ADENA 🟢 검증 통과 (점프 ±' + delta.toLocaleString() + ', ' + requiredCount + '회 일관): ' + valBoth.toLocaleString());
               return voteHybrid('ADENA', pr, tr, (a, b) => a.adena === b.adena);
             }
-            pushHybridLog('ADENA ⏳ 검증중 (' + (vq.count + 1) + '/3) ±' + delta.toLocaleString() + ': ' + valBoth.toLocaleString());
+            pushHybridLog('ADENA ⏳ 검증중 (' + (vq.count + 1) + '/' + (requiredCount + 1) + ') ±' + delta.toLocaleString() + ': ' + valBoth.toLocaleString());
             return { text: 'verifying ' + valBoth, confidence: 0, parsed: null };
           }
           vq.val = valBoth; vq.count = 1;
-          pushHybridLog('ADENA ⏳ 검증 시작 (큰 점프 ±' + delta.toLocaleString() + '): ' + valBoth.toLocaleString());
+          pushHybridLog('ADENA ⏳ 검증 시작 (점프 ±' + delta.toLocaleString() + ', 필요 ' + requiredCount + '회): ' + valBoth.toLocaleString());
           return { text: 'verifying ' + valBoth, confidence: 0, parsed: null };
         }
       }
@@ -3975,29 +3977,40 @@
       return voteHybrid('EXP', pr, tr, matcher);
     }
     if (matcher(pr.parsed, tr.parsed)) {
-      // 둘 다 일치 — 단 anchor에서 0.1%p 이상 점프 시 verification 필요 (사용자 요청)
+      // 둘 다 일치 — 단 anchor에서 0.1%p 이상 점프 시 verification 필요 (사용자 요청).
+      // v12: 동적 검증 횟수 — 점프 클수록 더 많이 요구 (일관 misread 방어)
+      //   v11 사용자 케이스: "58.6840" → "98.6890" 79번 일관 misread → 2회만에 통과
+      //   해결: 점프 크기에 비례한 N회 연속 (3~10%p는 5회, 10%p+는 10회)
       const anchorBoth = parseExpPct(dom.trkExpNow.value) || 0;
       const valBoth = pr.parsed.exp;
       if (anchorBoth > 0) {
         const deltaBoth = valBoth - anchorBoth;
+        const absDelta = Math.abs(deltaBoth);
         const isLevelUp = anchorBoth > 95 && valBoth < 5;
-        if (Math.abs(deltaBoth) > 0.1 && !isLevelUp) {
-          // 큰 점프 (둘 다 일치하지만 anchor 대비 >0.1%p) — 검증 큐에 넣기
+        if (absDelta > 0.1 && !isLevelUp) {
+          // 동적 횟수: 0.1~1%p=2회 / 1~3%p=3회 / 3~10%p=5회 / 10%p+=10회
+          const requiredCount = absDelta < 1 ? 2 : absDelta < 3 ? 3 : absDelta < 10 ? 5 : 10;
+          // 자릿수 변경 카운트 (정보 로그) — 정상 사냥은 1초당 1~2자리만 변경
+          const sa = anchorBoth.toFixed(4);
+          const sb = valBoth.toFixed(4);
+          const minLen = Math.min(sa.length, sb.length);
+          let changedDigits = Math.abs(sa.length - sb.length);
+          for (let i = 0; i < minLen; i++) if (sa[i] !== sb[i]) changedDigits++;
           if (!ocrExpRegionHybrid._verifyQueue) ocrExpRegionHybrid._verifyQueue = { val: null, count: 0 };
           const vq = ocrExpRegionHybrid._verifyQueue;
           const tol = 0.001;
           if (vq.val !== null && Math.abs(vq.val - valBoth) < tol) {
             vq.count++;
-            if (vq.count >= 2) {
+            if (vq.count >= requiredCount) {
               vq.val = null; vq.count = 0;
-              pushHybridLog('EXP 🟢 검증 통과 (큰 점프 ' + deltaBoth.toFixed(3) + '%p): ' + valBoth);
+              pushHybridLog('EXP 🟢 검증 통과 (점프 ' + deltaBoth.toFixed(3) + '%p, ' + requiredCount + '회 일관): ' + valBoth);
               return voteHybrid('EXP', pr, tr, matcher);
             }
-            pushHybridLog('EXP ⏳ 검증중 (' + (vq.count + 1) + '/3) 점프 ' + deltaBoth.toFixed(3) + '%p: ' + valBoth);
+            pushHybridLog('EXP ⏳ 검증중 (' + (vq.count + 1) + '/' + (requiredCount + 1) + ') 점프 ' + deltaBoth.toFixed(3) + '%p, 자릿수변경 ' + changedDigits + '/' + minLen + ': ' + valBoth);
             return { text: 'verifying ' + valBoth, confidence: 0, parsed: null };
           }
           vq.val = valBoth; vq.count = 1;
-          pushHybridLog('EXP ⏳ 검증 시작 (점프 ' + deltaBoth.toFixed(3) + '%p > 0.1%p): ' + valBoth);
+          pushHybridLog('EXP ⏳ 검증 시작 (점프 ' + deltaBoth.toFixed(3) + '%p, 필요 ' + requiredCount + '회, 자릿수변경 ' + changedDigits + '/' + minLen + '): ' + valBoth);
           return { text: 'verifying ' + valBoth, confidence: 0, parsed: null };
         }
       }
@@ -4017,14 +4030,18 @@
       if (anchor > 95 && val < 5) return true;
       return false;
     };
-    // EXP 검증 큐 — 큰 변화는 1번 더 봐야 인정
+    // EXP 검증 큐 — 큰 변화는 N회 더 봐야 인정 (v12: 동적 횟수)
     if (!ocrExpRegionHybrid._verifyQueue) ocrExpRegionHybrid._verifyQueue = { val: null, count: 0 };
     const checkVerification = (val) => {
       const vq = ocrExpRegionHybrid._verifyQueue;
+      const localAnchor = parseExpPct(dom.trkExpNow.value) || 0;
+      const absDelta = localAnchor > 0 ? Math.abs(val - localAnchor) : 0;
+      // 동적 횟수: 0.1~1%p=2회 / 1~3%p=3회 / 3~10%p=5회 / 10%p+=10회
+      const requiredCount = absDelta < 1 ? 2 : absDelta < 3 ? 3 : absDelta < 10 ? 5 : 10;
       const tol = 0.001;
       if (vq.val !== null && Math.abs(vq.val - val) < tol) {
         vq.count++;
-        if (vq.count >= 2) { vq.val = null; vq.count = 0; return true; }
+        if (vq.count >= requiredCount) { vq.val = null; vq.count = 0; return true; }
       } else {
         vq.val = val;
         vq.count = 1;
