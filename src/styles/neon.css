@@ -1964,3 +1964,80 @@ body.compact-mode .titlebar .title {
 body.compact-mode .titlebar .app-version {
   display: none;
 }
+
+/* ============================================== */
+/* v8 UI 정리 (2026-05-04) — OCR 탭 collapsible 개편 */
+/* ============================================== */
+
+/* 영역 지정 버튼 — 2x3 그리드 (가로 폭 절반) */
+.ad-region-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.ad-region-grid .ad-btn {
+  flex: none;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* collapsible details 일관 스타일 (OCR 탭 디버깅용 섹션) */
+.preview-details,
+.paddle-test-details,
+.region-info-details {
+  border: 1px solid var(--border, rgba(120, 220, 160, 0.15));
+  border-radius: 4px;
+  padding: 4px 8px;
+  background: rgba(20, 30, 25, 0.3);
+}
+.preview-details > summary,
+.paddle-test-details > summary,
+.region-info-details > summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-dim, #88aa99);
+  user-select: none;
+  padding: 2px 0;
+  list-style: none;
+}
+.preview-details > summary::-webkit-details-marker,
+.paddle-test-details > summary::-webkit-details-marker,
+.region-info-details > summary::-webkit-details-marker {
+  display: none;
+}
+.preview-details > summary::before,
+.paddle-test-details > summary::before,
+.region-info-details > summary::before {
+  content: "▶ ";
+  display: inline-block;
+  margin-right: 4px;
+  transition: transform 0.15s;
+  font-size: 9px;
+  color: var(--text-dim, #88aa99);
+}
+.preview-details[open] > summary::before,
+.paddle-test-details[open] > summary::before,
+.region-info-details[open] > summary::before {
+  transform: rotate(90deg);
+}
+.preview-details > summary:hover,
+.paddle-test-details > summary:hover,
+.region-info-details > summary:hover {
+  color: var(--accent, #5cf09b);
+}
+
+/* 최근 인식 결과 — 항상 표시되는 5행 */
+.ad-info-recent {
+  margin-top: 8px;
+}
+.ad-info-recent .ad-info-row {
+  font-size: 12px;
+}
+
+/* 영역 정보 (접힘 안) — 폰트 작게 */
+.ad-info-regions .ad-info-row {
+  font-size: 11px;
+  color: var(--text-dim, #88aa99);
+}
