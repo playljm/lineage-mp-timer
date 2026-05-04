@@ -3760,33 +3760,47 @@
     return r;
   }
   async function ocrLevelRegion() {
-    if (isUserEditing('level')) return null;
     let r;
     if (autoDetect.ocrEngine === 'paddle') r = await ocrLevelRegionPaddle();
     else if (autoDetect.ocrEngine === 'hybrid') r = await ocrLevelRegionHybrid();
     else r = await ocrLevelRegionTesseract();
+    // [v1.3.10] isUserEditing 체크를 OCR 호출 후로 이동 — 미리보기/로그 갱신 + anchor 보호
+    if (r && isUserEditing('level')) {
+      pushHybridLog('LEVEL 🔒 사용자 잠금: ' + (r.parsed && r.parsed.level));
+      return { ...r, parsed: null };
+    }
     if (r && r.parsed && Number.isFinite(r.parsed.level)) {
       recentOcrResults.level = String(r.parsed.level);
     }
     return r;
   }
   async function ocrAdenaRegion() {
-    if (isUserEditing('adena')) return null;
     let r;
     if (autoDetect.ocrEngine === 'paddle') r = await ocrAdenaRegionPaddle();
     else if (autoDetect.ocrEngine === 'hybrid') r = await ocrAdenaRegionHybrid();
     else r = await ocrAdenaRegionTesseract();
+    // [v1.3.10] isUserEditing 체크를 OCR 호출 후로 이동
+    if (r && isUserEditing('adena')) {
+      pushHybridLog('ADENA 🔒 사용자 잠금: ' + (r.parsed && r.parsed.adena));
+      return { ...r, parsed: null };
+    }
     if (r && r.parsed && Number.isFinite(r.parsed.adena)) {
       recentOcrResults.adena = String(r.parsed.adena);
     }
     return r;
   }
   async function ocrExpRegion() {
-    if (isUserEditing('exp')) return null;
     let r;
     if (autoDetect.ocrEngine === 'paddle') r = await ocrExpRegionPaddle();
     else if (autoDetect.ocrEngine === 'hybrid') r = await ocrExpRegionHybrid();
     else r = await ocrExpRegionTesseract();
+    // [v1.3.10] isUserEditing 체크를 OCR 호출 후로 이동 — 미리보기/로그 갱신 + anchor 보호
+    //   사용자 케이스: anchor 보정 후 60초 내 진단 리포트 생성 시 EXP OCR 호출 안 됨 → 검증 불가
+    //   해결: OCR은 호출하되 parsed=null로 anchor 갱신만 차단
+    if (r && isUserEditing('exp')) {
+      pushHybridLog('EXP 🔒 사용자 잠금 (60s): ' + (r.parsed && r.parsed.exp));
+      return { ...r, parsed: null };
+    }
     if (r && r.parsed && Number.isFinite(r.parsed.exp)) {
       recentOcrResults.exp = r.parsed.exp.toFixed(4);
     }
