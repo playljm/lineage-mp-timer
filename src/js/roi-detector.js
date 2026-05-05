@@ -211,17 +211,18 @@
   // 5. 요소별 탐지 (SPEC v1.4.0-rev1 기준)
   // =========================================================================
 
-  // HP 바: 빨강 (hue 355~5 wrap-around), sat>0.7, val>0.7, y_rel>0.65, 가로 세장형
+  // HP 바: 빨강 (hue 350~20 wrap-around), sat>0.6, val>0.4, y_rel>0.6, 가로 세장형
+  // [v1.4.0+] 사용자 진단 (2026-05-05T12-14-03 + 검증 스크립트): 게임 화면 HP가 hue 12 (오렌지에 가까운 빨강)
+  // 기존 hue 355~5는 너무 엄격 → wrap 350~20으로 완화
   function findHpBar(imageData, w, h) {
     const minArea = Math.max(20, Math.floor(w * h * 0.0008));
     const posFilter = (x, y, bw, bh) => {
-      if (y < h * 0.65) return false;
-      // 너무 작거나 세로형은 제외
+      if (y < h * 0.6) return false;
       if (bw < 10) return false;
       return true;
     };
     const blobs = findColorBlobs(imageData, {
-      hueMin: 355, hueMax: 5, satMin: 0.7, valMin: 0.7,
+      hueMin: 350, hueMax: 20, satMin: 0.6, valMin: 0.4,
       minArea, posFilter
     });
     // 가로로 긴 (width/height > 3) blob 우선
@@ -229,61 +230,67 @@
     return wide.length > 0 ? wide[0] : (blobs[0] || null);
   }
 
-  // MP 바: 파랑 (hue 205~225), sat 0.30~0.55, val 0.45~0.75
-  // HP 기준 인접: y ∈ [hp.y-30, hp.y+30+hp.h], x > hp.x + hp.w + w*0.04
+  // MP 바: 파랑 (hue 200~245), sat>0.20, val>0.30
+  // [v1.4.0+] 검증 결과 진짜 MP 바는 어두운 회색-파랑 — 임계값 더 관대하게
+  // HP 기준 인접: y ∈ [hp.y-30, hp.y+30+hp.h], x > hp.x + hp.w + w*0.03
   function findMpBar(imageData, w, h, hpBar) {
     if (!hpBar) return null;
-    const yMin = hpBar.y - 30;
-    const yMax = hpBar.y + hpBar.height + 30;
-    const xMin = hpBar.x + hpBar.width + Math.floor(w * 0.04);
-    const minArea = Math.max(20, Math.floor(w * h * 0.0008));
+    const yMin = hpBar.y - 40;
+    const yMax = hpBar.y + hpBar.height + 40;
+    const xMin = hpBar.x + hpBar.width + Math.floor(w * 0.03);
+    const minArea = Math.max(20, Math.floor(w * h * 0.0006));
     const posFilter = (x, y, bw, bh) => {
       if (y < yMin || y > yMax) return false;
       if (x < xMin) return false;
-      if (bw / bh <= 3) return false;
+      if (bw / Math.max(1, bh) < 2.5) return false;
       return true;
     };
+    // [v1.4.0+] 검증: 사용자 게임 MP 바 hue=248, sat=20% — 보라에 가까운 어두운 파랑
+    //   기존 hue 200-245 + sat>0.20 너무 엄격 → hue 200-270 + sat>0.10
     const blobs = findColorBlobs(imageData, {
-      hueMin: 205, hueMax: 225,
-      satMin: 0.30, valMin: 0.45,
-      // 채도/명도 상한은 보조로 후처리 (마스크는 하한만)
+      hueMin: 200, hueMax: 270,
+      satMin: 0.10, valMin: 0.25,
       minArea, posFilter
     });
-    // sat<=0.55 + val<=0.75 후처리 필터
-    const filtered = blobs.filter((b) => b.avgSat <= 0.60);
+    // 채도 너무 높은 (선명한 순수 파랑/보라 = UI 강조 아이콘) 제외 — 진짜 MP 바는 sat<=0.85
+    const filtered = blobs.filter((b) => b.avgSat <= 0.85);
     return filtered.length > 0 ? filtered[0] : (blobs[0] || null);
   }
 
-  // EXP 바: 오렌지 (hue 15~25), sat>0.6, val>0.6, x_rel<0.20, y_rel ∈ [0.76, 0.88]
+  // EXP 바: 오렌지 (hue 12~38), sat>0.55, val>0.4, x_rel<0.30, y_rel ∈ [0.65, 0.95]
+  // [v1.4.0+] 검증 결과 사용자 게임 EXP 바는 hue 28 (더 노랑 톤), 위치도 yRel 0.76 부근
+  // 기존 hue 15-25 + yRel 0.76-0.88 너무 엄격 → 완화
   function findExpBar(imageData, w, h) {
     const minArea = Math.max(15, Math.floor(w * h * 0.0005));
     const posFilter = (x, y, bw, bh) => {
-      if (x > w * 0.20) return false;
-      if (y < h * 0.76 || y > h * 0.88) return false;
+      if (x > w * 0.30) return false;
+      if (y < h * 0.65 || y > h * 0.95) return false;
       if (bw / Math.max(1, bh) < 2) return false;
       return true;
     };
     const blobs = findColorBlobs(imageData, {
-      hueMin: 15, hueMax: 25,
-      satMin: 0.6, valMin: 0.6,
+      hueMin: 12, hueMax: 38,
+      satMin: 0.55, valMin: 0.4,
       minArea, posFilter
     });
     return blobs[0] || null;
   }
 
-  // ADENA 아이콘: 노랑 (hue 45~55), sat>0.55, val>0.45, x_rel>0.85, y_rel>0.90, aspect 0.6~1.5
+  // ADENA 아이콘: 노랑 (hue 42~62), sat>0.55, val>0.4, x_rel>0.80, y_rel>0.80
+  // [v1.4.0+] 검증 결과 ADENA 위치가 yRel 0.86 (인벤토리 슬롯 그리드 중간)
+  // 기존 yRel>0.90 너무 엄격 → 0.80으로 완화
   function findAdenaIcon(imageData, w, h) {
     const minArea = Math.max(10, Math.floor(w * h * 0.0002));
     const posFilter = (x, y, bw, bh) => {
-      if (x < w * 0.85) return false;
-      if (y < h * 0.90) return false;
+      if (x < w * 0.80) return false;
+      if (y < h * 0.80) return false;
       const ar = bw / Math.max(1, bh);
-      if (ar < 0.6 || ar > 1.5) return false;
+      if (ar < 0.5 || ar > 2.0) return false;
       return true;
     };
     const blobs = findColorBlobs(imageData, {
-      hueMin: 45, hueMax: 55,
-      satMin: 0.55, valMin: 0.45,
+      hueMin: 42, hueMax: 62,
+      satMin: 0.55, valMin: 0.4,
       minArea, posFilter
     });
     return blobs[0] || null;
@@ -317,7 +324,8 @@
       }
     }
     if (total === 0) return false;
-    return (hit / total) >= 0.05;
+    // [v1.4.0+] 5% → 3%로 완화 (사용자 게임 클라이언트 황금 프레임 채도 다양)
+    return (hit / total) >= 0.03;
   }
 
   // =========================================================================
@@ -478,7 +486,7 @@
     return {
       anchors,
       textROIs,
-      valid: validation.valid && hpBar && mpBar && expBar && adenaIcon,
+      valid: !!(validation.valid && hpBar && mpBar && expBar && adenaIcon),
       issues
     };
   }
