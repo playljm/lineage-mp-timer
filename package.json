@@ -8,6 +8,7 @@
     "dev": "electron . --dev",
     "build": "electron-builder",
     "build:portable": "electron-builder --win portable",
+    "dist": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-distribute.ps1",
     "test": "node test/engine.test.js"
   },
   "keywords": [
