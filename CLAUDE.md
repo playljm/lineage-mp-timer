@@ -140,6 +140,20 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.4.0+ post-release fixes (2026-05-05) — 사용자 게임 실측 기반 root cause 5종 수정 ⭐⭐
+실제 사용자 환경 테스트 중 발견된 5가지 root cause 순차 수정 (모두 동일 v1.4.0 빌드 내):
+1. SPEC rev1 임계값 완화 (`2dc5422`) — 사용자 화면 hue 12/248/28 등 SPEC 범위 밖
+2. **`preprocessCanvas` 그레이스케일 변환** (`f79f8e5`) — 가장 치명적. captureRegionToCanvas('soft')도 색 사라짐 → captureRegionToRawCanvas로 전환
+3. `list-displays` sourceId 인덱스 fallback 버그 (`f79f8e5`) — start-region-select와 동일한 3-tier 매칭 적용
+4. `captureRegionToRawCanvas`의 autoTrim이 ADENA 잘라먹음 (`203ff3a`) — opts.noTrim 추가
+5. ADENA 텍스트 ROI 우측 클램프 (`b20407a`) — width = max(90, iconWidth*2.5), 우측 overflow 허용
+**추가 기능**:
+- ADENA 수동 override (`588adb2`) — `📌 ADENA 직접 지정` 버튼 + `_adenaManualOverride` 플래그
+- ADENA 가로/세로 레이아웃 자동 감지 (`a638042`, Phase 1) — `inkScore` 헬퍼로 두 후보 영역 텍스트 밀도 비교
+- 진단 스냅샷 자동 저장 (`b6977e2`) — game-region-raw.png + overlay.png
+**중요 발견**: Lineage Classic 표준 UI는 [icon] / [digits] **세로** 레이아웃 (기존 가로 default가 잘못된 가정).
+**낚시 함정**: `npm run dist`는 빌드 안 함 (ZIP만) → 코드 변경 후 `npm run build && npm run dist` 필수.
+
 ### v1.4.0 (2026-05-05) — 자동 ROI 탐지 + Phase A 안전망 통합 ⭐
 - **자동 ROI 탐지 모듈 도입** (`src/js/roi-detector.js`, 499 LOC)
   - HSV 변환 + 4-connectivity Connected Component Labeling (Union-Find rank+path compression)
@@ -331,18 +345,14 @@ cd /c/dev/lineage-mp-timer && npm run build
 8. 커밋 + (필요 시) 사용자 안내
 
 ### 🚨 다음 세션 우선 액션
-- **빌드 실행 필요** — 사용자가 portable 실행 중이면 종료 후:
-  ```bash
-  npm run build      # NSIS + portable
-  npm run dist       # 친구 배포 ZIP 생성 (LineageMPTimer-v1.4.0.zip)
-  ```
-- **자동 모드 검증 진단 리포트** — 새 빌드 켜고 자동 모드 + 게임 영역 지정 후 진단 리포트:
-  - `report.autoDetect.mode === "auto"` 확인
-  - `report.autoDetect.cachedROIs.anchors` 4개 모두 존재 확인
-  - `report.autoDetect.consecutiveRoiFailures === 0` 확인
-- **EXP 자릿수 mismatch 흡수 검증** — 기존 사용자 사례 회복 확인 (88.36 입력 후 자동 흡수 동작)
-- **친구 배포 ZIP 검증** — 다른 PC에서 압축 해제 + 실행 + 1분 셋업 시간 측정
+- **사용자 보고 받기** — Phase 1 ADENA 자동 레이아웃 감지 결과:
+  - 사용자가 `🔓 ADENA 수동 고정 해제` → `🔄 재탐지` → ADENA 자동 인식 성공 여부
+  - 성공 → manual override 불필요, 모든 사용자에 적용 가능
+  - 실패 → Phase 2 (다중 yellow blob best-fit) 검토
+- **EXP 4→5 confusion 추적** — 같은 misread 3회 패치 후에도 재발하면 학습 단계 escalate
+- **빌드 절차 명심**: `npm run build && npm run dist` (dist만 단독으로는 빌드 안 함!)
+- **상세 인수인계**: `docs/SESSION-HANDOFF-LATEST.md` v9 참조
 
 ---
 
-_Last updated: 2026-05-05 v8 · 작성: Claude (Anthropic) · v1.3.15→v1.3.21 + v1.4.0 자동 모드 통합 완료_
+_Last updated: 2026-05-05 v9 · 작성: Claude (Anthropic) · v1.4.0 post-release root cause 5종 수정 + ADENA 자동 레이아웃 + 수동 override_
