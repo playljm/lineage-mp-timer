@@ -2416,7 +2416,12 @@
     }
     // 6) 자동 가장자리 artifact trim — pad 확장으로 들어온 옆 아이콘/노이즈 제거
     //    autoTrimEdgeArtifacts 함수는 명/암 자동 감지 → raw canvas (light-on-dark)에서도 동작
-    autoTrimEdgeArtifacts(canvas, 'both');
+    // [v1.4.0+] opts.noTrim — 게임 화면 색상 분석용 캡처는 trim 비활성화
+    //   사용자 진단 (2026-05-05T12-59-16): autoTrim이 gameRegion 우측 18px를 artifact로 오인하고 잘라
+    //                                       ADENA 아이콘이 잘려나가 0×26/5×26 blob으로만 잡힘
+    if (!(opts && opts.noTrim)) {
+      autoTrimEdgeArtifacts(canvas, 'both');
+    }
     return canvas;
   }
 
@@ -4614,7 +4619,8 @@
       //   2) 캡처 프레임 크기 vs 영역 경계 체크 로그 추가 (out-of-bounds 진단)
       let canvas;
       try {
-        canvas = captureRegionToRawCanvas(autoDetect.gameRegion, 1);
+        // noTrim: gameRegion 색상 분석용 — autoTrim이 게임 UI 우측 ADENA 아이콘을 artifact로 오인 차단
+        canvas = captureRegionToRawCanvas(autoDetect.gameRegion, 1, { noTrim: true });
       } catch (e) {
         pushHybridLog('🤖 자동 ROI 캡처 실패: ' + (e.message || e));
         return false;
