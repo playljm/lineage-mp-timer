@@ -459,13 +459,47 @@ let overlayWindow = null;
 ipcMain.handle('app:list-displays', async () => {
   try {
     const displays = screen.getAllDisplays();
-    const sources = await desktopCapturer.getSources({
+    // [v1.4.0+] 사용자 진단 (2026-05-05T12-31-34): exp.png/adena.png 완전 흰색 → 캡처가 잘못된 모니터를 잡음
+    //   원인: 기존 list-displays는 display_id 매칭 실패 시 인덱스 fallback만 사용.
+    //         하지만 screen.getAllDisplays()와 desktopCapturer.getSources()는 다른 순서로 반환될 수 있음.
+    //   해결: start-region-select와 동일한 3-tier 매칭 (display_id → 해상도 → 인덱스)
+    //         thumbnail은 작게(미리보기 표시용)지만, 해상도 매칭용으로는 별도 high-res sources 호출
+    const previewSources = await desktopCapturer.getSources({
       types: ['screen'],
       thumbnailSize: { width: 320, height: 200 }
     });
+    let highResSources = previewSources;
+    try {
+      // 해상도 매칭에 필요한 physical 해상도 얻기 위해 큰 thumbnail 요청
+      highResSources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: { width: 4096, height: 4096 }
+      });
+    } catch (_) { /* fallback to previewSources */ }
+
     return displays.map((d, i) => {
-      let src = sources.find((s) => String(s.display_id) === String(d.id));
-      if (!src && sources[i]) src = sources[i];
+      // 1순위: display_id 매칭 (Electron이 빈 문자열 줄 수 있어 truthy 체크)
+      let src = highResSources.find((s) => s.display_id && String(s.display_id) === String(d.id));
+      // 2순위: physical 해상도 매칭 — 듀얼 모니터에서 인덱스 순서가 다를 때
+      if (!src) {
+        const sf = d.scaleFactor || 1;
+        const targetW = Math.round(d.bounds.width * sf);
+        const targetH = Math.round(d.bounds.height * sf);
+        src = highResSources.find((s) => {
+          try {
+            const sz = s.thumbnail && s.thumbnail.getSize ? s.thumbnail.getSize() : { width: 0, height: 0 };
+            return Math.abs(sz.width - targetW) <= 2 && Math.abs(sz.height - targetH) <= 2;
+          } catch (_) { return false; }
+        });
+        if (src) console.log('[list-displays] matched by resolution:', targetW + 'x' + targetH, '→', src.name);
+      }
+      // 3순위: 인덱스 fallback
+      if (!src) {
+        src = highResSources[i] || highResSources[0];
+        console.warn('[list-displays] using index fallback:', i, '— sourceId may not match physical monitor');
+      }
+      // preview thumbnail은 별도(가벼운 거)
+      const previewSrc = previewSources.find((p) => p.id === (src && src.id)) || previewSources[i];
       return {
         id: d.id,
         label: d.label || `모니터 ${i + 1}`,
@@ -473,7 +507,7 @@ ipcMain.handle('app:list-displays', async () => {
         bounds: d.bounds,
         scaleFactor: d.scaleFactor || 1,
         sourceId: src && src.id ? src.id : null,
-        thumbnail: src && src.thumbnail ? src.thumbnail.toDataURL() : null
+        thumbnail: previewSrc && previewSrc.thumbnail ? previewSrc.thumbnail.toDataURL() : null
       };
     });
   } catch (e) {

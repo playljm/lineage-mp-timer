@@ -4607,9 +4607,14 @@
       }
     } else {
       // Phase 1 — 게임 영역 캡처 후 자동 탐지
+      // [v1.4.0+] 사용자 진단 (2026-05-05T12-31-34): 진짜 root cause 발견
+      //   1) captureRegionToCanvas는 mode 무관하게 preprocessCanvas로 그레이스케일 변환됨
+      //      → RoiDetector가 HSV 색상 분석 시 saturation=0 → 모든 blob 미탐지
+      //      해결: captureRegionToRawCanvas로 RAW RGB 보존 (upscale=1, 색 분석용은 업스케일 불필요)
+      //   2) 캡처 프레임 크기 vs 영역 경계 체크 로그 추가 (out-of-bounds 진단)
       let canvas;
       try {
-        canvas = captureRegionToCanvas(autoDetect.gameRegion, 'soft', { /* color 분석용 raw 색상 보존 위해 추가 전처리 무 */ });
+        canvas = captureRegionToRawCanvas(autoDetect.gameRegion, 1);
       } catch (e) {
         pushHybridLog('🤖 자동 ROI 캡처 실패: ' + (e.message || e));
         return false;
@@ -4617,6 +4622,21 @@
       if (!canvas) {
         pushHybridLog('🤖 자동 ROI 캡처 실패 (canvas null)');
         return false;
+      }
+      // 영역 경계 + 캡처 프레임 정보 로그 (한 번만)
+      if (!ensureAutoModeROIs._capLogged) {
+        ensureAutoModeROIs._capLogged = true;
+        try {
+          const cap = captureStreams.get(autoDetect.gameRegion.sourceId);
+          const vw = (cap && cap.video) ? cap.video.videoWidth : 0;
+          const vh = (cap && cap.video) ? cap.video.videoHeight : 0;
+          const gr = autoDetect.gameRegion;
+          const sf = gr.scaleFactor || 1;
+          const reqRight = Math.round((gr.x + gr.width) * sf);
+          const reqBottom = Math.round((gr.y + gr.height) * sf);
+          const oob = (reqRight > vw || reqBottom > vh);
+          pushHybridLog(`🤖 캡처 진단 — frame=${vw}x${vh}, region=(${gr.x},${gr.y} ${gr.width}x${gr.height}), 결과 캔버스=${canvas.width}x${canvas.height}${oob ? ' ⚠ 영역이 프레임 경계 초과 — 다른 모니터 가능' : ''}`);
+        } catch (_) {}
       }
       let result;
       try {
@@ -4630,8 +4650,29 @@
           || !result.textROIs.level || !result.textROIs.adena) {
         const issues = (result && result.issues && result.issues.length) ? result.issues.join(', ') : 'unknown';
         pushHybridLog('🤖 자동 ROI 탐지 실패: ' + issues);
+        // [v1.4.0+] 첫 실패 시 캡처 프레임을 진단 폴더에 저장 → 사용자 공유용
+        if (!ensureAutoModeROIs._diagSaved && api && api.saveDiagnosticReport) {
+          ensureAutoModeROIs._diagSaved = true;
+          try {
+            const dataUrl = canvas.toDataURL('image/png');
+            const base64 = dataUrl.split(',')[1];
+            const buf = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+            api.saveDiagnosticReport({
+              imageBuffers: { 'game-region-capture': buf.buffer },
+              report: {
+                purpose: 'auto-detect-failure-debug',
+                timestamp: new Date().toISOString(),
+                gameRegion: autoDetect.gameRegion,
+                canvasSize: { w: canvas.width, h: canvas.height },
+                issues: result && result.issues
+              }
+            }).then((r) => {
+              if (r && r.ok) pushHybridLog('🤖 진단 캡처 저장됨: ' + r.path);
+            }).catch(() => {});
+          } catch (_) {}
+        }
         if (!cached) {
-          flashHint('⚠️ 게임 UI 자동 탐지 실패 — 게임 영역 재지정 권장');
+          flashHint('⚠️ 게임 UI 자동 탐지 실패 — 진단 폴더의 game-region-capture.png 확인');
         }
         return false;
       }
@@ -4651,16 +4692,18 @@
     }
 
     // textROIs를 절대 좌표 region으로 변환 → 기존 OCR 함수가 참조하는 필드에 동적 할당
+    // [v1.4.0+] HiDPI 보정: roi.* 는 physical 캔버스 좌표, region.* 는 logical 데스크톱 좌표
     const gr = autoDetect.gameRegion;
+    const sf = gr.scaleFactor || 1;
     const toAbsRegion = (roi) => ({
-      x: gr.x + roi.x,
-      y: gr.y + roi.y,
-      width: roi.width,
-      height: roi.height,
+      x: gr.x + roi.x / sf,
+      y: gr.y + roi.y / sf,
+      width: roi.width / sf,
+      height: roi.height / sf,
       sourceId: gr.sourceId,
       displayId: gr.displayId,
       displayLabel: gr.displayLabel,
-      scaleFactor: gr.scaleFactor || 1
+      scaleFactor: sf
     });
     autoDetect.mpRegion    = toAbsRegion(textROIs.mp);
     autoDetect.expRegion   = toAbsRegion(textROIs.exp);
