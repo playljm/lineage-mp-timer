@@ -140,6 +140,69 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.3.21 (2026-05-05) — displayId 일치 검증 (멀티 모니터 anchor 오염 차단)
+- **영역 지정 시 + 진단 리포트 시 displayId 일치 자동 검증**
+  - 사용자 진단 (2026-05-04T16-41-16): EXP 영역만 displayId 다른 모니터에 cached → 26분간 사냥 후 anchor 17.99로 오염
+  - 두 가지 모순 케이스 감지:
+    1. **다른 displayLabel** → 진짜 다른 모니터 (강한 경고 + flashHint)
+    2. **같은 displayLabel + 다른 displayId** → Windows monitor handle 변경 cached (정보 경고 + 재지정 권장)
+- **검증 위치**:
+  - 영역 지정 직후 (onPickRegion): flashHint + hybridLog
+  - 진단 리포트 생성 시: `report.displayCheck` 필드에 status/detail/advice 자동 포함
+- **v1.4.0 자동 탐지 SPEC 작성 시작** (별도 — 큰 영역 1개 → 시스템 자동 ROI 탐지)
+
+### v1.3.20 (2026-05-05) — ADENA 휘도 white-extraction (paddle leading-digit 안정화)
+- **ADENA에 휘도 mode white-extraction 캔버스 추가** (T=120 + raw pad:10)
+  - 사용자 진단 (2026-05-04T16-09-12): paddle "1317" (4자리) vs tess "10317" (5자리) — paddle 앞 "1" 누락 빈발
+  - 원인: paddle은 자연 이미지 학습 분포라 흰글자/베이지 글자에 약함, leading 글자 가장자리 손실
+  - 해결: EXP에서 검증된 휘도 mode 도입 — 베이지 글자도 robust 추출
+  - ADENA 캔버스 5종(pp + soft + otsu + raw + white) × PSM 3 = 최대 15 results
+
+### v1.3.19 (2026-05-05) — 휘도 기반 추출 모드 (베이지 글자 대응)
+- **applyWhiteExtraction에 `luminance` 옵션 추가** — `(R+G+B)/3 ≥ T`
+  - 사용자 진단 (2026-05-04T15-34-02): "74.1354%"의 "74."가 T=110도 통과 못 함 → OCR ".1354"
+  - **결정적 단서**: 사용자 게임 화면 분석 결과 EXP 글자가 **흰색이 아니라 베이지(R≈250, G≈230, B≈180)**
+  - 기존 R/G/B 모두 ≥T 방식은 흰글자(R=G=B)에 최적, **베이지 + 진행 막대 합성 픽셀(R=180,G=160,B=100)에서 B 채널 fail**
+  - 해결: 휘도 mode 도입. 같은 픽셀 휘도 평균 147 → T=140 통과, 막대 갈색(휘도≈87)은 여전히 차단
+- **EXP 캔버스 ensemble 재구성** (T값 + mode 조합):
+  - canvasWhite (T=140, R/G/B mode) — 흰글자 정밀 보호
+  - canvasWhiteSoft (T=120, **휘도 mode**) — 베이지 글자 + 막대 채워진 부분 위
+  - canvasWhiteDeep (T=70, **휘도 mode**) — 막대 진한 영역 위 매우 어두워진 글자
+  - 캔버스 6종(pp + soft + raw + white140 + lum120 + lum70) × PSM 3 = 최대 18 results
+
+### v1.3.18 (2026-05-05) — MP에 white-extraction 보강 (paddle misread 안정화)
+- **MP에도 white-extraction 캔버스 추가** (T=140): EXP에서 효과 본 패턴 도입
+  - 사용자 진단 (2026-05-04T15-26-05): MP "120/235"를 paddle이 "12072"로 misread → sanity 차단으로 voting 일관성 떨어짐
+  - 원인: 영역 좌측 4~5 raw px artifact가 매 사이클 소프트/오츠 캔버스에서 AutoTrim 거부 (54~55% > 50% 임계값)
+  - 해결: white-extraction은 AutoTrim 거치지 않고 raw 픽셀에서 흰 글자만 추출 → 좌측 회색 artifact 자동 검정 처리
+  - MP 캔버스 4종(pp + soft + otsu + white) × PSM 2(7/13) = 최대 8 results
+
+### v1.3.17 (2026-05-04) — White-extraction 듀얼 임계값 (어두운 글자 보호)
+- **white-extraction 임계값 T=170 → T=140 + T=110 듀얼 캔버스**
+  - 사용자 진단 (2026-05-04T15-18-24): T=170으로 우측 "1399"만 살고 좌측 "16."/"13."이 손실됨
+  - 원인: 게임 글자가 진행 막대 위에서 빛 반사로 R/G/B≈130~150 회색조 → T=170에서 차단됨
+  - 해결: T=140(기본) + T=110(관대 보조) 듀얼 → ensemble로 막대 위 어두운 글자도 살림
+  - 캔버스 5종(pp + soft + raw + white140 + white110) × PSM 3 = 최대 15 results
+
+### v1.3.16 (2026-05-04) — EXP white-extraction + 큰 점프 자동 흡수
+- **EXP white-extraction 캔버스 추가** (4번째 캔버스): `applyWhiteExtraction(T=170)` + 수동 invert
+  - 진행 막대가 채도 낮은 회색일 때 chromaMask가 작동 안 하는 케이스 대응
+  - 사용자 진단 (2026-05-04T15-08-36): "72.5989" 좌측 막대 페이드 회색 → "72" 글자 OCR 누락
+  - 채도 무관 R/G/B≥170만 흰 글자 → 수동 invert → 검은 글자 + 흰 배경 (가장 robust)
+  - PSM 7/8/13 × 4 캔버스 = 최대 12 results
+- **큰 점프(±5%p+) 영원 reject → 15회 일관 검증으로 완화**
+  - v1.3.14 영원 reject 정책이 레벨업 후 트래커 미갱신 케이스(anchor=10% → 실제 72%)도 차단
+  - 1초당 ~1회 OCR × 15회 = 15초 안정 일치 → 자동 anchor 갱신 (misread는 15초 일관 불가능)
+
+### v1.3.15 (2026-05-04) — EXP OCR 강화 + ADENA template 로그 정리
+- **EXP 다중 캔버스 도입** (ADENA 수준): pp + soft + raw(16x, pad 3) → PSM 7/8/13 × 3 = 최대 9 results
+  - 7↔1 misread (70.9060→10.9060) 사용자 진단 리포트 대응 (`diagnostic/2026-05-04T14-41-58`)
+  - 캔버스 다양성으로 agreement-misread 깨기 — 한 캔버스에서만 misread해도 다수결로 정정
+- **EXP chroma mask 강화**: threshold 130→100 (ADENA 수준), maskColor=255 강제 → 진행 막대 색상 더 적극 제거, 검은 글자 보존
+- **EXP paddle pad 2→3**: vertical 보강 ("7" 상단 가로획 손실 방지)
+- **ADENA template 로그 throttle**: 동일 (template, OCR) 쌍은 30s 윈도우당 1회만 UI 로그 (매 사이클 도배 차단)
+- **confusion pair 추가**: 3↔4, 5↔8 (ADENA template), 7→1 (EXP) — 학습 데이터 보강 우선순위
+
 ### v1.2.0-paddle (2026-05-03) — 게임 폰트 traineddata 통합
 - **컴팩트 모드** (F3): 두 줄 트래커 (시작·EXP/H·ADENA/H + 레벨·EXP·아데나 NOW + 증가량)
 - **ADENA OCR 강화**: per-digit voting (이중 캔버스 12x+16x), leading-digit-drop suffix-match, pad 4→10
@@ -165,7 +228,7 @@ onAlwaysOnTopChanged (event callback)
 - 상세: `docs/OCR-FUTURE-PLAN.md`
 
 ### 알려진 confusion pair (학습 우선순위)
-0↔8, 0↔5, 3↔9, **4↔9** (2026-05-02), 6↔8, 5↔7, 1·7 누락
+0↔8, 0↔5, 3↔9, **4↔9** (2026-05-02), 6↔8, 5↔7, 1·7 누락, **3↔4** (2026-05-04, ADENA template), **5↔8** (2026-05-04, ADENA template gap=0%), **7→1** (2026-05-04, EXP "70.9060"→"10.9060")
 
 ## 🛠️ 향후 개선 후보 (TODO)
 
@@ -225,15 +288,22 @@ cd /c/dev/lineage-mp-timer && npm run build
 
 새 세션에서 추가 작업 요청 시:
 1. `cd C:\dev\lineage-mp-timer`
-2. `git log --oneline -10` 으로 최근 변경 확인
-3. **이 문서(`CLAUDE.md`)로 전체 구조 파악** + `docs/SESSION-HANDOFF-LATEST.md` (최근 세션 인수인계)
-4. **`docs/OCR-FUTURE-PLAN.md` 진행 history**로 OCR 작업 흐름 파악
-5. 변경 후 **반드시**:
-   - `npm test` (엔진 회귀)
+2. `git log --oneline -10` 으로 최근 변경 확인 + `git status` 로 미커밋 변경 점검
+3. **이 문서(`CLAUDE.md`)로 전체 구조 파악** + `docs/SESSION-HANDOFF-LATEST.md` (최근 세션 인수인계 ★)
+4. **`.omc/plans/v1.4.0-auto-detection.md` SPEC 검토** (큰 영역 → 자동 ROI 탐지, planner 작성, 5 tasks ~600-800 LOC)
+5. **`.omc/plans/open-questions.md`** 5개 결정 사항 — v1.4.0 구현 시작 전 답변 필수
+6. **`docs/OCR-FUTURE-PLAN.md` 진행 history**로 OCR 작업 흐름 파악
+7. 변경 후 **반드시**:
+   - `npm test` (엔진 회귀, 현재 36/36 통과)
    - `node -c src/js/app.js` (문법 체크)
-   - `npm run build` (사용자가 앱 실행 중이면 먼저 종료 요청)
-6. 커밋 + (필요 시) 사용자 안내
+   - `npm run build` (사용자가 portable 실행 중이면 먼저 종료 요청)
+8. 커밋 + (필요 시) 사용자 안내
+
+### 🚨 미해결 이슈 (다음 세션 우선 처리)
+- 사용자 anchor `expNow=17.99` 오염 — 직접 입력 또는 RESET 필요
+- EXP 영역 displayId cached 불일치 — 같은 모니터로 재지정 권장
+- v1.3.21 검증 진단 리포트 받기 (`displayCheck.status: "ok"` 확인)
 
 ---
 
-_Last updated: 2026-05-03 · 작성: Claude (Anthropic)_
+_Last updated: 2026-05-05 v7 · 작성: Claude (Anthropic) · v1.3.15→v1.3.21 + v1.4.0 SPEC_

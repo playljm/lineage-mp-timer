@@ -1955,7 +1955,7 @@
    *   - 그 외                  → 검정 (0,0,0)
    *   - threshold 기본 200 (게임 흰색 글자 + 안티앨리어싱 가장자리도 일부 보존)
    */
-  function applyWhiteExtraction(canvas, threshold) {
+  function applyWhiteExtraction(canvas, threshold, opts) {
     if (!canvas) return canvas;
     const ctx = canvas.getContext('2d');
     const w = canvas.width, h = canvas.height;
@@ -1965,9 +1965,18 @@
     //   사용자 진단 리포트 (2026-05-04 v1.3.6): EXP "67.2445" 글자가 회색이라 T=200으로 검정 처리됨 → 손상
     //   T=150이면 회색 글자 (R/G/B≈170) 보존, 진행 막대 (B=40) 여전히 차단
     const T = (threshold && threshold > 0) ? threshold : 150;
+    // [v1.3.19] opts.luminance — 휘도 기반 (R+G+B)/3 ≥ T
+    //   기본(R/G/B 모두 ≥T)은 흰글자(R=G=B)에 최적 — 그러나 베이지/크림 글자(R 높고 B 낮음)에 약함
+    //   사용자 진단 (2026-05-04T15-34-02): 게임 EXP 글자가 베이지(R≈250,G≈230,B≈180), 진행 막대 위에서 R=180,G=160,B=100
+    //     → R/G/B mode에서 T=110도 B 채널 fail로 글자 손실. 휘도 평균=147은 T=140 통과 가능
+    //   luminance mode는 베이지/크림 글자에 최적, 막대 갈색(휘도≈87)은 여전히 차단
+    const useLuminance = !!(opts && opts.luminance);
     for (let i = 0; i < d.length; i += 4) {
       const r = d[i], g = d[i + 1], b = d[i + 2];
-      if (r >= T && g >= T && b >= T) {
+      const pass = useLuminance
+        ? ((r + g + b) / 3 >= T)
+        : (r >= T && g >= T && b >= T);
+      if (pass) {
         d[i] = 255; d[i + 1] = 255; d[i + 2] = 255;
       } else {
         d[i] = 0; d[i + 1] = 0; d[i + 2] = 0;
@@ -2981,8 +2990,30 @@
     // 다양한 캔버스 변형 — 6/8 confusion 같은 단일 자리 misread 깨기
     let canvasSoft = null;
     let canvasOtsu = null;
+    let canvasWhite = null;
     try { canvasSoft = captureRegionToCanvas(autoDetect.mpRegion, 'soft'); } catch (_) {}
     try { canvasOtsu = captureRegionToCanvas(autoDetect.mpRegion, 'otsu'); } catch (_) {}
+    // [v1.3.18] White-extraction 캔버스 — MP 영역 좌측 UI artifact 자동 차단
+    //   사용자 진단 (2026-05-04T15-26-05): "120/235" 영역 좌측 artifact로 paddle "12072" misread 빈발
+    //   AutoTrim 과도 거부 (54~55%)가 일부 캔버스에서 noise 못 자름 → paddle 혼란
+    //   white-extraction T=140: 게임 흰 글자(R/G/B≥140)만 살리고 좌측 회색조 artifact 자동 검정 처리
+    //   채도 무관 — chromaMask가 회색 artifact에 작동 안 하는 케이스 보강
+    try {
+      const cwBase = captureRegionToRawCanvas(autoDetect.mpRegion, 12, { pad: 0 });
+      if (cwBase) {
+        applyWhiteExtraction(cwBase, 140);
+        const cwCtx = cwBase.getContext('2d');
+        const wImg = cwCtx.getImageData(0, 0, cwBase.width, cwBase.height);
+        const wd = wImg.data;
+        for (let i = 0; i < wd.length; i += 4) {
+          wd[i] = 255 - wd[i];
+          wd[i + 1] = 255 - wd[i + 1];
+          wd[i + 2] = 255 - wd[i + 2];
+        }
+        cwCtx.putImageData(wImg, 0, 0);
+        canvasWhite = cwBase;
+      }
+    } catch (_) {}
 
     // INPUTS에 입력된 max MP — 슬래시 인식 실패 시 폴백으로 활용
     const userMax = parseInt(dom.inMaxMp.value, 10) || 0;
@@ -3052,6 +3083,7 @@
     };
     await recognizeMpOn('pp', canvas);
     if (canvasSoft) await recognizeMpOn('soft', canvasSoft);
+    if (canvasWhite) await recognizeMpOn('white', canvasWhite);
     if (canvasOtsu) await recognizeMpOn('otsu', canvasOtsu);
 
     if (results.length === 0) return null;
@@ -3177,11 +3209,32 @@
     let canvasSoft = null;
     let canvasOtsu = null;
     let canvasRaw = null;
+    let canvasWhite = null;
     try { canvasSoft = captureRegionToCanvas(autoDetect.adenaRegion, 'soft', { chromaMask: true }); } catch (_) {}
     try { canvasOtsu = captureRegionToCanvas(autoDetect.adenaRegion, 'otsu', { chromaMask: true }); } catch (_) {}
     try {
       canvasRaw = captureRegionToRawCanvas(autoDetect.adenaRegion, 16, { pad: 10 });
       if (canvasRaw) maskChromaPixels(canvasRaw);  // 노란 금화 등 컬러 그래픽 제거
+    } catch (_) {}
+    // [v1.3.20] White-extraction (휘도 mode T=120) 캔버스 — paddle leading-digit drop 안정화
+    //   사용자 진단 (2026-05-04T16-09-12): paddle "1317" (4자리) vs tess "10317" (5자리) — paddle 앞 "1" 누락
+    //   원인: paddle은 자연 이미지 학습 분포라 흰글자/베이지 글자에 약함, leading 글자 가장자리 손실 빈발
+    //   해결: 휘도 mode로 베이지/흰글자 robust 추출 (EXP에서 검증됨) + raw pad:10으로 leading 글자 보호
+    try {
+      const cwBase = captureRegionToRawCanvas(autoDetect.adenaRegion, 12, { pad: 10 });
+      if (cwBase) {
+        applyWhiteExtraction(cwBase, 120, { luminance: true });
+        const cwCtx = cwBase.getContext('2d');
+        const wImg = cwCtx.getImageData(0, 0, cwBase.width, cwBase.height);
+        const wd = wImg.data;
+        for (let i = 0; i < wd.length; i += 4) {
+          wd[i] = 255 - wd[i];
+          wd[i + 1] = 255 - wd[i + 1];
+          wd[i + 2] = 255 - wd[i + 2];
+        }
+        cwCtx.putImageData(wImg, 0, 0);
+        canvasWhite = cwBase;
+      }
     } catch (_) {}
 
     const psmModes = ['7', '8', '13'];
@@ -3213,6 +3266,7 @@
     if (canvasSoft) await recognizeOn('soft', canvasSoft);
     if (canvasOtsu) await recognizeOn('otsu', canvasOtsu);
     if (canvasRaw) await recognizeOn('raw', canvasRaw);
+    if (canvasWhite) await recognizeOn('white', canvasWhite);
 
     if (results.length === 0) return null;
     const valid = results.filter((r) => Number.isFinite(r.adena) && r.adena >= 0 && r.adena <= 9999999999);
@@ -3354,8 +3408,18 @@
               (((p.score || 0) - (p.secondBest && p.secondBest.score || 0))*100).toFixed(0) + '%)').join(' ');
             console.log('[OCR ADENA template] fixed len=' + dominantLen + ' text=' + fixedRes.text + ' detail=' + detail);
             // UI 로그 — 템플릿 결과가 OCR과 다르면 진단 정보로 표시
+            // [v1.3.15] 동일 메시지 30s 이내 중복 차단 (매 사이클 도배 방지)
+            //   기존: 안정 OCR 환경에서도 매초 같은 "template X vs OCR Y" 로그가 hybridLog 도배
+            //   개선: 동일 (template, OCR) 쌍은 30초 윈도우당 1회만 UI 로그, 콘솔에는 계속 기록
             if (fixedRes.text !== String(bestAdena)) {
-              pushHybridLog('🔍 ADENA template ' + fixedRes.text + ' vs OCR ' + bestAdena + ' | ' + detail);
+              const logKey = '🔍 ADENA template ' + fixedRes.text + ' vs OCR ' + bestAdena;
+              const now = Date.now();
+              ocrAdenaRegionTesseract._lastTplLog = ocrAdenaRegionTesseract._lastTplLog || {};
+              const last = ocrAdenaRegionTesseract._lastTplLog[logKey] || 0;
+              if (now - last >= 30000) {
+                pushHybridLog(logKey + ' | ' + detail);
+                ocrAdenaRegionTesseract._lastTplLog[logKey] = now;
+              }
             }
           }
         }
@@ -3495,16 +3559,63 @@
 
   async function ocrExpRegionTesseract() {
     if (!autoDetect.expRegion) return null;
+    // [v1.3.15] ADENA 수준 다중 캔버스 + 강화된 chroma masking
+    //   - canvas (pp):     12x preprocessed (sharpen + contrast)              — 기본
+    //   - canvasSoft:      12x preprocessed, no sharpen (anti-alias 보존)     — 글리프 가장자리 살림
+    //   - canvasRaw:       16x raw nearest-neighbor + pad 3 (vertical 보강)   — 영역 경계 미세 어긋남 흡수
+    //   threshold 130→100 (ADENA 수준): 진행 막대 색상을 더 적극적으로 흰색으로 치환
+    //   maskColor 255 강제: 검은 글자 보존, 막대만 배경화
+    //   v1.3.14 7↔1 misread (70.9060→10.9060) 대응 — 캔버스 다양성으로 agreement-misread 깨기
     const canvas = captureRegionToCanvas(autoDetect.expRegion);
     if (!canvas) return null;
-    // [v1.3.9] EXP 진행 막대 → 흰색 강제 (maskColor: 255)
-    //   글자 본체가 검은색 + 진행 막대 색상 → 검정 변환되면 글자가 배경에 흡수됨
-    //   maskColor 255로 강제 → 흰 배경 + 검은 글자 → tesseract 정상 인식
-    maskChromaPixels(canvas, { threshold: 130, maskColor: 255 });
-    updatePreview(dom.adExpPreview, canvas);
+    maskChromaPixels(canvas, { threshold: 100, maskColor: 255 });
+
+    let canvasSoft = null;
+    let canvasRaw = null;
+    let canvasWhite = null;
+    let canvasWhiteSoft = null;
+    try {
+      canvasSoft = captureRegionToCanvas(autoDetect.expRegion, 'soft');
+      if (canvasSoft) maskChromaPixels(canvasSoft, { threshold: 100, maskColor: 255 });
+    } catch (_) {}
+    try {
+      canvasRaw = captureRegionToRawCanvas(autoDetect.expRegion, 16, { pad: 3 });
+      if (canvasRaw) maskChromaPixels(canvasRaw, { threshold: 100, maskColor: 255 });
+    } catch (_) {}
+    // [v1.3.17] White-extraction 듀얼 임계값 — 진행 막대 위 어두운 글자 손실 방지
+    //   사용자 진단 (2026-05-04T15-18-24): T=170으로 "1399"만 살아남고 앞 글자 "16."/"13."이 손실
+    //   원인: 게임 글자가 진행 막대 위에서 빛 반사로 R/G/B≈130~150 회색조 → T=170으로는 차단됨
+    //   [v1.3.19] 사용자가 게임 화면 제공: EXP 글자가 흰색이 아니라 베이지(R≈250,G≈230,B≈180)
+    //     R/G/B 모두 ≥T 방식은 흰글자에 최적이지만 베이지 + 막대 합성 픽셀(R=180,G=160,B=100)에서 B 채널 fail
+    //     해결: 휘도 mode (R+G+B)/3 ≥ T 도입 — 같은 픽셀 휘도 147 → T=120 통과, 막대(휘도 87) 차단
+    //   ensemble 구성:
+    //     · canvasWhite (T=140, R/G/B mode) — 흰색 가까운 글자 정밀 보호
+    //     · canvasWhiteSoft (T=120, 휘도 mode) — 베이지 글자 + 막대 채워진 부분 위
+    //     · canvasWhiteDeep (T=70, 휘도 mode) — 막대 진한 영역 위 매우 어두워진 글자
+    const buildWhiteCanvas = (threshold, useLuminance) => {
+      const cwBase = captureRegionToRawCanvas(autoDetect.expRegion, 12, { pad: 3 });
+      if (!cwBase) return null;
+      applyWhiteExtraction(cwBase, threshold, { luminance: !!useLuminance });
+      const cwCtx = cwBase.getContext('2d');
+      const wImg = cwCtx.getImageData(0, 0, cwBase.width, cwBase.height);
+      const wd = wImg.data;
+      for (let i = 0; i < wd.length; i += 4) {
+        wd[i] = 255 - wd[i];
+        wd[i + 1] = 255 - wd[i + 1];
+        wd[i + 2] = 255 - wd[i + 2];
+      }
+      cwCtx.putImageData(wImg, 0, 0);
+      return cwBase;
+    };
+    try { canvasWhite = buildWhiteCanvas(140, false); } catch (_) {}      // R/G/B mode, 흰글자 정밀
+    try { canvasWhiteSoft = buildWhiteCanvas(120, true); } catch (_) {}   // 휘도 mode, 베이지 글자 적합
+    let canvasWhiteDeep = null;
+    try { canvasWhiteDeep = buildWhiteCanvas(70, true); } catch (_) {}    // 휘도 매우 관대, 막대 진한 영역 위
+
+    updatePreview(dom.adExpPreview, canvasWhite || canvas);
     const w = await initOcrWorker();
 
-    // PSM 7/8/13 다수결 — 글리프 유사 숫자(7↔8 등) 헷갈림 차단
+    // PSM 7/8/13 × 캔버스 3종 = 최대 9 results — 글리프 유사 숫자(7↔1, 7↔8 등) 헷갈림 차단
     const psmModes = ['7', '8', '13'];
     const parseExpText = (text) => {
       const decMatch = text.match(/(\d{1,3})\s*\.\s*(\d{1,4})/);
@@ -3525,26 +3636,35 @@
     };
 
     const results = [];
-    for (const psm of psmModes) {
-      try {
-        await w.setParameters({
-          tessedit_char_whitelist: '0123456789.',
-          tessedit_pageseg_mode: psm,
-          load_system_dawg: '0', load_freq_dawg: '0',
-          load_unambig_dawg: '0', load_punc_dawg: '0',
-          load_number_dawg: '0', load_bigram_dawg: '0'
-        });
-        const res = await w.recognize(canvas);
-        const text = ((res && res.data && res.data.text) || '').trim();
-        const rawConf = (res && res.data && res.data.confidence);
-        const confidence = Math.max(0, Number.isFinite(rawConf) ? rawConf : 0);
-        const exp = parseExpText(text);
-        results.push({ psm, text, confidence, exp });
-        console.log('[OCR EXP psm=' + psm + '] text=' + JSON.stringify(text) + ' conf=' + Math.round(confidence) + ' exp=' + exp);
-      } catch (e) {
-        console.warn('[OCR EXP psm=' + psm + '] failed:', e);
+    const recognizeOn = async (label, c) => {
+      if (!c) return;
+      for (const psm of psmModes) {
+        try {
+          await w.setParameters({
+            tessedit_char_whitelist: '0123456789.',
+            tessedit_pageseg_mode: psm,
+            load_system_dawg: '0', load_freq_dawg: '0',
+            load_unambig_dawg: '0', load_punc_dawg: '0',
+            load_number_dawg: '0', load_bigram_dawg: '0'
+          });
+          const res = await w.recognize(c);
+          const text = ((res && res.data && res.data.text) || '').trim();
+          const rawConf = (res && res.data && res.data.confidence);
+          const confidence = Math.max(0, Number.isFinite(rawConf) ? rawConf : 0);
+          const exp = parseExpText(text);
+          results.push({ src: label, psm, text, confidence, exp });
+          console.log('[OCR EXP ' + label + ' psm=' + psm + '] text=' + JSON.stringify(text) + ' conf=' + Math.round(confidence) + ' exp=' + exp);
+        } catch (e) {
+          console.warn('[OCR EXP ' + label + ' psm=' + psm + '] failed:', e);
+        }
       }
-    }
+    };
+    await recognizeOn('pp', canvas);
+    await recognizeOn('soft', canvasSoft);
+    await recognizeOn('raw', canvasRaw);
+    await recognizeOn('white', canvasWhite);
+    await recognizeOn('whiteSoft', canvasWhiteSoft);
+    await recognizeOn('whiteDeep', canvasWhiteDeep);
 
     if (results.length === 0) return null;
     const valid = results.filter((r) => Number.isFinite(r.exp) && r.exp >= 0 && r.exp <= 100);
@@ -3566,7 +3686,7 @@
       if (cnt > bestCount) { bestCount = cnt; bestKey = parseFloat(k); }
     }
     if (bestCount < 2) {
-      console.log('[OCR EXP] 다수결 약함 (PSM마다 결과 다름):', counts, '→ skip');
+      console.log('[OCR EXP] 다수결 약함 (PSM/canvas마다 결과 다름):', counts, '→ skip');
       return { text: results[0].text, confidence: results[0].confidence, parsed: null };
     }
     // 매칭된 결과 중 confidence 높은 것의 정확한 소수 4자리 값 채택
@@ -3705,10 +3825,11 @@
 
   async function ocrExpRegionPaddle() {
     if (!autoDetect.expRegion) return null;
-    const canvas = captureRegionToRawCanvas(autoDetect.expRegion, 1, { pad: 2 });
+    // [v1.3.15] pad 2→3 (vertical 보강 — "7" 상단 가로획 손실 방지)
+    const canvas = captureRegionToRawCanvas(autoDetect.expRegion, 1, { pad: 3 });
     if (!canvas) return null;
-    // [v1.3.9] paddle도 동일 — 진행 막대 → 흰색 강제
-    maskChromaPixels(canvas, { threshold: 130, maskColor: 255 });
+    // [v1.3.15] paddle도 동일 — 진행 막대 → 흰색 강제 (threshold 130→100, ADENA 수준)
+    maskChromaPixels(canvas, { threshold: 100, maskColor: 255 });
     updatePreview(dom.adExpPreview, canvas);
     if (!window.MpPaddle) return null;
     try {
@@ -4219,13 +4340,28 @@
         const deltaBoth = valBoth - anchorBoth;
         const absDelta = Math.abs(deltaBoth);
         const isLevelUp = anchorBoth > 95 && valBoth < 5;
-        // [v1.3.14] EXP 큰 점프(±5%p 이상) 영원히 reject — 사용자 직접 보정만 큰 변화 허용
-        //   사용자 케이스: "70.1122" → "10.1122" (7↔1 misread, 정수부 자릿수는 매치)
-        //   정상 사냥 1초당 변화 0.001~0.1%p이므로 5%p+는 misread 확률 압도적
-        //   레벨업 예외 (anchor>95 + val<5)는 그대로 통과
+        // [v1.3.16] 큰 점프(±5%p 이상) — 영원 reject 대신 매우 엄격한 검증으로 자동 흡수
+        //   레벨업 후 트래커 미갱신 케이스(anchor=10% → 실제 72%)도 자주 발생
+        //   1초당 ~1회 OCR이므로 15회 일관 검증 ≈ 15초 안정 일치 → 통과 (misread는 절대 15초 일관 X)
+        //   레벨업 예외 (anchor>95 + val<5)는 즉시 통과 유지
         if (absDelta > 5 && !isLevelUp) {
-          pushHybridLog('EXP ❌ 큰 점프 자동 거부 (' + deltaBoth.toFixed(2) + '%p > ±5%p): ' + valBoth + ' (anchor=' + anchorBoth.toFixed(2) + ', 직접 보정 필요)');
-          return { text: 'jump rejected ' + valBoth, confidence: 0, parsed: null };
+          if (!ocrExpRegionHybrid._verifyQueue) ocrExpRegionHybrid._verifyQueue = { val: null, count: 0 };
+          const vqJump = ocrExpRegionHybrid._verifyQueue;
+          const tolJump = 0.001;
+          const requiredJumpCount = 15;
+          if (vqJump.val !== null && Math.abs(vqJump.val - valBoth) < tolJump) {
+            vqJump.count++;
+            if (vqJump.count >= requiredJumpCount) {
+              vqJump.val = null; vqJump.count = 0;
+              pushHybridLog('EXP 🟢 큰 점프 검증 통과 (' + deltaBoth.toFixed(2) + '%p, ' + requiredJumpCount + '회 일관 — anchor 자동 갱신): ' + valBoth);
+              return voteHybrid('EXP', pr, tr, matcher);
+            }
+            pushHybridLog('EXP ⏳ 큰 점프 검증중 (' + (vqJump.count + 1) + '/' + (requiredJumpCount + 1) + ', ' + deltaBoth.toFixed(2) + '%p): ' + valBoth);
+            return { text: 'verifying-jump ' + valBoth, confidence: 0, parsed: null };
+          }
+          vqJump.val = valBoth; vqJump.count = 1;
+          pushHybridLog('EXP ⏳ 큰 점프 검증 시작 (' + deltaBoth.toFixed(2) + '%p, ' + requiredJumpCount + '회 필요): ' + valBoth);
+          return { text: 'verifying-jump ' + valBoth, confidence: 0, parsed: null };
         }
         if (absDelta > 0.1 && !isLevelUp) {
           // 동적 횟수: 0.1~1%p=2회 / 1~3%p=3회 / 3~10%p=5회 / 10%p+=10회
@@ -4851,6 +4987,32 @@
       else autoDetect.mpRegion = regionData;
       S.saveAutoDetect(autoDetect);
       renderAutoDetectInfo();
+      // [v1.3.21] displayId 일치 검증 — 멀티 모니터에서 다른 모니터에 영역 잡힌 경우 사전 차단
+      //   사용자 진단 (2026-05-04T16-41-16): EXP만 displayId가 달라 anchor 17.99로 오염됨
+      //   같은 displayLabel + 다른 displayId는 Windows monitor handle 변경(cached) 케이스
+      try {
+        const allRegions = {
+          mp: autoDetect.mpRegion,
+          exp: autoDetect.expRegion,
+          level: autoDetect.levelRegion,
+          adena: autoDetect.adenaRegion,
+        };
+        const defined = Object.entries(allRegions).filter(([_, r]) => r);
+        if (defined.length >= 2) {
+          const uniqueLabels = [...new Set(defined.map(([_, r]) => r.displayLabel || ''))];
+          const uniqueIds = [...new Set(defined.map(([_, r]) => r.displayId))];
+          if (uniqueLabels.length > 1) {
+            const detail = defined.map(([k, r]) => k + '=' + (r.displayLabel || '?')).join(', ');
+            flashHint(`⚠️ 영역이 서로 다른 모니터에 지정됨 — 재지정 권장 (${detail})`);
+            pushHybridLog('⚠ 영역 모니터 불일치: ' + detail);
+            console.warn('[Region monitor mismatch]', detail);
+          } else if (uniqueIds.length > 1) {
+            const detail = defined.map(([k, r]) => k + '=' + r.displayId).join(', ');
+            pushHybridLog('ℹ displayId cached 불일치 (' + uniqueLabels[0] + ') — 같은 모니터 영역 재지정 권장: ' + detail);
+            console.warn('[displayId cached mismatch]', detail);
+          }
+        }
+      } catch (_) {}
       const kindLabel = kind === 'exp' ? '경험치' : kind === 'level' ? '레벨' : kind === 'adena' ? '아데나' : kind === 'mpBar' ? 'MP 바' : 'MP';
       flashHint(`✅ ${kindLabel} 영역 지정 완료 (${selected.label})`);
       if (wasOn) startAutoDetect();
@@ -5197,6 +5359,32 @@
           }
           // 메타데이터 + 로그
           const safeText = (el, max) => (el && el.textContent ? el.textContent.slice(0, max || 5000) : '');
+          // [v1.3.21] displayId 일치 검증 — 진단 리포트에 자동 포함
+          const _diagRegions = {
+            mp: autoDetect.mpRegion,
+            exp: autoDetect.expRegion,
+            level: autoDetect.levelRegion,
+            adena: autoDetect.adenaRegion,
+          };
+          const _defined = Object.entries(_diagRegions).filter(([_, r]) => r);
+          let displayCheck = { status: 'ok' };
+          if (_defined.length >= 2) {
+            const labels = [...new Set(_defined.map(([_, r]) => r.displayLabel || ''))];
+            const ids = [...new Set(_defined.map(([_, r]) => r.displayId))];
+            if (labels.length > 1) {
+              displayCheck = {
+                status: 'monitor_mismatch',
+                detail: _defined.map(([k, r]) => k + '=' + (r.displayLabel || '?')).join(', '),
+                advice: '영역이 다른 모니터에 지정됨 — 같은 모니터로 재지정 권장',
+              };
+            } else if (ids.length > 1) {
+              displayCheck = {
+                status: 'displayid_cached_mismatch',
+                detail: _defined.map(([k, r]) => k + '=' + r.displayId).join(', '),
+                advice: '같은 모니터(' + labels[0] + ')지만 displayId 다름 (cached) — 영역 재지정 권장',
+              };
+            }
+          }
           const report = {
             version: dom.appVersion ? dom.appVersion.textContent : 'v?',
             timestamp: new Date().toISOString(),
@@ -5207,6 +5395,7 @@
               level: autoDetect.levelRegion || null,
               adena: autoDetect.adenaRegion || null,
             },
+            displayCheck,
             anchors: {
               mpCur: dom.inCurMp ? dom.inCurMp.value : '',
               mpMax: dom.inMaxMp ? dom.inMaxMp.value : '',
