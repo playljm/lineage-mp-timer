@@ -364,20 +364,23 @@
 
     if (adenaIcon) {
       // adenaTextROI: adenaIcon 우측
+      // [v1.4.0+] 사용자 진단 (2026-05-05T13-07-29): gameRegion 우측 끝이 ADENA 아이콘 직후로 끝나는 경우
+      //   frameW * 0.06 (76px)이 우측 클램프로 16px만 남음 → OCR "5"만 인식
+      //   해결: width를 icon 기준(2.5배 또는 최소 90px)으로 결정 + 우측 클램프 면제 (consumer는 모니터 캡처 사용)
       rois.adena = {
         x: Math.round(adenaIcon.x + adenaIcon.width + frameW * 0.005),
         y: Math.round(adenaIcon.y + adenaIcon.height * 0.1),
-        width: Math.round(frameW * 0.06),
+        width: Math.max(90, Math.round(adenaIcon.width * 2.5)),
         height: Math.round(adenaIcon.height * 0.8)
       };
     }
 
-    // 경계 클램프
+    // 경계 클램프 — ADENA는 우측 overflow 허용 (gameRegion 외부도 captureStream에 있음)
     for (const k of Object.keys(rois)) {
       const r = rois[k];
       if (r.x < 0) { r.width += r.x; r.x = 0; }
       if (r.y < 0) { r.height += r.y; r.y = 0; }
-      if (r.x + r.width > frameW) r.width = frameW - r.x;
+      if (k !== 'adena' && r.x + r.width > frameW) r.width = frameW - r.x;
       if (r.y + r.height > frameH) r.height = frameH - r.y;
       if (r.width < 0) r.width = 0;
       if (r.height < 0) r.height = 0;
@@ -398,8 +401,9 @@
         issues.push(`${name} ROI 너무 작음 (${r.width}x${r.height})`);
         return false;
       }
-      if (r.x < 0 || r.y < 0 ||
-          r.x + r.width > frameW || r.y + r.height > frameH) {
+      // [v1.4.0+] ADENA는 우측 overflow 허용 (consumer가 모니터 캡처 사용 — gameRegion 우측 외부 OK)
+      const rightOver = (r.x + r.width > frameW) && name !== 'adena';
+      if (r.x < 0 || r.y < 0 || rightOver || r.y + r.height > frameH) {
         issues.push(`${name} ROI 경계 초과`);
         return false;
       }
