@@ -2087,6 +2087,17 @@ body.compact-mode .titlebar .app-version {
 /* ============================================== */
 /* [v1.4.0] 자동/수동 모드 토글 + ROI 상태 + 온보딩 */
 /* ============================================== */
+
+/* [v1.4.0+] 게임 영역 미지정 시 버튼 시각적 강조 */
+@keyframes attention-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--neon, #39ff14); transform: scale(1); }
+  50%      { box-shadow: 0 0 14px 4px var(--neon, #39ff14); transform: scale(1.03); }
+}
+.attention-pulse {
+  animation: attention-pulse 0.9s 5;
+  border-color: var(--neon, #39ff14) !important;
+}
+
 .ad-mode-toggle {
   display: flex;
   gap: 6px;

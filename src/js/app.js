@@ -4686,11 +4686,19 @@
 
     if (!opts.silent) S.saveAutoDetect(autoDetect);
 
-    // 자동 모드 첫 선택 → 온보딩
+    // [v1.4.0+] 자동 모드 — gameRegion 없으면 localStorage flag와 무관하게 안내
+    //   사용자 케이스: 자동 모드 토글했지만 게임 영역 안 지정 → "안 됨" 인식
+    //   해결: gameRegion 미지정 시 매 토글마다 온보딩 + flashHint + 게임 영역 버튼 펄스
     if (newMode === 'auto' && !opts.silent) {
-      const seen = localStorage.getItem('lmp.autoModeOnboarded') === '1';
-      const hasGameRegion = !!autoDetect.gameRegion;
-      if (!seen && !hasGameRegion) showAutoOnboarding();
+      const hasGameRegion = !!(autoDetect.gameRegion && autoDetect.gameRegion.sourceId);
+      if (!hasGameRegion) {
+        showAutoOnboarding();
+        flashHint('🎮 자동 모드 — 게임 화면 영역 1개 지정 필요');
+        if (dom.btnAdGameRegion) {
+          dom.btnAdGameRegion.classList.add('attention-pulse');
+          setTimeout(() => { try { dom.btnAdGameRegion.classList.remove('attention-pulse'); } catch (_) {} }, 4500);
+        }
+      }
     }
 
     // 모드 전환 시 ROI 상태 즉시 반영
@@ -4722,7 +4730,12 @@
       setVal(dom.adRoiMp,    '미탐지', 'pending');
       setVal(dom.adRoiExp,   '미탐지', 'pending');
       setVal(dom.adRoiAdena, '미탐지', 'pending');
-      setVal(dom.adRoiCache, autoDetect.gameRegion ? '대기 중' : '게임 영역 미지정', 'pending');
+      const hasGr = !!(autoDetect.gameRegion && autoDetect.gameRegion.sourceId);
+      if (hasGr) {
+        setVal(dom.adRoiCache, '대기 중 (다음 틱에 자동 탐지)', 'pending');
+      } else {
+        setVal(dom.adRoiCache, '❌ 게임 영역 미지정 — [🎮 게임 화면 영역 지정] 누르세요', 'fail');
+      }
       drawRoiOverlay(null);
       return;
     }
@@ -5129,12 +5142,30 @@
   }
 
   async function startAutoDetect() {
-    const hasMp = !!(autoDetect.mpRegion && autoDetect.mpRegion.sourceId);
-    const hasMpBar = !!(autoDetect.mpBarRegion && autoDetect.mpBarRegion.sourceId);
-    const hasExp = !!(autoDetect.expRegion && autoDetect.expRegion.sourceId);
-    if (!hasMp && !hasMpBar && !hasExp) {
-      flashHint('먼저 [📷 MP 영역] / [📊 MP 바] / [📷 경험치 영역] 중 하나를 지정하세요.');
-      return;
+    // [v1.4.0] 자동 모드 — gameRegion 검증이 우선
+    if (autoDetect.mode === 'auto') {
+      const hasGameRegion = !!(autoDetect.gameRegion && autoDetect.gameRegion.sourceId);
+      if (!hasGameRegion) {
+        flashHint('🎮 자동 모드 — 먼저 [게임 화면 영역 지정] 버튼으로 게임 창을 드래그하세요');
+        pushHybridLog('🤖 자동 모드 시작 차단 — 게임 영역 미지정');
+        try { if (typeof showAutoOnboarding === 'function') showAutoOnboarding(); } catch (_) {}
+        // 게임 영역 버튼 시각적 강조 (5회 펄스)
+        if (dom.btnAdGameRegion) {
+          dom.btnAdGameRegion.classList.add('attention-pulse');
+          setTimeout(() => { try { dom.btnAdGameRegion.classList.remove('attention-pulse'); } catch (_) {} }, 4500);
+        }
+        return;
+      }
+      // gameRegion OK — 자동 모드 진행. ensureAutoModeROIs가 첫 틱에서 ROI 도출
+    } else {
+      // 수동 모드 — 기존 검증 그대로
+      const hasMp = !!(autoDetect.mpRegion && autoDetect.mpRegion.sourceId);
+      const hasMpBar = !!(autoDetect.mpBarRegion && autoDetect.mpBarRegion.sourceId);
+      const hasExp = !!(autoDetect.expRegion && autoDetect.expRegion.sourceId);
+      if (!hasMp && !hasMpBar && !hasExp) {
+        flashHint('먼저 [📷 MP 영역] / [📊 MP 바] / [📷 경험치 영역] 중 하나를 지정하세요.');
+        return;
+      }
     }
     setAdStatus('초기화...', 'on');
     if (dom.adInitStatus) dom.adInitStatus.textContent = '⏳ 캡처 스트림 준비 중...';
