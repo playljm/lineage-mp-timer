@@ -245,6 +245,13 @@
         if (typeof ocrExpRegionHybrid === 'function' && ocrExpRegionHybrid._verifyQueue) {
           ocrExpRegionHybrid._verifyQueue = { val: null, count: 0 };
         }
+        // [v1.3.22] 자릿수 mismatch 흡수 큐도 reset
+        if (typeof ocrExpRegionHybrid === 'function' && ocrExpRegionHybrid._digitVerifyP) {
+          ocrExpRegionHybrid._digitVerifyP = { val: null, count: 0 };
+        }
+        if (typeof ocrExpRegionHybrid === 'function' && ocrExpRegionHybrid._digitVerifyT) {
+          ocrExpRegionHybrid._digitVerifyT = { val: null, count: 0 };
+        }
         if (typeof expStableLast !== 'undefined') { expStableLast = null; expStableCount = 0; }
       } else if (key === 'adena') {
         if (typeof ocrAdenaRegionHybrid === 'function' && ocrAdenaRegionHybrid._verifyQueue) {
@@ -4276,20 +4283,67 @@
     const anchorIntCheck = parseExpPct(dom.trkExpNow.value) || 0;
     if (anchorIntCheck >= 1) {
       const anchorIntDig = String(Math.floor(anchorIntCheck)).length;
+      // [v1.3.22] 영원 폐기 → 20회 일관 검증 흡수로 완화
+      //   사용자 케이스 (2026-05-05T10-03-19): "88.3623"를 paddle "8.3628"/tess "3.2523"로 1자리 misread →
+      //   영원 폐기 정책으로 anchor 갱신 영원 차단 → 사용자 직접 입력 외엔 회복 불가.
+      //   큰 점프 검증과 동일 패턴: 같은 값 20회 일관(약 20초) 시에만 흡수.
+      //   misread는 절대 20회 일관 못 함 — 진짜 신뢰 결과만 통과.
+      if (!ocrExpRegionHybrid._digitVerifyP) ocrExpRegionHybrid._digitVerifyP = { val: null, count: 0 };
+      if (!ocrExpRegionHybrid._digitVerifyT) ocrExpRegionHybrid._digitVerifyT = { val: null, count: 0 };
+      const requiredDigitMismatchCount = 20;
+      const digitTol = 0.005;
+
       if (pr && pr.parsed && Number.isFinite(pr.parsed.exp)) {
         const pIntDig = String(Math.floor(pr.parsed.exp)).length;
         const isLevelUp = anchorIntCheck > 95 && pr.parsed.exp < 5;
         if (pIntDig !== anchorIntDig && !isLevelUp) {
-          pushHybridLog('EXP ❌ paddle 정수부 자릿수 mismatch (p=' + pIntDig + '자리 ' + pr.parsed.exp + ' vs anchor=' + anchorIntDig + '자리 ' + anchorIntCheck.toFixed(2) + '): paddle 폐기');
-          pr = { text: pr.text, confidence: 0, parsed: null };
+          const dvp = ocrExpRegionHybrid._digitVerifyP;
+          const v = pr.parsed.exp;
+          if (dvp.val !== null && Math.abs(dvp.val - v) < digitTol) {
+            dvp.count++;
+            if (dvp.count >= requiredDigitMismatchCount) {
+              dvp.val = null; dvp.count = 0;
+              pushHybridLog('EXP ⚠️ paddle 자릿수 mismatch 흡수 (' + requiredDigitMismatchCount + '회 일관 — anchor 자동 갱신 위험 통과): ' + v);
+              try { if (typeof flashHint === 'function' && dom.btnAdToggle) flashHint(dom.btnAdToggle, '⚠️ EXP 자릿수 변동 흡수', 3000); } catch (_) {}
+              // pr 유지 — 다음 voting/jump 검증 단계에서 처리
+            } else {
+              pushHybridLog('EXP ⏳ paddle 자릿수 mismatch 검증중 (' + (dvp.count + 1) + '/' + (requiredDigitMismatchCount + 1) + ', p=' + pIntDig + '자리 vs ' + anchorIntDig + '자리): ' + v);
+              pr = { text: pr.text, confidence: 0, parsed: null };
+            }
+          } else {
+            dvp.val = v; dvp.count = 1;
+            pushHybridLog('EXP ⏳ paddle 자릿수 mismatch 검증 시작 (' + requiredDigitMismatchCount + '회 필요, p=' + pIntDig + '자리 vs anchor=' + anchorIntDig + '자리 ' + anchorIntCheck.toFixed(2) + '): ' + v);
+            pr = { text: pr.text, confidence: 0, parsed: null };
+          }
+        } else if (pIntDig === anchorIntDig) {
+          ocrExpRegionHybrid._digitVerifyP.val = null;
+          ocrExpRegionHybrid._digitVerifyP.count = 0;
         }
       }
       if (tr && tr.parsed && Number.isFinite(tr.parsed.exp)) {
         const tIntDig = String(Math.floor(tr.parsed.exp)).length;
         const isLevelUp = anchorIntCheck > 95 && tr.parsed.exp < 5;
         if (tIntDig !== anchorIntDig && !isLevelUp) {
-          pushHybridLog('EXP ❌ tess 정수부 자릿수 mismatch (t=' + tIntDig + '자리 ' + tr.parsed.exp + '): tess 폐기');
-          tr = { text: tr.text, confidence: 0, parsed: null };
+          const dvt = ocrExpRegionHybrid._digitVerifyT;
+          const v = tr.parsed.exp;
+          if (dvt.val !== null && Math.abs(dvt.val - v) < digitTol) {
+            dvt.count++;
+            if (dvt.count >= requiredDigitMismatchCount) {
+              dvt.val = null; dvt.count = 0;
+              pushHybridLog('EXP ⚠️ tess 자릿수 mismatch 흡수 (' + requiredDigitMismatchCount + '회 일관 — anchor 자동 갱신 위험 통과): ' + v);
+              try { if (typeof flashHint === 'function' && dom.btnAdToggle) flashHint(dom.btnAdToggle, '⚠️ EXP 자릿수 변동 흡수', 3000); } catch (_) {}
+            } else {
+              pushHybridLog('EXP ⏳ tess 자릿수 mismatch 검증중 (' + (dvt.count + 1) + '/' + (requiredDigitMismatchCount + 1) + ', t=' + tIntDig + '자리): ' + v);
+              tr = { text: tr.text, confidence: 0, parsed: null };
+            }
+          } else {
+            dvt.val = v; dvt.count = 1;
+            pushHybridLog('EXP ⏳ tess 자릿수 mismatch 검증 시작 (' + requiredDigitMismatchCount + '회 필요, t=' + tIntDig + '자리 vs anchor=' + anchorIntDig + '자리): ' + v);
+            tr = { text: tr.text, confidence: 0, parsed: null };
+          }
+        } else if (tIntDig === anchorIntDig) {
+          ocrExpRegionHybrid._digitVerifyT.val = null;
+          ocrExpRegionHybrid._digitVerifyT.count = 0;
         }
       }
     }
@@ -5010,6 +5064,18 @@
             const detail = defined.map(([k, r]) => k + '=' + r.displayId).join(', ');
             pushHybridLog('ℹ displayId cached 불일치 (' + uniqueLabels[0] + ') — 같은 모니터 영역 재지정 권장: ' + detail);
             console.warn('[displayId cached mismatch]', detail);
+          }
+        }
+      } catch (_) {}
+      // [v1.3.22] 영역 height 권장 (텍스트 잘림 방지)
+      //   사용자 진단 (2026-05-05T10-03-19): EXP height=17px → 글자 가장자리 손실 → "88" → "8"/"3" misread
+      //   권장: 텍스트 영역 height ≥ 22px (mp=25, level=24, adena=22 기준)
+      try {
+        if (kind === 'mp' || kind === 'exp' || kind === 'level' || kind === 'adena') {
+          if (regionData.height < 18) {
+            const kl = kind === 'exp' ? '경험치' : kind === 'level' ? '레벨' : kind === 'adena' ? '아데나' : 'MP';
+            pushHybridLog('⚠ ' + kl + ' 영역 height ' + regionData.height + 'px 너무 좁음 — 22px+ 권장 (글자 잘림 OCR misread 위험)');
+            flashHint('⚠️ ' + kl + ' 영역 너무 좁음 (' + regionData.height + 'px) — 22px+ 권장');
           }
         }
       } catch (_) {}
