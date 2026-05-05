@@ -1,219 +1,152 @@
-# 세션 인수인계 — 2026-05-05 v7 (v1.3.15 → v1.3.21 + v1.4.0 SPEC)
+# 세션 인수인계 — 2026-05-05 v8 (v1.4.0 자동 모드 통합 완료)
 
 > **다음 세션에서 가장 먼저 읽어야 할 문서**
-> 이번 세션에서 v1.3.15 → v1.3.21 (7개 빌드) + v1.4.0 자동 탐지 SPEC 완료.
-> 사용자 진단 리포트 5회 분석으로 OCR/anchor 메커니즘 깊이 진화.
+> 이번 세션에서 v1.4.0 자동 ROI 탐지 + Phase A 안전망 + UX 개선 + 친구 배포 ZIP 자동화 완료.
+> 사용자 자리 비움 + 자율 진행 모드 — 빌드만 사용자 액션 필요.
 
 ---
 
 ## ⚡ TL;DR — 30초 요약
 
-**최신 빌드**: `dist/LineageMPTimer-1.3.21-portable.exe` (134 MB)
+**현재 상태**: v1.4.0 코드 작업 100% 완료, **빌드 대기 중** (사용자가 portable 실행 중이면 종료 후 빌드)
 
-**핵심 진화** (v1.3.15 → v1.3.21):
-1. EXP/MP/ADENA에 **다중 캔버스 ensemble** 도입 (최대 18 results 다수결)
-2. **휘도 기반 white-extraction** 도입 — 게임 글자가 베이지(R≈250,G≈230,B≈180)인 점 발견 후 R/G/B mode → 휘도 mode로 진화
-3. **큰 점프 자동 흡수** (15회 일관 검증) — 영원 reject(v1.3.14) 정책 완화
-4. **displayId 일치 검증** — 멀티 모니터 anchor 오염 차단
-
-**v1.4.0 SPEC 완료**: `.omc/plans/v1.4.0-auto-detection.md`
-- 큰 영역 1개 → ROI 자동 탐지 (HSV color blob)
-- 5 tasks, ~600-800 LOC, 점진적 마이그레이션 v1.4.0~v1.5.0
-
-**🚨 사용자 즉시 액션 필요**:
-- 진단 `2026-05-04T16-41-16`에서 **EXP anchor `expNow=17.9950`로 오염됨** (실제 화면 78.16%)
-- 트래커 UI에서 `inExpNow`에 **"78.16" 직접 입력** 또는 **트래커 RESET**
-- **EXP 영역 다시 지정** (MP/Level/ADENA와 같은 모니터 displayId로 통일)
-
----
-
-## 📊 이번 세션 빌드 사이클 (7개)
-
-| 버전 | 핵심 변경 | 진단 케이스 |
-|------|----------|-----------|
-| **v1.3.15** | EXP 다중 캔버스(pp+soft+raw) + ADENA template 로그 throttle | 14:41:58 — EXP "70" → "10" 7↔1 misread |
-| **v1.3.16** | EXP white-extraction(T=170) + 큰 점프 15회 자동 흡수 | 15:08:36 — EXP "72.5989" 좌측 막대 회색 손실 |
-| **v1.3.17** | EXP white 듀얼 임계값(T=140+T=110) | 15:18:24 — EXP "1399"만 살고 "16." 손실 |
-| **v1.3.18** | MP에 white-extraction(T=140) 추가 | 15:26:05 — MP paddle "12072" misread 빈발 |
-| **v1.3.19** | **휘도 mode 도입** (게임 글자 베이지 발견) — applyWhiteExtraction에 `luminance` 옵션 | 15:34:02 — "74.1354%" 좌측 누락 |
-| **v1.3.20** | ADENA에 휘도 white-extraction(T=120) | 16:09:12 — paddle "1317" leading-digit drop |
-| **v1.3.21** | displayId 일치 검증 (영역 지정 + 진단 리포트) | 16:41:16 — EXP만 displayId 다른 모니터로 anchor 17.99 오염 |
-
----
-
-## 🧬 진화 추이 — 캔버스 ensemble
-
-| 버전 | EXP 캔버스 | MP 캔버스 | ADENA 캔버스 |
-|------|-----------|----------|-------------|
-| v1.3.14 (이전) | pp 단일 (3 results) | pp+soft+otsu (6 results) | pp+soft+otsu+raw (12 results) |
-| v1.3.15 | + raw → 9 results | (그대로) | (그대로) |
-| v1.3.17 | + white140 + white110 → 15 results | (그대로) | (그대로) |
-| v1.3.18 | (그대로) | + white140 → 8 results | (그대로) |
-| **v1.3.19** | + white80 → 18 results, **휘도 mode 적용** | (R/G/B mode 유지) | (그대로) |
-| **v1.3.20** | (그대로) | (그대로) | + 휘도 white120 → 15 results |
-| v1.3.21 | (그대로) | (그대로) | (그대로) |
-
-**현재 v1.3.21 캔버스 구성**:
-- EXP: pp + soft + raw + **white140**(R/G/B) + **lum120**(휘도) + **lum70**(휘도) — 6종
-- MP: pp + soft + otsu + **white140**(R/G/B) — 4종
-- ADENA: pp + soft + otsu + raw + **lum120**(휘도) — 5종
-
----
-
-## 🔬 핵심 알고리즘 — `applyWhiteExtraction(canvas, T, opts)`
-
-`src/js/app.js:1958` 근처. v1.3.19에서 `opts.luminance` 옵션 추가.
-
-```js
-const useLuminance = !!(opts && opts.luminance);
-for (let i = 0; i < d.length; i += 4) {
-  const r = d[i], g = d[i + 1], b = d[i + 2];
-  const pass = useLuminance
-    ? ((r + g + b) / 3 >= T)        // 휘도 mode (베이지 글자 대응)
-    : (r >= T && g >= T && b >= T); // R/G/B mode (흰글자 정밀)
-  // ...
-}
-```
-
-**중요한 발견**: 게임 EXP/ADENA 글자가 흰색이 아니라 **베이지 (R≈250, G≈230, B≈180)**. 진행 막대 위에서 합성되어 (R≈180, G≈160, B≈100)으로 어두워지면 R/G/B mode T=110도 B 채널 fail. 휘도 평균 147 → T=140 통과 가능.
-
----
-
-## 🚨 사용자 진단 리포트 분석 (5회)
-
-| 시각 | 버전 | EXP 결과 | 핵심 발견 |
-|------|------|---------|----------|
-| 14:41:58 | v1.3.14 | "70" → "10" misread | 7↔1 confusion + 진행 막대 색상 |
-| 15:08:36 | v1.3.15 | "72.5989" 좌측 누락 | 막대 회색 그라데이션 chromaMask 무시 |
-| 15:18:24 | v1.3.16 | "1399"만 살아남음 | T=170 너무 엄격 (어두운 글자 손실) |
-| 15:26:05 | v1.3.17 | "73.6618" 정상 ✅ | 듀얼 임계값 효과 |
-| 15:34:02 | v1.3.18 | "1354"만 살아남음 | 막대 진한 영역 위 글자 (lum mode 필요) |
-| 16:09:12 | v1.3.19 | "75.7665" 정상 ✅ | 휘도 mode 효과 명백 |
-| 16:41:16 | v1.3.20 | OCR 정상, **anchor 17.99 오염** | EXP만 displayId 다른 모니터 |
-
----
-
-## 🛠 v1.3.21 displayId 검증 메커니즘
-
-`src/js/app.js`:
-- **영역 지정 직후** (`onPickRegion`, line ~4988): flashHint + hybridLog 경고
-- **진단 리포트 생성** (line ~5362): `report.displayCheck` 필드 자동 포함
-
-**3가지 status**:
-| status | 의미 | 권장 |
-|--------|------|------|
-| `ok` | 모든 영역 같은 모니터 | (정상) |
-| `monitor_mismatch` | 다른 displayLabel | 강한 경고 — 영역 재지정 |
-| `displayid_cached_mismatch` | 같은 라벨, 다른 ID | 정보 경고 — 같은 모니터 영역 재지정 권장 |
-
----
-
-## 📋 v1.4.0 자동 탐지 SPEC
-
-**파일**: `.omc/plans/v1.4.0-auto-detection.md` (planner 에이전트 작성)
-
-**핵심 설계**:
-1. **`roi-detector.js` 신규 모듈** — HSV color blob detection
-   - HP 바 (빨강), MP 바 (파랑), EXP 바 (갈색), ADENA (노랑)
-2. **2단계 파이프라인**: ROI 자동 탐지 → 기존 OCR 그대로 재사용
-3. **기존 OCR 함수 무수정** — `autoDetect.mpRegion` 동적 갱신만
-4. **자동/수동 모드 토글** (`autoDetect.mode = 'manual' | 'auto'`)
-5. **점진적 마이그레이션** v1.4.0 → v1.4.2 → v1.4.3 → v1.5.0
-
-**규모**: 5 tasks, 5 files (1 신규 + 4 수정), ~600-800 LOC
-
-**Open Questions**: `.omc/plans/open-questions.md` (5개)
-
----
-
-## 📦 git 상태 (미커밋)
-
-```
-M CLAUDE.md            ← v1.3.15 ~ v1.3.21 버전 히스토리 + confusion pair 추가
-M package.json         ← 1.3.14 → 1.3.21
-M src/js/app.js        ← 누적 코드 변경 (다중 캔버스, 휘도 mode, displayId 검증)
-?? .omc/plans/         ← v1.4.0 SPEC + open-questions
-```
-
-**커밋 권장 시점**:
-1. 사용자 v1.3.21 검증 완료 (진단 리포트로 displayCheck.status: "ok" 확인)
-2. v1.4.0 Open Questions 답변 후 구현 시작 직전 (안전 커밋)
-
-**커밋 메시지 안 (사용자 결정 후 진행)**:
-```
-fix: v1.3.15~v1.3.21 OCR 다중 캔버스 + 휘도 mode + displayId 검증
-
-- v1.3.15~v1.3.18: 다중 캔버스 ensemble (EXP 18, MP 8, ADENA 12 results)
-- v1.3.19: 휘도 mode (applyWhiteExtraction luminance opt) — 베이지 글자 대응
-- v1.3.20: ADENA에 휘도 white-extraction
-- v1.3.21: displayId 일치 검증 (영역 지정 + 진단 리포트)
-- v1.4.0 자동 탐지 SPEC 작성 (.omc/plans/)
-```
-
----
-
-## 🚦 다음 세션 시작 가이드
-
-### 1. 사용자 앱 상태 확인
-- `dist/LineageMPTimer-1.3.21-portable.exe` 실행 상태?
-- EXP anchor 회복 완료? (직접 입력 또는 RESET)
-- EXP 영역 재지정 완료? (같은 모니터)
-
-### 2. v1.3.21 검증 진단 리포트 받기
-새 진단에서 확인:
-- `report.displayCheck.status === "ok"` → displayId 일치 ✓
-- `anchors.expNow` 정상 (10~99% 범위, 사냥 진행 시 점진 증가)
-- hybridLog에 `⚠ 영역 모니터 불일치` 또는 `ℹ displayId cached 불일치` 메시지 없어야
-
-### 3. v1.4.0 SPEC 검토 + 구현 의사 결정
-- `.omc/plans/v1.4.0-auto-detection.md` 정독
-- `.omc/plans/open-questions.md` 5개 질문 답변
-- 구현 진행 시 task 1부터 순차 (또는 architect 에이전트 추가 검증)
-
-### 4. 명령어 (예전과 동일)
+**다음 액션** (사용자 깨어났을 때):
 ```bash
 cd C:\dev\lineage-mp-timer
-git status                  # 미커밋 변경 확인
-git log --oneline -10       # 최근 커밋
-node -c src/js/app.js       # 문법 체크
-npm test                    # 36 케이스 (현재 36/36 통과)
-npm run build               # NSIS+portable (사용자 portable 종료 후)
+npm test               # 36/36 통과 확인
+npm run build          # NSIS + portable.exe 생성 (사용자 portable 종료 필수)
+npm run dist           # 친구 배포 ZIP 생성 (LineageMPTimer-v1.4.0.zip)
 ```
 
-### 5. 진단 데이터 위치
-- `%APPDATA%/Roaming/LineageMPTimer/diagnostic/` (작은 폴더 다수, 정리 가능)
-- `%APPDATA%/Roaming/LineageMPTimer/training-data/` (학습 자료 — **절대 삭제 금지**, 48 MB)
+**산출물**:
+- `dist/LineageMPTimer-1.4.0-portable.exe` — 본인용 + 친구용
+- `dist/LineageMPTimer-v1.4.0.zip` — 친구 배포 패키지 (포터블 + 사용설명서 + 처음시작 + 변경내역)
 
 ---
 
-## 🧹 dist/ 정리 메모
+## 📦 v1.4.0 완료된 작업
 
-현재 dist/ ~784 MB. 정리 가능:
-- v1.3.18~v1.3.20 빌드 산출물 → 이미 삭제 완료
-- v1.3.21 + win-unpacked 빌드 캐시
-- 더 정리하려면: `dist/win-unpacked/` 삭제 (~127 MB 절약, 다음 빌드 시 재생성)
+### Phase A — 안전망 (수동 모드 사용자 보호)
+- **EXP 자릿수 mismatch 영원 폐기 → 20회 일관 검증 흡수** (`app.js:4276~`)
+  - 사용자 진단 (2026-05-05T10-03-19): "88.3623"를 paddle "8.3628"/tess "3.2523" 1자리 misread → 영원 차단됐던 anchor 자동 회복 가능
+- **영역 height < 18px 경고** (onPickRegion) — EXP=17px misread 직접 원인이었음
+
+### Phase B — 자동 ROI 탐지
+- **B1**: `src/js/roi-detector.js` (499 LOC) — HSV CCL + 4 anchor 탐지 + Negative space validation
+- **B1.5**: `src/debug/roi-debug.html` (422 LOC) — 스탠드얼론 디버그 페이지 (HSV 슬라이더 라이브 튜닝)
+- **B2+B3**: `storage.js` mode/gameRegion/cachedROIs 필드 + `app.js` ensureAutoModeROIs() — 기존 OCR 함수 무수정 원칙
+- **B4**: UI 모드 토글 + 자동 모드 섹션 + 온보딩 모달 + ROI 상태 패널 + 오버레이 프리뷰
+
+### Phase E — 친구 배포 자동화
+- `scripts/build-distribute.ps1` + `npm run dist`
+- ZIP 내용: portable.exe + 사용설명서.md + 처음시작.txt + 변경내역.txt
+
+### 문서
+- `사용설명서.md` v1.4.0 갱신 (자동 모드 메인, 수동 모드 fallback)
+- `CLAUDE.md` v1.4.0 entry + 다음 세션 가이드 갱신
+- `.omc/plans/v1.4.0-auto-detection.md` rev1 보정 노트 (실제 스크린샷 분석 반영, OQ 5/5 답변)
+
+---
+
+## 🧬 SPEC 보정 핵심 (실제 게임 스크린샷 분석으로 정정한 5가지)
+
+| # | 어제 SPEC 잘못 | 실제 화면 | 코드 반영 |
+|---|---|---|---|
+| 1 | HP 바 "중앙 상단" `y < 0.4` | **중앙 하단** y_rel > 0.65 | roi-detector.js findHpBar |
+| 2 | EXP 바 hue 25-45 (갈색) | **오렌지** hue 15-25 | findExpBar |
+| 3 | "MP = HP 바 옆" 단순 인접 | HP/MP 사이 황금 해골 프레임 | validateNegativeSpace 추가 |
+| 4 | "MP 텍스트 = MP 바 위/옆" | 텍스트가 **MP 바 내부** 흰글자 | mpTextROI = mpBar 자체 |
+| 5 | ADENA "우하단" 모호 | 인벤토리 슬롯 그리드 우측 끝 | x_rel > 0.85, y_rel > 0.92 |
+
+---
+
+## 📜 git 커밋 히스토리 (이번 세션, 5개)
+
+```
+d6aee49 feat(v1.4.0): Phase B4 UI 모드 토글 + UX 개선 + 사용설명서 갱신
+d231c98 feat(v1.4.0): Phase B2+B3 자동 모드 통합 (storage + app.js mode 분기 + ROI 캐시)
+685a23e feat(v1.4.0): Phase B1+B1.5 ROI 탐지 모듈 + 디버그 툴 + Phase E 인프라
+f9358ba feat(v1.4.0): Phase A 안전망 + SPEC rev1 보정
+219b8bd fix: v1.3.15~v1.3.21 OCR 다중 캔버스 + 휘도 mode + displayId 검증
+```
+
+브랜치: `paddle-ocr` (master 아님)
+
+---
+
+## 🔧 핵심 원칙 (다음 세션도 지킬 것)
+
+1. **기존 OCR 함수(ocrMpRegion, ocrExpRegionHybrid, captureRegionToCanvas 등) 무수정** — 자동 모드는 autoDetect.{mp,exp,level,adena}Region 동적 갱신만으로 통합
+2. **Manual 모드 v1.3.x와 100% 동일** — `mode==='auto'` 게이트로만 새 로직 진입
+3. **자동 모드는 opt-in** — 기본 'manual', 사용자 명시적 토글 시에만 활성화
+4. **각 phase 후 즉시 커밋** — 회귀 차단 + rollback 용이
+5. **검증: node -c + npm test (36/36)**
+
+---
+
+## 🚦 빌드 단계 (사용자 액션 필요)
+
+### 1. portable 종료 확인
+- 실행 중인 `LineageMPTimer-*.exe` 종료 (덮어쓰기 락 방지)
+
+### 2. 빌드
+```bash
+cd C:\dev\lineage-mp-timer
+npm run build          # ~3-5분, NSIS Setup + portable.exe 생성
+```
+
+### 3. ZIP 패키지 (친구 배포용)
+```bash
+npm run dist           # ~30초, dist/LineageMPTimer-v1.4.0.zip 생성
+```
+
+### 4. 검증
+- `dist/LineageMPTimer-1.4.0-portable.exe` 실행 → 자동 모드 토글 확인
+- 게임 영역 1개 드래그 → ROI 상태 패널 4개 모두 ✅(초록) 확인
+- 진단 리포트 생성 → `report.autoDetect.cachedROIs` 필드 존재 확인
+
+---
+
+## 🐛 사용자 케이스 회복 시나리오
+
+### EXP anchor 88.36 자동 회복 (v1.4.0 Phase A 효과)
+v1.3.21에서는 영원 폐기됐지만 v1.4.0부터:
+- 사용자가 사냥 시작 → tess "8.3628"/paddle 같은 misread 20회 일관 시 → ⚠️ 자동 흡수 → anchor 갱신
+- 또는 사용자가 직접 "88.36" 입력 → 즉시 anchor 회복
+
+### EXP displayId mismatch (v1.4.0 자동 모드 사용 시 우회)
+- 자동 모드는 게임 영역 1개만 → displayId 단일 → cached mismatch 자체 발생 X
+
+---
+
+## 🛠️ 향후 개선 후보 (v1.4.x)
+
+- [ ] **v1.4.1**: ROI 미세 조정 UI (offset slider) — 탐지 약간 어긋날 때
+- [ ] **v1.4.2**: Drift tracking — 게임 창 이동 자동 추적 (HP 바 주변 작은 영역 재탐지)
+- [ ] **v1.4.3**: 게임 창 리사이즈 대응 (비율 기반 ROI 재계산)
+- [ ] **v1.5.0**: Template matching 보강, 다른 클라이언트 버전 프로파일
 
 ---
 
 ## 📚 참고 문서
 
 - **이 문서 (SESSION-HANDOFF-LATEST.md)** — 세션 간 컨텍스트
-- `CLAUDE.md` — 프로젝트 전체 구조 + 버전 히스토리 (v1.3.21까지 갱신됨)
-- `docs/OCR-FUTURE-PLAN.md` — OCR 정확도 개선 history (학습 escalate 정책)
+- `CLAUDE.md` — 프로젝트 전체 구조 + v1.4.0까지 버전 히스토리
+- `사용설명서.md` — 사용자/친구용 (v1.4.0 자동 모드 메인)
+- `docs/OCR-FUTURE-PLAN.md` — OCR 정확도 개선 history
 - `docs/TRAINING-PIPELINE.md` — WSL traineddata 학습 절차 (BCER 1.96%)
-- `.omc/plans/v1.4.0-auto-detection.md` — 자동 탐지 SPEC ⭐
-- `.omc/plans/open-questions.md` — v1.4.0 구현 시작 전 결정 사항 5개
+- `.omc/plans/v1.4.0-auto-detection.md` — SPEC + rev1 보정 노트 ⭐
+- `.omc/plans/open-questions.md` — v1.4.0 시작 전 결정 5개 (5/5 답변 완료)
 
 ---
 
 ## 🎯 핵심 통찰 (다음 세션이 알아야 할 것)
 
-1. **게임 글자는 흰색이 아니라 베이지** — 휘도 mode가 R/G/B mode보다 robust
-2. **다중 캔버스 ensemble이 진리** — 단일 캔버스는 항상 어떤 케이스에서 실패
-3. **anchor 갱신 메커니즘은 양날의 검** — 큰 점프 자동 흡수가 misread도 흡수 가능 (v1.3.16 도입 시 trade-off)
-4. **displayId가 silent failure의 주요 원인** — 멀티 모니터 환경에서 사용자가 인지 못 하는 사이 영역이 다른 모니터에 잡힘
-5. **v1.4.0 자동 탐지가 모든 문제를 동시에 해결** — 사용성 + displayId + 영역 어긋남 + AutoTrim 거부 모두
+1. **SPEC을 그대로 믿지 말 것** — 어제 SPEC v1.4.0의 HP 위치 필터(`y<0.4`)는 잘못됐고, 실제 스크린샷 분석으로 5개 정정함. 새 기능 작업 시 실제 게임 화면 1장이 SPEC보다 가치 큼.
+2. **기존 OCR 무수정 원칙이 통합 성공의 핵심** — autoDetect.mpRegion 등 동적 갱신만으로 hybrid voting/stability/template matching 그대로 재사용. 200~300줄 코드로 자동 모드 통합 가능했음.
+3. **자릿수 영원 폐기는 항상 위험** — v1.3.x에서 잘 동작하던 정책이 사용자 케이스에서 anchor 영원 차단으로 작용. 큰 점프와 동일하게 N회 일관 검증으로 흡수가 정답.
+4. **친구 배포 = UX 디자인** — 신규 사용자(친구)가 5분 안에 셋업 못 하면 안 씀. 자동 모드 + 1분 온보딩 + ZIP 패키지(처음시작.txt 포함)로 "압축 해제 → 실행 → 드래그 1번 → 끝".
 
 ---
 
-_Last updated: 2026-05-05 02:10 · 작성: Claude (Anthropic) · 세션 11+ 시간 (v1.3.15 → v1.3.21 + v1.4.0 SPEC)_
+_Last updated: 2026-05-05 v8 · 작성: Claude (Anthropic) · 자율 진행 모드 — v1.4.0 자동 모드 통합 + Phase A 안전망 + 친구 배포 ZIP 자동화 완료_

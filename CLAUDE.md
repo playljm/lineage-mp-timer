@@ -140,6 +140,37 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.4.0 (2026-05-05) — 자동 ROI 탐지 + Phase A 안전망 통합 ⭐
+- **자동 ROI 탐지 모듈 도입** (`src/js/roi-detector.js`, 499 LOC)
+  - HSV 변환 + 4-connectivity Connected Component Labeling (Union-Find rank+path compression)
+  - HP 바 (빨강) / MP 바 (파랑) / EXP 바 (오렌지) / ADENA 아이콘 (노랑) 4개 anchor 자동 탐지
+  - Hue wrap-around (0/360 경계) atan2 원형 평균
+  - Negative space validation (HP/MP 사이 황금 해골 프레임 검증 — false positive 차단)
+  - 텍스트 ROI 도출 (mpText=막대 자체, expText=우측 절반, levelText=좌측, adenaText=아이콘 우측)
+  - DOM 의존성 0, ImageData 입력만 — 단독 테스트 가능
+- **자동 모드 통합** (`storage.js` + `app.js`)
+  - `autoDetect.mode = 'manual'|'auto'` 토글, 기본 'manual' (기존 사용자 영향 0)
+  - `ensureAutoModeROIs()` (app.js:4565) — gameRegion 캡처 → RoiDetector → textROIs 절대 좌표 변환 → autoDetect.{mp,exp,level,adena}Region 동적 할당
+  - 캐시 정책: 300초 만료 + 5회 연속 OCR 실패 시 무효화 + 사용자 직접 편집 시 무효화
+  - **기존 OCR 함수 무수정** — autoDetect.mpRegion 등 동적 갱신만으로 hybrid voting/stability/template matching 그대로 재사용
+- **UI 모드 토글 + UX 개선** (index.html + neon.css + app.js)
+  - 자동 모드 NEW 배지 (펄스 애니메이션) + 첫 진입 시 3단계 온보딩 모달
+  - ROI 상태 패널 실시간 갱신 (HP/MP/EXP/ADENA + 캐시 잔여 시간)
+  - ROI 오버레이 프리뷰 캔버스 (4개 anchor + 텍스트 ROI 시각화)
+  - "🔄 재탐지" 버튼 — 캐시 즉시 무효화
+  - 기존 ad-region-grid (4개 영역 버튼)는 ad-manual-section으로 wrap만 (자식 요소 무수정)
+- **Phase A 안전망 통합 (수동 모드 사용자도 보호)**
+  - **EXP 자릿수 mismatch 영원 폐기 → 20회 일관 검증 흡수** (`app.js:4276~`)
+    - 사용자 진단 (2026-05-05T10-03-19): "88.3623"를 paddle "8.3628"/tess "3.2523" 1자리 misread → 영원 폐기 → anchor 영원 차단
+    - 큰 점프와 동일 패턴: 같은 값 20회(약 20초) 일관 시에만 흡수, misread는 절대 20회 일관 X
+  - **영역 height < 18px 경고** (`onPickRegion`) — EXP height=17px 글자 잘림 misread 차단
+- **디버그 도구** (`src/debug/roi-debug.html`, 422 LOC)
+  - 스탠드얼론 (CDN/npm 의존성 X), 드래그 드롭 + HSV 슬라이더 라이브 튜닝
+- **친구 배포 ZIP 자동화** (`scripts/build-distribute.ps1` + `npm run dist`)
+  - portable.exe + 사용설명서.md + 처음시작.txt + 변경내역.txt → `LineageMPTimer-v1.4.0.zip`
+- **진단 리포트 확장**: `report.autoDetect`에 mode/gameRegion/cachedROIs/연속실패 카운터 포함
+- **사용설명서.md v1.4.0 갱신**: 자동 모드 1분 셋업을 메인으로, 수동 모드는 fallback
+
 ### v1.3.21 (2026-05-05) — displayId 일치 검증 (멀티 모니터 anchor 오염 차단)
 - **영역 지정 시 + 진단 리포트 시 displayId 일치 자동 검증**
   - 사용자 진단 (2026-05-04T16-41-16): EXP 영역만 displayId 다른 모니터에 cached → 26분간 사냥 후 anchor 17.99로 오염
@@ -299,11 +330,19 @@ cd /c/dev/lineage-mp-timer && npm run build
    - `npm run build` (사용자가 portable 실행 중이면 먼저 종료 요청)
 8. 커밋 + (필요 시) 사용자 안내
 
-### 🚨 미해결 이슈 (다음 세션 우선 처리)
-- 사용자 anchor `expNow=17.99` 오염 — 직접 입력 또는 RESET 필요
-- EXP 영역 displayId cached 불일치 — 같은 모니터로 재지정 권장
-- v1.3.21 검증 진단 리포트 받기 (`displayCheck.status: "ok"` 확인)
+### 🚨 다음 세션 우선 액션
+- **빌드 실행 필요** — 사용자가 portable 실행 중이면 종료 후:
+  ```bash
+  npm run build      # NSIS + portable
+  npm run dist       # 친구 배포 ZIP 생성 (LineageMPTimer-v1.4.0.zip)
+  ```
+- **자동 모드 검증 진단 리포트** — 새 빌드 켜고 자동 모드 + 게임 영역 지정 후 진단 리포트:
+  - `report.autoDetect.mode === "auto"` 확인
+  - `report.autoDetect.cachedROIs.anchors` 4개 모두 존재 확인
+  - `report.autoDetect.consecutiveRoiFailures === 0` 확인
+- **EXP 자릿수 mismatch 흡수 검증** — 기존 사용자 사례 회복 확인 (88.36 입력 후 자동 흡수 동작)
+- **친구 배포 ZIP 검증** — 다른 PC에서 압축 해제 + 실행 + 1분 셋업 시간 측정
 
 ---
 
-_Last updated: 2026-05-05 v7 · 작성: Claude (Anthropic) · v1.3.15→v1.3.21 + v1.4.0 SPEC_
+_Last updated: 2026-05-05 v8 · 작성: Claude (Anthropic) · v1.3.15→v1.3.21 + v1.4.0 자동 모드 통합 완료_
