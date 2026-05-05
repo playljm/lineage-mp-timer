@@ -103,8 +103,9 @@
     btnAdModeManual: $('btn-ad-mode-manual'),
     adAutoSection:   $('ad-auto-section'),
     adManualSection: $('ad-manual-section'),
-    btnAdGameRegion: $('btn-ad-game-region'),
-    btnAdRedetect:   $('btn-ad-redetect'),
+    btnAdGameRegion:     $('btn-ad-game-region'),
+    btnAdRedetect:       $('btn-ad-redetect'),
+    btnAdAdenaOverride:  $('btn-ad-adena-override'),
     adRoiHp:         $('ad-roi-hp'),
     adRoiMp:         $('ad-roi-mp'),
     adRoiExp:        $('ad-roi-exp'),
@@ -4774,7 +4775,12 @@
     autoDetect.mpRegion    = toAbsRegion(textROIs.mp);
     autoDetect.expRegion   = toAbsRegion(textROIs.exp);
     autoDetect.levelRegion = toAbsRegion(textROIs.level);
-    autoDetect.adenaRegion = toAbsRegion(textROIs.adena);
+    // [v1.4.0+] ADENA 수동 override 존중 — 사용자 진단 (2026-05-05T13-24-06):
+    //   자동 탐지가 인벤토리 노란 아이템을 ADENA로 오인하는 케이스 (UI 다양성)
+    //   _adenaManualOverride 플래그 있으면 사용자 지정 ADENA 영역 보존
+    if (!autoDetect._adenaManualOverride) {
+      autoDetect.adenaRegion = toAbsRegion(textROIs.adena);
+    }
     return true;
   }
 
@@ -4838,7 +4844,18 @@
       setVal(dom.adRoiHp,    '미탐지', 'pending');
       setVal(dom.adRoiMp,    '미탐지', 'pending');
       setVal(dom.adRoiExp,   '미탐지', 'pending');
-      setVal(dom.adRoiAdena, '미탐지', 'pending');
+      // [v1.4.0+] ADENA override가 활성화돼 있으면 캐시 없어도 표시
+      if (autoDetect._adenaManualOverride && autoDetect.adenaRegion) {
+        const ar = autoDetect.adenaRegion;
+        setVal(dom.adRoiAdena, `📌 수동: ${Math.round(ar.x)},${Math.round(ar.y)} ${Math.round(ar.width)}x${Math.round(ar.height)}`, 'ok');
+      } else {
+        setVal(dom.adRoiAdena, '미탐지', 'pending');
+      }
+      if (dom.btnAdAdenaOverride) {
+        dom.btnAdAdenaOverride.textContent = autoDetect._adenaManualOverride
+          ? '🔓 ADENA 수동 고정 해제 (자동 탐지로 복귀)'
+          : '📌 ADENA 직접 지정 (자동 탐지 부정확 시)';
+      }
       const hasGr = !!(autoDetect.gameRegion && autoDetect.gameRegion.sourceId);
       if (hasGr) {
         setVal(dom.adRoiCache, '대기 중 (다음 틱에 자동 탐지)', 'pending');
@@ -4852,7 +4869,19 @@
     setVal(dom.adRoiHp,    fmt(cached.anchors.hpBar),     cached.anchors.hpBar    ? 'ok' : 'fail');
     setVal(dom.adRoiMp,    fmt(cached.anchors.mpBar),     cached.anchors.mpBar    ? 'ok' : 'fail');
     setVal(dom.adRoiExp,   fmt(cached.anchors.expBar),    cached.anchors.expBar   ? 'ok' : 'fail');
-    setVal(dom.adRoiAdena, fmt(cached.anchors.adenaIcon), cached.anchors.adenaIcon? 'ok' : 'fail');
+    // [v1.4.0+] ADENA: manual override 시 사용자 지정 region 표시
+    if (autoDetect._adenaManualOverride && autoDetect.adenaRegion) {
+      const ar = autoDetect.adenaRegion;
+      setVal(dom.adRoiAdena, `📌 수동: ${Math.round(ar.x)},${Math.round(ar.y)} ${Math.round(ar.width)}x${Math.round(ar.height)}`, 'ok');
+    } else {
+      setVal(dom.adRoiAdena, fmt(cached.anchors.adenaIcon), cached.anchors.adenaIcon? 'ok' : 'fail');
+    }
+    // override 버튼 라벨 갱신
+    if (dom.btnAdAdenaOverride) {
+      dom.btnAdAdenaOverride.textContent = autoDetect._adenaManualOverride
+        ? '🔓 ADENA 수동 고정 해제 (자동 탐지로 복귀)'
+        : '📌 ADENA 직접 지정 (자동 탐지 부정확 시)';
+    }
     const ageSec = Math.floor((Date.now() - (cached.detectedAt || 0))/1000);
     const remaining = Math.max(0, (autoDetect.roiCacheMaxAge || 300) - ageSec);
     setVal(dom.adRoiCache, `캐시 hit (남은 ${remaining}s)`, 'ok');
@@ -6093,6 +6122,33 @@
       flashHint('🔄 ROI 캐시 무효화 — 다음 틱에 재탐지');
       pushHybridLog('🤖 사용자 요청 — ROI 캐시 무효화');
       try { renderRoiStatus(); } catch (_) {}
+    });
+    // [v1.4.0+] ADENA 직접 지정 — 자동 탐지가 잘못된 노란 아이콘을 잡는 케이스 (인벤토리 아이템 등)
+    //   사용자 진단 (2026-05-05T13-24-06): UI 다양성으로 자동 탐지 한계 — 사용자 결정 우선
+    //   클릭 → 영역 picker → ADENA 영역 저장 + manual override 플래그 설정 → 이후 auto가 덮어쓰지 않음
+    if (dom.btnAdAdenaOverride) dom.btnAdAdenaOverride.addEventListener('click', async () => {
+      const wasOverridden = !!autoDetect._adenaManualOverride;
+      // 토글: 이미 override 활성화된 경우 해제 (다시 자동 탐지 사용)
+      if (wasOverridden) {
+        autoDetect._adenaManualOverride = false;
+        // 캐시 무효화하여 다음 틱에 자동 ADENA 다시 적용
+        autoDetect.cachedROIs = null;
+        S.saveAutoDetect(autoDetect);
+        pushHybridLog('🤖 ADENA 수동 고정 해제 — 자동 탐지 복귀');
+        flashHint('🔓 ADENA 자동 탐지 복귀');
+        try { renderRoiStatus(); } catch (_) {}
+        return;
+      }
+      // 영역 picker로 ADENA 위치 선택
+      await onPickRegion('adena');
+      // onPickRegion 후 사용자가 영역을 실제로 선택했는지 확인
+      if (autoDetect.adenaRegion && autoDetect.adenaRegion.sourceId) {
+        autoDetect._adenaManualOverride = true;
+        S.saveAutoDetect(autoDetect);
+        pushHybridLog('📌 ADENA 수동 지정 완료 — 자동 탐지 무시');
+        flashHint('📌 ADENA 위치 고정 — 자동 탐지가 더 이상 덮어쓰지 않음');
+        try { renderRoiStatus(); } catch (_) {}
+      }
     });
     if (dom.btnAdOnboardingOk)   dom.btnAdOnboardingOk.addEventListener('click', () => hideAutoOnboarding(false));
     if (dom.btnAdOnboardingSkip) dom.btnAdOnboardingSkip.addEventListener('click', () => hideAutoOnboarding(true));
