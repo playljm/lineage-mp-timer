@@ -4695,6 +4695,66 @@
       pushHybridLog('🤖 ROI 자동 탐지 성공 — HP@' + fmt(a.hpBar) + ' MP@' + fmt(a.mpBar)
         + ' EXP@' + fmt(a.expBar) + ' ADENA@' + fmt(a.adenaIcon));
       try { S.saveAutoDetect(autoDetect); } catch (_) {}
+
+      // [v1.4.0+] 첫 성공 시에도 gameRegion 캡처 + anchor 오버레이 저장 (사용자 진단 공유용)
+      //   ADENA 위치 등 디버깅에 결정적 — anchor 위치가 실제 게임 UI와 맞는지 시각 확인
+      if (!ensureAutoModeROIs._successDiagSaved && api && api.saveDiagnosticReport) {
+        ensureAutoModeROIs._successDiagSaved = true;
+        try {
+          // 1) 원본 gameRegion 캡처
+          const rawDataUrl = canvas.toDataURL('image/png');
+          // 2) anchor 오버레이 그린 캔버스
+          const ovCanvas = document.createElement('canvas');
+          ovCanvas.width = canvas.width;
+          ovCanvas.height = canvas.height;
+          const ctx = ovCanvas.getContext('2d');
+          ctx.drawImage(canvas, 0, 0);
+          ctx.lineWidth = 3;
+          const drawBox = (b, color, label) => {
+            if (!b) return;
+            ctx.strokeStyle = color;
+            ctx.strokeRect(b.x, b.y, b.width, b.height);
+            ctx.fillStyle = color;
+            ctx.font = 'bold 14px monospace';
+            ctx.fillText(label, b.x + 2, b.y - 4);
+          };
+          drawBox(result.anchors.hpBar, '#ff4444', 'HP');
+          drawBox(result.anchors.mpBar, '#4488ff', 'MP');
+          drawBox(result.anchors.expBar, '#ff9900', 'EXP');
+          drawBox(result.anchors.adenaIcon, '#ffdd00', 'ADENA-ICON');
+          ctx.strokeStyle = '#00ff00';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([4, 4]);
+          for (const k of Object.keys(result.textROIs)) {
+            const r = result.textROIs[k];
+            ctx.strokeRect(r.x, r.y, r.width, r.height);
+            ctx.fillStyle = '#00ff00';
+            ctx.fillText(k + '-text', r.x + 2, r.y + r.height + 12);
+          }
+          const ovDataUrl = ovCanvas.toDataURL('image/png');
+          const toBuf = (dataUrl) => {
+            const b64 = dataUrl.split(',')[1];
+            const arr = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+            return arr.buffer;
+          };
+          api.saveDiagnosticReport({
+            imageBuffers: {
+              'game-region-raw': toBuf(rawDataUrl),
+              'game-region-overlay': toBuf(ovDataUrl)
+            },
+            report: {
+              purpose: 'auto-detect-success-snapshot',
+              timestamp: new Date().toISOString(),
+              anchors: result.anchors,
+              textROIs: result.textROIs,
+              gameRegion: autoDetect.gameRegion,
+              canvasSize: { w: canvas.width, h: canvas.height }
+            }
+          }).then((r) => {
+            if (r && r.ok) pushHybridLog('🤖 진단 스냅샷 저장됨: ' + r.path);
+          }).catch(() => {});
+        } catch (_) {}
+      }
     }
 
     // textROIs를 절대 좌표 region으로 변환 → 기존 OCR 함수가 참조하는 필드에 동적 할당
