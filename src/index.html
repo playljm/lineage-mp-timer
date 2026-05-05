@@ -348,14 +348,54 @@
             <br/>② MP 영역은 <b>현재 MP 숫자만 좁게</b> 캡처 (슬래시 없어도 OK, 예: <code>150</code>만)
             <br/>③ 슬래시 잘 인식되면 그대로 사용, 안 되면 INPUTS의 max를 자동 활용해 cur만 추출
           </p>
-          <!-- 영역 지정 버튼 — 2x3 그리드 (가로 폭 절반으로 축소) -->
-          <div class="ad-region-grid">
-            <button id="btn-ad-mp-region" class="ghost-btn ad-btn" title="MP 영역 — 텍스트 OCR (cur/max). 단일 숫자만 좁게 캡처하면 더 안정적">📷 MP</button>
-            <button id="btn-ad-exp-region" class="ghost-btn ad-btn">📷 경험치</button>
-            <button id="btn-ad-level-region" class="ghost-btn ad-btn">📷 레벨</button>
-            <button id="btn-ad-mp-bar-region" class="ghost-btn ad-btn" title="MP 바 영역 — 파란색 채움 막대를 영역 지정. OCR 없이 채움 비율 × INPUTS 최대 MP = cur 계산.">📊 MP 바</button>
-            <button id="btn-ad-mp-bar-calibrate" class="ghost-btn ad-btn" title="MP가 100%일 때 클릭 → 그 시점 채움 끝 위치를 max로 저장. 영역이 실제 바보다 넓어도 정확히 측정 가능.">🎯 100% 보정</button>
-            <button id="btn-ad-adena-region" class="ghost-btn ad-btn">📷 아데나</button>
+          <!-- [v1.4.0] 모드 토글 -->
+          <div class="ad-mode-toggle" role="tablist">
+            <button id="btn-ad-mode-auto" class="ghost-btn ad-mode-btn primary-ghost active" type="button" role="tab" aria-selected="true">
+              🚀 자동 모드<span class="badge-new">NEW</span>
+            </button>
+            <button id="btn-ad-mode-manual" class="ghost-btn ad-mode-btn" type="button" role="tab" aria-selected="false">
+              🔧 수동 모드
+            </button>
+          </div>
+
+          <!-- [v1.4.0] 자동 모드 섹션 -->
+          <div id="ad-auto-section" class="ad-mode-section">
+            <p class="panel-help muted small">
+              게임 화면 1개만 드래그하면 MP / 경험치 / 레벨 / 아데나 위치를 자동으로 찾아 OCR 영역을 설정합니다.
+              수동 모드의 4번 드래그가 한 번으로 줄어듭니다.
+            </p>
+            <div class="ad-region-grid">
+              <button id="btn-ad-game-region" class="ghost-btn ad-btn primary-ghost" type="button" style="grid-column: span 2;">
+                🎮 게임 화면 영역 지정
+              </button>
+              <button id="btn-ad-redetect" class="ghost-btn ad-btn" type="button" title="캐시된 ROI를 무효화하고 다시 탐지">
+                🔄 재탐지
+              </button>
+            </div>
+            <div class="ad-roi-status">
+              <div class="ad-info-row"><span class="ad-info-label">HP 바</span><span id="ad-roi-hp" class="ad-info-value">미탐지</span></div>
+              <div class="ad-info-row"><span class="ad-info-label">MP 바/텍스트</span><span id="ad-roi-mp" class="ad-info-value">미탐지</span></div>
+              <div class="ad-info-row"><span class="ad-info-label">EXP 바/텍스트</span><span id="ad-roi-exp" class="ad-info-value">미탐지</span></div>
+              <div class="ad-info-row"><span class="ad-info-label">ADENA 아이콘</span><span id="ad-roi-adena" class="ad-info-value">미탐지</span></div>
+              <div class="ad-info-row"><span class="ad-info-label">캐시 상태</span><span id="ad-roi-cache" class="ad-info-value">-</span></div>
+            </div>
+            <canvas id="ad-roi-overlay-preview" width="320" height="180" class="ad-roi-overlay"></canvas>
+          </div>
+
+          <!-- [v1.4.0] 수동 모드 섹션 — 기존 4개 영역 그리드 wrapping -->
+          <div id="ad-manual-section" class="ad-mode-section" style="display:none;">
+            <p class="panel-help muted small">
+              각 요소(MP, 경험치, 레벨, 아데나)를 개별로 드래그 지정합니다. 멀티 모니터 분산 영역 또는 자동 탐지 실패 시 사용하세요.
+            </p>
+            <!-- 영역 지정 버튼 — 2x3 그리드 (가로 폭 절반으로 축소) -->
+            <div class="ad-region-grid">
+              <button id="btn-ad-mp-region" class="ghost-btn ad-btn" title="MP 영역 — 텍스트 OCR (cur/max). 단일 숫자만 좁게 캡처하면 더 안정적">📷 MP</button>
+              <button id="btn-ad-exp-region" class="ghost-btn ad-btn">📷 경험치</button>
+              <button id="btn-ad-level-region" class="ghost-btn ad-btn">📷 레벨</button>
+              <button id="btn-ad-mp-bar-region" class="ghost-btn ad-btn" title="MP 바 영역 — 파란색 채움 막대를 영역 지정. OCR 없이 채움 비율 × INPUTS 최대 MP = cur 계산.">📊 MP 바</button>
+              <button id="btn-ad-mp-bar-calibrate" class="ghost-btn ad-btn" title="MP가 100%일 때 클릭 → 그 시점 채움 끝 위치를 max로 저장. 영역이 실제 바보다 넓어도 정확히 측정 가능.">🎯 100% 보정</button>
+              <button id="btn-ad-adena-region" class="ghost-btn ad-btn">📷 아데나</button>
+            </div>
           </div>
           <div id="ad-calibrate-status" style="margin-top: 6px; padding: 6px 10px; background: rgba(255, 200, 0, 0.08); border: 1px solid rgba(255, 200, 0, 0.3); border-radius: 4px; font-family: monospace; font-size: 11px; color: #ffd966; min-height: 24px;">🎯 보정 상태: 대기 중</div>
           <!-- v1.3.6: 진단 리포트 (눈에 잘 띄게 펼침 상태) -->
@@ -726,6 +766,26 @@
       </footer>
     </main>
 
+    <!-- [v1.4.0] 자동 모드 온보딩 (첫 진입 시 1회 표시) -->
+    <div id="ad-auto-onboarding" class="ad-onboarding-modal" style="display:none;" role="dialog" aria-modal="true">
+      <div class="ad-onboarding-content">
+        <h3>🚀 자동 모드 시작 — 1분 셋업</h3>
+        <ol class="ad-onboarding-steps">
+          <li><strong>리니지 게임 화면을 띄워두세요</strong> (창모드 권장)</li>
+          <li><strong>"🎮 게임 화면 영역 지정" 버튼</strong>을 누르고 게임 창 전체를 드래그</li>
+          <li><strong>"▶ 자동 감지 시작"</strong> 누르면 끝!</li>
+        </ol>
+        <p class="muted small">
+          자동 모드는 HP 바 / MP 바 / EXP 바 / 아데나 아이콘을 자동으로 찾아<br>
+          각 영역의 OCR 위치를 설정합니다. 게임 창을 옮겨도 일정 부분 자동 추적됩니다.
+        </p>
+        <div class="ad-onboarding-actions">
+          <button id="btn-ad-onboarding-skip" class="ghost-btn" type="button">다시 보지 않기</button>
+          <button id="btn-ad-onboarding-ok" class="ghost-btn primary-ghost" type="button">시작</button>
+        </div>
+      </div>
+    </div>
+
     <script src="../node_modules/tesseract.js/dist/tesseract.min.js"></script>
     <!-- PaddleOCR UMD bundle (window.paddlejs.ocr) — 1.6MB 단일 파일, 모델은 init 시 CDN에서 로드 -->
     <script src="../node_modules/@paddlejs-models/ocr/lib/index.js"></script>
@@ -733,6 +793,7 @@
     <script src="js/storage.js"></script>
     <script src="js/paddle-ocr.js"></script>
     <script src="js/template-matcher.js"></script>
+    <script src="js/roi-detector.js"></script>
     <script src="js/app.js"></script>
   </body>
 </html>

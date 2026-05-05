@@ -2083,3 +2083,110 @@ body.compact-mode .titlebar .app-version {
   font-family: 'JetBrains Mono', 'Consolas', monospace;
   letter-spacing: 0.5px;
 }
+
+/* ============================================== */
+/* [v1.4.0] 자동/수동 모드 토글 + ROI 상태 + 온보딩 */
+/* ============================================== */
+.ad-mode-toggle {
+  display: flex;
+  gap: 6px;
+  margin: 8px 0 12px;
+}
+.ad-mode-btn {
+  flex: 1;
+  font-size: 13px;
+  padding: 8px 10px;
+  position: relative;
+}
+.ad-mode-btn.active {
+  background: var(--neon-soft);
+  border-color: var(--neon);
+  color: var(--neon);
+  box-shadow: var(--shadow-neon);
+}
+.badge-new {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: bold;
+  background: var(--neon);
+  color: var(--bg-glow-1);
+  border-radius: 3px;
+  animation: badge-pulse 2s infinite ease-in-out;
+}
+@keyframes badge-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.7; transform: scale(1.05); }
+}
+
+.ad-mode-section { margin-top: 10px; }
+
+/* ROI 상태 패널 */
+.ad-roi-status {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  background: rgba(0,0,0,0.2);
+}
+.ad-roi-status .ad-info-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 2px 0;
+}
+.ad-roi-status .ad-info-label { opacity: 0.7; }
+.ad-roi-status .ad-info-value { font-family: monospace; }
+.ad-roi-status .ad-info-value.ok       { color: var(--neon); }
+.ad-roi-status .ad-info-value.fail     { color: #ff5050; }
+.ad-roi-status .ad-info-value.pending  { color: #aaa; }
+
+/* ROI 오버레이 프리뷰 캔버스 */
+.ad-roi-overlay {
+  display: block;
+  margin-top: 10px;
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  background: #000;
+  width: 100%;
+  max-width: 320px;
+  height: auto;
+  aspect-ratio: 16/9;
+}
+
+/* 온보딩 모달 */
+.ad-onboarding-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.75);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ad-onboarding-content {
+  max-width: 420px;
+  width: 90%;
+  background: var(--bg-glow-1, #111);
+  border: 1px solid var(--neon);
+  border-radius: 8px;
+  padding: 20px 24px;
+  box-shadow: 0 0 30px var(--neon-soft, rgba(57, 255, 20, 0.3));
+}
+.ad-onboarding-content h3 {
+  margin-top: 0;
+  color: var(--neon);
+}
+.ad-onboarding-steps {
+  margin: 12px 0;
+  padding-left: 20px;
+  font-size: 13px;
+}
+.ad-onboarding-steps li { margin-bottom: 8px; }
+.ad-onboarding-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}

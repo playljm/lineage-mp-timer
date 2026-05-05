@@ -98,6 +98,22 @@
     btnItemAdd: $('btn-item-add'),
     btnItemsReset: $('btn-items-reset'),
     // auto-detect (MP + EXP + LEVEL + ADENA)
+    // [v1.4.0] 모드 토글 + 자동 모드 ROI 상태 UI
+    btnAdModeAuto:   $('btn-ad-mode-auto'),
+    btnAdModeManual: $('btn-ad-mode-manual'),
+    adAutoSection:   $('ad-auto-section'),
+    adManualSection: $('ad-manual-section'),
+    btnAdGameRegion: $('btn-ad-game-region'),
+    btnAdRedetect:   $('btn-ad-redetect'),
+    adRoiHp:         $('ad-roi-hp'),
+    adRoiMp:         $('ad-roi-mp'),
+    adRoiExp:        $('ad-roi-exp'),
+    adRoiAdena:      $('ad-roi-adena'),
+    adRoiCache:      $('ad-roi-cache'),
+    adRoiOverlay:    $('ad-roi-overlay-preview'),
+    adAutoOnboarding:    $('ad-auto-onboarding'),
+    btnAdOnboardingSkip: $('btn-ad-onboarding-skip'),
+    btnAdOnboardingOk:   $('btn-ad-onboarding-ok'),
     btnAdMpRegion: $('btn-ad-mp-region'),
     btnAdMpBarRegion: $('btn-ad-mp-bar-region'),
     btnAdMpBarCalibrate: $('btn-ad-mp-bar-calibrate'),
@@ -4653,6 +4669,105 @@
     return true;
   }
 
+  // ============================================================================
+  // [v1.4.0] 모드 토글 + 온보딩 + ROI 상태 UI
+  // ============================================================================
+  function applyAutoDetectMode(newMode, opts) {
+    opts = opts || {};
+    if (newMode !== 'auto' && newMode !== 'manual') newMode = 'manual';
+    autoDetect.mode = newMode;
+
+    if (dom.btnAdModeAuto)   dom.btnAdModeAuto.classList.toggle('active', newMode === 'auto');
+    if (dom.btnAdModeManual) dom.btnAdModeManual.classList.toggle('active', newMode === 'manual');
+    if (dom.btnAdModeAuto)   dom.btnAdModeAuto.setAttribute('aria-selected', newMode === 'auto');
+    if (dom.btnAdModeManual) dom.btnAdModeManual.setAttribute('aria-selected', newMode === 'manual');
+    if (dom.adAutoSection)   dom.adAutoSection.style.display   = newMode === 'auto'   ? '' : 'none';
+    if (dom.adManualSection) dom.adManualSection.style.display = newMode === 'manual' ? '' : 'none';
+
+    if (!opts.silent) S.saveAutoDetect(autoDetect);
+
+    // 자동 모드 첫 선택 → 온보딩
+    if (newMode === 'auto' && !opts.silent) {
+      const seen = localStorage.getItem('lmp.autoModeOnboarded') === '1';
+      const hasGameRegion = !!autoDetect.gameRegion;
+      if (!seen && !hasGameRegion) showAutoOnboarding();
+    }
+
+    // 모드 전환 시 ROI 상태 즉시 반영
+    try { renderRoiStatus(); } catch (_) {}
+  }
+
+  function showAutoOnboarding() {
+    if (!dom.adAutoOnboarding) return;
+    dom.adAutoOnboarding.style.display = '';
+  }
+  function hideAutoOnboarding(skipForever) {
+    if (!dom.adAutoOnboarding) return;
+    dom.adAutoOnboarding.style.display = 'none';
+    if (skipForever) localStorage.setItem('lmp.autoModeOnboarded', '1');
+  }
+
+  function renderRoiStatus() {
+    if (!dom.adRoiHp) return;
+    if (autoDetect.mode !== 'auto') return;
+    const cached = autoDetect.cachedROIs;
+    const setVal = (el, text, cls) => {
+      if (!el) return;
+      el.textContent = text;
+      el.classList.remove('ok','fail','pending');
+      if (cls) el.classList.add(cls);
+    };
+    if (!cached || !cached.anchors || !cached.textROIs) {
+      setVal(dom.adRoiHp,    '미탐지', 'pending');
+      setVal(dom.adRoiMp,    '미탐지', 'pending');
+      setVal(dom.adRoiExp,   '미탐지', 'pending');
+      setVal(dom.adRoiAdena, '미탐지', 'pending');
+      setVal(dom.adRoiCache, autoDetect.gameRegion ? '대기 중' : '게임 영역 미지정', 'pending');
+      drawRoiOverlay(null);
+      return;
+    }
+    const fmt = (r) => r ? `${Math.round(r.x)},${Math.round(r.y)} ${Math.round(r.width)}x${Math.round(r.height)}` : '미탐지';
+    setVal(dom.adRoiHp,    fmt(cached.anchors.hpBar),     cached.anchors.hpBar    ? 'ok' : 'fail');
+    setVal(dom.adRoiMp,    fmt(cached.anchors.mpBar),     cached.anchors.mpBar    ? 'ok' : 'fail');
+    setVal(dom.adRoiExp,   fmt(cached.anchors.expBar),    cached.anchors.expBar   ? 'ok' : 'fail');
+    setVal(dom.adRoiAdena, fmt(cached.anchors.adenaIcon), cached.anchors.adenaIcon? 'ok' : 'fail');
+    const ageSec = Math.floor((Date.now() - (cached.detectedAt || 0))/1000);
+    const remaining = Math.max(0, (autoDetect.roiCacheMaxAge || 300) - ageSec);
+    setVal(dom.adRoiCache, `캐시 hit (남은 ${remaining}s)`, 'ok');
+    drawRoiOverlay(cached);
+  }
+
+  function drawRoiOverlay(cached) {
+    const c = dom.adRoiOverlay;
+    if (!c) return;
+    const ctx = c.getContext('2d');
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, c.width, c.height);
+    if (!cached || !cached.frameSize) return;
+    const sx = c.width  / cached.frameSize.w;
+    const sy = c.height / cached.frameSize.h;
+    const draw = (r, color) => {
+      if (!r) return;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(r.x*sx, r.y*sy, r.width*sx, r.height*sy);
+    };
+    draw(cached.anchors.hpBar,     '#ff4040');
+    draw(cached.anchors.mpBar,     '#4080ff');
+    draw(cached.anchors.expBar,    '#ff9020');
+    draw(cached.anchors.adenaIcon, '#ffd040');
+    // 텍스트 ROI 점선
+    ctx.setLineDash([3,2]);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = '#ffffff60';
+    ['mp','exp','level','adena'].forEach(k => {
+      const r = cached.textROIs && cached.textROIs[k];
+      if (r) ctx.strokeRect(r.x*sx, r.y*sy, r.width*sx, r.height*sy);
+    });
+    ctx.setLineDash([]);
+  }
+
   async function runDetectionTick() {
     if (detectionRunning) {
       // Watchdog: 10초 이상 hang 상태면 force unlock — paddle/tesseract 호출이 응답 없으면 시스템 영구 정지 방지
@@ -4942,6 +5057,8 @@
           }
         }
       }
+      // [v1.4.0] ROI 상태 패널 갱신 (자동 모드일 때만 내부에서 동작)
+      try { renderRoiStatus(); } catch (_) {}
       detectionRunning = false;
     }
   }
@@ -5236,7 +5353,12 @@
         }
       } catch (_) {}
       const kindLabel = kind === 'exp' ? '경험치' : kind === 'level' ? '레벨' : kind === 'adena' ? '아데나' : kind === 'mpBar' ? 'MP 바' : kind === 'gameRegion' ? '게임 화면' : 'MP';
-      flashHint(`✅ ${kindLabel} 영역 지정 완료 (${selected.label})`);
+      if (kind === 'gameRegion') {
+        flashHint(`✅ ${kindLabel} 영역 지정 완료 (${selected.label}) — 다음 자동 감지 틱에 ROI 자동 탐지`);
+      } else {
+        flashHint(`✅ ${kindLabel} 영역 지정 완료 (${selected.label})`);
+      }
+      try { renderRoiStatus(); } catch (_) {}
       if (wasOn) startAutoDetect();
     } catch (e) {
       console.error('onPickRegion failed', e);
@@ -5804,6 +5926,21 @@
     if (dom.btnItemsApply) dom.btnItemsApply.addEventListener('click', onItemsApplyToAdena);
 
     // Auto-detect
+    // [v1.4.0] 모드 토글 + 게임 화면 영역 + 재탐지 + 온보딩
+    if (dom.btnAdModeAuto)   dom.btnAdModeAuto.addEventListener('click', () => applyAutoDetectMode('auto'));
+    if (dom.btnAdModeManual) dom.btnAdModeManual.addEventListener('click', () => applyAutoDetectMode('manual'));
+    if (dom.btnAdGameRegion) dom.btnAdGameRegion.addEventListener('click', () => onPickRegion('gameRegion'));
+    if (dom.btnAdRedetect)   dom.btnAdRedetect.addEventListener('click', async () => {
+      if (!autoDetect.gameRegion) { flashHint('⚠️ 먼저 게임 화면 영역을 지정하세요'); return; }
+      autoDetect.cachedROIs = null;
+      autoDetect._consecutiveRoiFailures = 0;
+      S.saveAutoDetect(autoDetect);
+      flashHint('🔄 ROI 캐시 무효화 — 다음 틱에 재탐지');
+      pushHybridLog('🤖 사용자 요청 — ROI 캐시 무효화');
+      try { renderRoiStatus(); } catch (_) {}
+    });
+    if (dom.btnAdOnboardingOk)   dom.btnAdOnboardingOk.addEventListener('click', () => hideAutoOnboarding(false));
+    if (dom.btnAdOnboardingSkip) dom.btnAdOnboardingSkip.addEventListener('click', () => hideAutoOnboarding(true));
     if (dom.btnAdMpRegion) dom.btnAdMpRegion.addEventListener('click', () => onPickRegion('mp'));
     if (dom.btnAdMpBarRegion) dom.btnAdMpBarRegion.addEventListener('click', () => onPickRegion('mpBar'));
     if (dom.btnAdMpBarCalibrate) {
@@ -6360,6 +6497,9 @@
     renderAll();
     renderTracker();
     renderAutoDetectInfo();
+    // [v1.4.0] 모드 토글 — 저장된 mode 따라 섹션 표시/숨김 (silent: 저장 안 함, 온보딩 X)
+    applyAutoDetectMode(autoDetect.mode || 'manual', { silent: true });
+    renderRoiStatus();
     applyGlobalHotkeys();
     // 초기 스냅샷 (undo 기준점)
     setTimeout(() => pushUndoImmediate(), 100);
