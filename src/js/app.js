@@ -266,6 +266,12 @@
       } else if (key === 'mp') {
         if (typeof mpStableLast !== 'undefined') { mpStableLast = null; mpStableCount = 0; }
       }
+      // [v1.4.0] 자동 모드 사용자 편집 시 ROI 캐시도 무효화 — 사용자가 잘못된 anchor를 직접 정정한 의미이므로
+      //   다음 틱에서 Phase 1 재실행하여 새 ROI 도출
+      if (autoDetect && autoDetect.mode === 'auto') {
+        autoDetect.cachedROIs = null;
+        autoDetect._consecutiveRoiFailures = 0;
+      }
     } catch (_) { /* 함수 호이스팅 전 호출 안전 가드 */ }
   }
   function isUserEditing(key) { return Date.now() < (userEditUntil[key] || 0); }
@@ -4549,6 +4555,104 @@
     return { lastKey: key, count: 1, stable: 1 >= req };
   }
 
+  // ============================================================================
+  // [v1.4.0] 자동 모드 ROI 갱신
+  //   gameRegion 캡처 → RoiDetector.detectGameUI → textROIs 절대 좌표 변환
+  //   → autoDetect.mpRegion / expRegion / levelRegion / adenaRegion 동적 할당
+  //   → 이후 기존 OCR 함수가 그대로 동작 (수정 X)
+  //   캐시: cachedROIs 존재 + 나이 < roiCacheMaxAge*1000 + 연속 실패 < threshold → Phase 1 스킵
+  // ============================================================================
+  async function ensureAutoModeROIs() {
+    if (!autoDetect.gameRegion) return false;
+    if (!window.RoiDetector || typeof window.RoiDetector.detectGameUI !== 'function') {
+      pushHybridLog('🤖 RoiDetector 미로딩 — script tag 누락');
+      return false;
+    }
+    const now = Date.now();
+    const maxAgeMs = (autoDetect.roiCacheMaxAge || 300) * 1000;
+    const failThreshold = autoDetect.roiFailThreshold || 5;
+    const cached = autoDetect.cachedROIs;
+    const consecutiveFails = autoDetect._consecutiveRoiFailures || 0;
+    const cacheHit = cached
+      && cached.detectedAt
+      && (now - cached.detectedAt < maxAgeMs)
+      && consecutiveFails < failThreshold
+      && cached.textROIs && cached.textROIs.mp && cached.textROIs.exp
+      && cached.textROIs.level && cached.textROIs.adena;
+
+    let textROIs;
+    if (cacheHit) {
+      textROIs = cached.textROIs;
+      const remaining = Math.max(0, Math.round((maxAgeMs - (now - cached.detectedAt)) / 1000));
+      // 너무 자주 로그 찍히지 않게 30틱마다 한 번
+      ensureAutoModeROIs._hitLogCount = (ensureAutoModeROIs._hitLogCount || 0) + 1;
+      if (ensureAutoModeROIs._hitLogCount === 1 || ensureAutoModeROIs._hitLogCount % 30 === 0) {
+        pushHybridLog('🤖 ROI 캐시 hit (남은 ' + remaining + 's)');
+      }
+    } else {
+      // Phase 1 — 게임 영역 캡처 후 자동 탐지
+      let canvas;
+      try {
+        canvas = captureRegionToCanvas(autoDetect.gameRegion, 'soft', { /* color 분석용 raw 색상 보존 위해 추가 전처리 무 */ });
+      } catch (e) {
+        pushHybridLog('🤖 자동 ROI 캡처 실패: ' + (e.message || e));
+        return false;
+      }
+      if (!canvas) {
+        pushHybridLog('🤖 자동 ROI 캡처 실패 (canvas null)');
+        return false;
+      }
+      let result;
+      try {
+        result = window.RoiDetector.detectGameUI(canvas);
+      } catch (e) {
+        pushHybridLog('🤖 RoiDetector 예외: ' + (e.message || e));
+        return false;
+      }
+      if (!result || !result.valid || !result.anchors
+          || !result.textROIs || !result.textROIs.mp || !result.textROIs.exp
+          || !result.textROIs.level || !result.textROIs.adena) {
+        const issues = (result && result.issues && result.issues.length) ? result.issues.join(', ') : 'unknown';
+        pushHybridLog('🤖 자동 ROI 탐지 실패: ' + issues);
+        if (!cached) {
+          flashHint('⚠️ 게임 UI 자동 탐지 실패 — 게임 영역 재지정 권장');
+        }
+        return false;
+      }
+      autoDetect.cachedROIs = {
+        anchors: result.anchors,
+        textROIs: result.textROIs,
+        detectedAt: now,
+        frameSize: { w: canvas.width, h: canvas.height }
+      };
+      ensureAutoModeROIs._hitLogCount = 0;
+      textROIs = result.textROIs;
+      const a = result.anchors;
+      const fmt = (b) => b ? `(${Math.round(b.x)},${Math.round(b.y)} ${Math.round(b.width)}x${Math.round(b.height)})` : '?';
+      pushHybridLog('🤖 ROI 자동 탐지 성공 — HP@' + fmt(a.hpBar) + ' MP@' + fmt(a.mpBar)
+        + ' EXP@' + fmt(a.expBar) + ' ADENA@' + fmt(a.adenaIcon));
+      try { S.saveAutoDetect(autoDetect); } catch (_) {}
+    }
+
+    // textROIs를 절대 좌표 region으로 변환 → 기존 OCR 함수가 참조하는 필드에 동적 할당
+    const gr = autoDetect.gameRegion;
+    const toAbsRegion = (roi) => ({
+      x: gr.x + roi.x,
+      y: gr.y + roi.y,
+      width: roi.width,
+      height: roi.height,
+      sourceId: gr.sourceId,
+      displayId: gr.displayId,
+      displayLabel: gr.displayLabel,
+      scaleFactor: gr.scaleFactor || 1
+    });
+    autoDetect.mpRegion    = toAbsRegion(textROIs.mp);
+    autoDetect.expRegion   = toAbsRegion(textROIs.exp);
+    autoDetect.levelRegion = toAbsRegion(textROIs.level);
+    autoDetect.adenaRegion = toAbsRegion(textROIs.adena);
+    return true;
+  }
+
   async function runDetectionTick() {
     if (detectionRunning) {
       // Watchdog: 10초 이상 hang 상태면 force unlock — paddle/tesseract 호출이 응답 없으면 시스템 영구 정지 방지
@@ -4562,12 +4666,31 @@
     detectionRunning = true;
     detectionRunningSince = Date.now();
     const threshold = (typeof autoDetect.confidenceThreshold === 'number') ? autoDetect.confidenceThreshold : 0;
+    // [v1.4.0] 자동 모드 — gameRegion 기반 ROI 동적 갱신 (실패 시 OCR 스킵)
+    //   ensureAutoModeROIs가 autoDetect.mpRegion/expRegion/levelRegion/adenaRegion에 절대 좌표 할당
+    //   manual 모드(또는 mode 미설정)는 기존 흐름 그대로 — 영향 0
+    let _autoTickParsedAny = false;  // 카운터용: 하나라도 parsed 성공했는지
+    if (autoDetect.mode === 'auto') {
+      if (!autoDetect.gameRegion) {
+        detectionRunning = false;
+        return;
+      }
+      const ok = await ensureAutoModeROIs();
+      if (!ok) {
+        // 탐지 실패 — 다음 틱에서 재시도 (이번 틱은 OCR 스킵)
+        detectionRunning = false;
+        return;
+      }
+    }
+    // 자동 모드 OCR 결과 추적 (parsed null 여부)
+    const _autoOcrStatus = { mp: null, exp: null, level: null, adena: null };
     try {
       // MP 영역 (또는 MP 바 영역) — useMpBar 모드에서는 mpBarRegion만 있어도 측정
       if (autoDetect.mpRegion || (autoDetect.useMpBar && autoDetect.mpBarRegion)) {
         try {
           const r = await ocrMpRegion();
           if (r) {
+            _autoOcrStatus.mp = !!(r.parsed && isValidMpParsed(r.parsed));
             const validParsed = isValidMpParsed(r.parsed);
             const passConfidence = r.confidence >= threshold;
             // 일관성 검증
@@ -4641,6 +4764,7 @@
             pushHybridLog('🔬 EXP loop r=' + (r ? (r.parsed ? 'parsed=' + (r.parsed.exp || '?') : 'no-parse') : 'null'));
           }
           if (r) {
+            _autoOcrStatus.exp = !!(r.parsed && isValidExpParsed(r.parsed));
             const validParsed = isValidExpParsed(r.parsed);
             const passConfidence = r.confidence >= threshold;
             // Stability key를 "정수 + 소수 1자리"로 grouping → 정상 사냥(소수 끝자리만 변함)에서도 count 누적,
@@ -4706,6 +4830,7 @@
         try {
           const r = await ocrLevelRegion();
           if (r) {
+            _autoOcrStatus.level = !!r.parsed;
             if (r.parsed) {
               const lv = r.parsed.level;
               const agreement = r.parsed.agreementCount || 1;
@@ -4754,6 +4879,7 @@
         try {
           const r = await ocrAdenaRegion();
           if (r) {
+            _autoOcrStatus.adena = !!r.parsed;
             if (r.parsed) {
               const ad = r.parsed.adena;
               const prev = parseInt(dom.trkAdenaNow.value, 10) || 0;
@@ -4792,6 +4918,30 @@
     } catch (e) {
       console.error('[AutoDetect] tick error:', e);
     } finally {
+      // [v1.4.0] 자동 모드 연속 실패 카운터 — 모든 region OCR parsed=null이면 카운트++,
+      //   하나라도 성공이면 0 reset. roiFailThreshold 도달 시 캐시 무효화 → 다음 틱에서 Phase 1 재실행
+      if (autoDetect.mode === 'auto' && autoDetect.cachedROIs) {
+        const allFailed =
+          (_autoOcrStatus.mp === false || _autoOcrStatus.mp === null) &&
+          (_autoOcrStatus.exp === false || _autoOcrStatus.exp === null) &&
+          (_autoOcrStatus.level === false || _autoOcrStatus.level === null) &&
+          (_autoOcrStatus.adena === false || _autoOcrStatus.adena === null);
+        const anySucceeded =
+          _autoOcrStatus.mp === true || _autoOcrStatus.exp === true ||
+          _autoOcrStatus.level === true || _autoOcrStatus.adena === true;
+        if (anySucceeded) {
+          autoDetect._consecutiveRoiFailures = 0;
+        } else if (allFailed) {
+          autoDetect._consecutiveRoiFailures = (autoDetect._consecutiveRoiFailures || 0) + 1;
+          const limit = autoDetect.roiFailThreshold || 5;
+          if (autoDetect._consecutiveRoiFailures >= limit) {
+            pushHybridLog('🤖 자동 ROI 캐시 무효화 — ' + limit + '회 연속 실패');
+            autoDetect.cachedROIs = null;
+            autoDetect._consecutiveRoiFailures = 0;
+            try { S.saveAutoDetect(autoDetect); } catch (_) {}
+          }
+        }
+      }
       detectionRunning = false;
     }
   }
@@ -5038,6 +5188,12 @@
         autoDetect.mpBarRegion = regionData;
         autoDetect.useMpBar = true;  // 바 영역 새로 지정 시 자동 활성화
       }
+      else if (kind === 'gameRegion') {
+        // [v1.4.0] 자동 모드: 게임 화면 전체 — ROI 캐시 무효화 후 다음 틱에서 재탐지
+        autoDetect.gameRegion = regionData;
+        autoDetect.cachedROIs = null;
+        autoDetect._consecutiveRoiFailures = 0;
+      }
       else autoDetect.mpRegion = regionData;
       S.saveAutoDetect(autoDetect);
       renderAutoDetectInfo();
@@ -5079,7 +5235,7 @@
           }
         }
       } catch (_) {}
-      const kindLabel = kind === 'exp' ? '경험치' : kind === 'level' ? '레벨' : kind === 'adena' ? '아데나' : kind === 'mpBar' ? 'MP 바' : 'MP';
+      const kindLabel = kind === 'exp' ? '경험치' : kind === 'level' ? '레벨' : kind === 'adena' ? '아데나' : kind === 'mpBar' ? 'MP 바' : kind === 'gameRegion' ? '게임 화면' : 'MP';
       flashHint(`✅ ${kindLabel} 영역 지정 완료 (${selected.label})`);
       if (wasOn) startAutoDetect();
     } catch (e) {

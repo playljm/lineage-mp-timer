@@ -125,7 +125,14 @@
       expRegion: null,
       levelRegion: null,
       adenaRegion: null,
-      levelOffset: 0           // OCR 결과 보정값 (사용자 수정 시 자동 학습)
+      levelOffset: 0,          // OCR 결과 보정값 (사용자 수정 시 자동 학습)
+      // ===== v1.4.0 자동 ROI 탐지 =====
+      mode: 'manual',          // 'manual' | 'auto' — 'auto' 시 gameRegion으로부터 ROI 자동 도출
+      gameRegion: null,        // 게임 화면 전체 영역 { x, y, width, height, sourceId, displayId, displayLabel, scaleFactor }
+      cachedROIs: null,        // Phase 1 결과 캐시 { anchors, textROIs, detectedAt, frameSize }
+      roiCacheMaxAge: 300,     // 초 단위 — 캐시 강제 갱신 주기 (300s = 5분)
+      roiFailThreshold: 5,     // OCR N회 연속 실패 시 캐시 무효화 → Phase 1 재실행
+      roiOffsets: null         // 사용자 미세 조정용 오프셋 (advanced, v1.4.1+)
     };
     if (!stored) return defaults;
     // 마이그레이션: 이전 'region' → 'mpRegion'

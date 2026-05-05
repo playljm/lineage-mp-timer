@@ -8,3 +8,11 @@ Thumbs.db
 .env
 .vscode/
 .idea/
+
+# OMC 런타임 상태 (멀티 에이전트 실행 메타) — 추적 X
+.omc/state/
+.omc/project-memory.json
+.omc/checkpoints/
+
+# git commit 임시 파일
+.git/COMMIT_EDITMSG_TMP
