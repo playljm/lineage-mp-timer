@@ -331,7 +331,33 @@
   // =========================================================================
   // 7. Anchor → 텍스트 ROI 도출 (SPEC rev1 정확한 식)
   // =========================================================================
-  function deriveTextROIs(anchors, frameW, frameH) {
+  // [v1.4.0+] ink density (edge pixel ratio) — 디지트 클러스터 자동 감지용
+  //   인접 픽셀 휘도 차이가 큰 픽셀 비율 = 텍스트/edge 밀도
+  //   균일한 검정/배경: 낮은 비율 / 디지트가 있는 영역: 높은 비율
+  function inkScore(imageData, x, y, w, h) {
+    if (!imageData || !imageData.data) return 0;
+    const data = imageData.data;
+    const fw = imageData.width;
+    const fh = imageData.height;
+    const xMin = Math.max(0, Math.floor(x));
+    const yMin = Math.max(0, Math.floor(y));
+    const xMax = Math.min(fw - 1, Math.floor(x + w));
+    const yMax = Math.min(fh - 1, Math.floor(y + h));
+    let edges = 0;
+    let total = 0;
+    for (let yy = yMin; yy < yMax; yy++) {
+      for (let xx = xMin; xx < xMax; xx++) {
+        const i = (yy * fw + xx) * 4;
+        const lumC = (data[i] + data[i + 1] + data[i + 2]) / 3;
+        const lumR = (data[i + 4] + data[i + 5] + data[i + 6]) / 3;
+        if (Math.abs(lumC - lumR) > 25) edges++;
+        total++;
+      }
+    }
+    return total > 0 ? edges / total : 0;
+  }
+
+  function deriveTextROIs(anchors, frameW, frameH, imageData) {
     const { hpBar, mpBar, expBar, adenaIcon } = anchors;
     const rois = {};
 
@@ -363,16 +389,30 @@
     }
 
     if (adenaIcon) {
-      // adenaTextROI: adenaIcon 우측
-      // [v1.4.0+] 사용자 진단 (2026-05-05T13-07-29): gameRegion 우측 끝이 ADENA 아이콘 직후로 끝나는 경우
-      //   frameW * 0.06 (76px)이 우측 클램프로 16px만 남음 → OCR "5"만 인식
-      //   해결: width를 icon 기준(2.5배 또는 최소 90px)으로 결정 + 우측 클램프 면제 (consumer는 모니터 캡처 사용)
-      rois.adena = {
-        x: Math.round(adenaIcon.x + adenaIcon.width + frameW * 0.005),
+      // [v1.4.0+] 가로 / 세로 레이아웃 자동 감지 (사용자 진단 2026-05-05T13-39-30)
+      //   가로: [icon][digits]   — 일반적
+      //   세로: [icon] / [digits] — 일부 사용자 UI (digits이 icon 아래)
+      //   해결: 두 후보 영역의 ink density (edge pixel 비율) 비교
+      //         below가 right 대비 명확히(1.3배) 더 텍스트 같으면 세로 채택, 아니면 가로 default
+      const rightCand = {
+        x: Math.round(adenaIcon.x + adenaIcon.width + 3),
         y: Math.round(adenaIcon.y + adenaIcon.height * 0.1),
         width: Math.max(90, Math.round(adenaIcon.width * 2.5)),
         height: Math.round(adenaIcon.height * 0.8)
       };
+      const belowCand = {
+        x: Math.max(0, Math.round(adenaIcon.x - 5)),
+        y: Math.round(adenaIcon.y + adenaIcon.height * 0.85),
+        width: Math.max(50, Math.round(adenaIcon.width * 1.8)),
+        height: Math.max(20, Math.round(adenaIcon.height * 0.7))
+      };
+      let chosen = rightCand;
+      if (imageData) {
+        const rs = inkScore(imageData, rightCand.x, rightCand.y, rightCand.width, rightCand.height);
+        const bs = inkScore(imageData, belowCand.x, belowCand.y, belowCand.width, belowCand.height);
+        if (bs > rs * 1.3) chosen = belowCand;
+      }
+      rois.adena = chosen;
     }
 
     // 경계 클램프 — ADENA는 우측 overflow 허용 (gameRegion 외부도 captureStream에 있음)
@@ -483,7 +523,7 @@
     }
 
     const anchors = { hpBar, mpBar, expBar, adenaIcon };
-    const textROIs = deriveTextROIs(anchors, w, h);
+    const textROIs = deriveTextROIs(anchors, w, h, imageData);
     const validation = validateROIs(textROIs, anchors, w, h);
     issues.push(...validation.issues);
 
