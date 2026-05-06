@@ -140,6 +140,39 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.4.1 (2026-05-06) — 자동 모드 root cause 7종 + LV 텍스트 직접 검출 ⭐⭐⭐
+사용자 진단 13개 캡처 + 픽셀 레벨 분석으로 v1.4.0 자동 모드의 모든 잔여 root cause 해결.
+**핵심 발견**: EXP %가 0% 가까우면(레벨업 직후) 진행 막대가 거의 비어 자동 탐지 깨짐 → LV 텍스트 자체를 직접 검출하는 방식으로 막대 의존도 제거.
+
+수정 commit 시간순:
+1. `1cb81bd` setupCaptureStreams gameRegion 누락 — 자동 모드에서 캡처 스트림 미생성으로 ROI 캡처 무한 실패. 모드별 분기로 자동 모드 → gameRegion만, 수동 모드 → 5개 영역.
+2. `af05598` multi-candidate combinatorial search — HP/MP/EXP/ADENA 각 top-K 후보 간 layout 검증 통과 tuple 채택. 파티 HP 바, 채팅 빨간 텍스트 등 비표준 UI 회피.
+3. `4707fff` EXP-above-HP layout 지원 — 사용자 캐릭터 정보 패널은 EXP가 HP 위에 있는 경우 있음. 절대 가정 → 인접도 검증으로 완화.
+4. `53d0155` EXP/Level ROI 막대 위/아래 자동 + ADENA stale override 자동 해제 — 막대 height < 12px 시 inkScore 비교, ADENA sourceId stale 시 manual override 자동 무효화.
+5. `e2129ff` EXP/Level이 HP 바와 겹치는 후보 자동 제외 — `overlapsHp` 헬퍼로 HP 텍스트 오인 차단.
+6. `7fc2fe4` EXP/Level 다중 후보 inkScore 검색 — 막대 위 -3*TEXT_H ~ 아래 +4*TEXT_H 범위 후보 + HP 겹침 제외 + 최고 점수 채택.
+7. **`503795d` (핵심) `findLevelTextLines` — 좌측 미니 패널 LV 텍스트 직접 검출**. 흰/베이지 픽셀(lum>180, sat<0.35) 가로 라인 + cluster 분리. Level=좌측 cluster, EXP=우측 cluster. EXP %와 무관하게 작동.
+
+**검증** (사용자 진단 14-36-39):
+- ✅ MP 0/242 ×13
+- ✅ EXP 16.8151% · 90%
+- ✅ Level Lv.7 (3/3 일치) ×12
+- ⚠ ADENA template matching 진행 중 (점진 안정)
+
+**진단 도구 추가**:
+- `scripts/analyze-game-capture.js` — pngjs 픽셀 분석으로 HP/MP/EXP/ADENA 후보 시각화
+- `scripts/test-detect.js` — detectGameUI 결과 빠른 검증
+- `scripts/test-text-rois.js` — deriveTextROIs ROI 위치 검증 + ink density 비교
+- `scripts/find-text-around-expbar.js` — expBar 주변 ink/white pixel 분포 분석
+- `scripts/find-exp-on-left.js` — 좌측 미니 패널 색상 blob 검출
+- `scripts/analyze-lv-text.js` — LV 텍스트 라인 + 가로 cluster 픽셀 분석
+- `scripts/crop-roi.js` — game-region에서 임의 영역 잘라서 PNG 저장 (시각 확인용)
+
+**낚시 함정 (이번 세션 학습)**:
+- 진행 막대 의존 SPEC는 막대가 비어있으면(EXP=0%) 다른 픽셀을 오인. 텍스트 자체 검출이 더 안정.
+- inkScore 단독 비교는 채팅창 텍스트나 HP 바 자체를 EXP로 오인할 수 있음. **HP 겹침 제외 + 영역 위치 검증 필수**.
+- `cachedROIs` 5분 TTL 때문에 새 빌드 직후엔 사용자가 `🔄 재탐지` 버튼 눌러야 새 코드 적용됨.
+
 ### v1.4.0+ post-release fixes (2026-05-05) — 사용자 게임 실측 기반 root cause 5종 수정 ⭐⭐
 실제 사용자 환경 테스트 중 발견된 5가지 root cause 순차 수정 (모두 동일 v1.4.0 빌드 내):
 1. SPEC rev1 임계값 완화 (`2dc5422`) — 사용자 화면 hue 12/248/28 등 SPEC 범위 밖
