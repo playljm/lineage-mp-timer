@@ -387,54 +387,54 @@
     }
 
     if (expBar) {
-      // [v1.4.0+] 사용자 진단 (2026-05-06T13-02-14): EXP 막대 height=6 — 텍스트 ROI도 6px라
-      //   OCR이 거의 흰색만 보고 "???" 결과. 진짜 LV/EXP 숫자는 막대 위/아래에 있음.
-      // [v1.4.0+] 사용자 진단 (2026-05-06T13-12-09): below ROI가 HP 바(y=714 height=24)와
-      //   정확히 겹쳐 inkScore가 HP 텍스트를 EXP로 오인 (exp.png에 "HP:209/242" 캡처).
-      //   해결: HP 바와 y 영역 겹치는 후보는 자동 제외, 진짜 EXP 텍스트 영역만 후보로.
+      // [v1.4.0+] 사용자 진단 (2026-05-06T13-28-48 + ink density 픽셀 분석):
+      //   사용자 게임에서 진짜 EXP/Level 텍스트는 expBar 막대 +42~+60px 아래 (HP 바 너머)에 있음.
+      //   기존 단순 above/below 선택으론 HP 바를 뛰어넘어야 하는 케이스 대응 못 함.
+      //   해결: 막대로부터 위/아래 다양한 거리에서 후보 영역들을 만들어 HP 겹치지 않는 것 중
+      //         inkScore 가장 높은 영역 채택. 막대 두꺼우면(>=12px) 자체 사용 (기존 동작).
       const TEXT_H = Math.max(18, Math.round(expBar.height * 4));
-      const PAD = 1;
-      const expAbove = {
-        x: Math.round(expBar.x + expBar.width * 0.45),
-        y: Math.max(0, expBar.y - TEXT_H - PAD),
-        width: Math.round(expBar.width * 0.55),
-        height: TEXT_H
-      };
-      const expBelow = {
-        x: Math.round(expBar.x + expBar.width * 0.45),
-        y: expBar.y + expBar.height + PAD,
-        width: Math.round(expBar.width * 0.55),
-        height: TEXT_H
-      };
-      const lvlAbove = { x: Math.round(expBar.x), y: expAbove.y, width: Math.round(expBar.width * 0.4), height: TEXT_H };
-      const lvlBelow = { x: Math.round(expBar.x), y: expBelow.y, width: Math.round(expBar.width * 0.4), height: TEXT_H };
-      // HP 바와 y 영역 겹치는지 검사 (HP 텍스트가 잡혀 misdirection 방지)
+      const useExpand = expBar.height < 12;
+      const expX = Math.round(expBar.x + expBar.width * 0.45);
+      const expW = Math.round(expBar.width * 0.55);
+      const lvlX = Math.round(expBar.x);
+      const lvlW = Math.round(expBar.width * 0.4);
       function overlapsHp(roiY, roiH) {
         if (!hpBar) return false;
         const r1 = roiY, r2 = roiY + roiH;
         const h1 = hpBar.y, h2 = hpBar.y + hpBar.height;
         return Math.min(r2, h2) - Math.max(r1, h1) > 0;
       }
-      const useExpand = expBar.height < 12;
-      let useBelow = false;
-      if (useExpand) {
-        const aboveOk = !overlapsHp(expAbove.y, expAbove.height);
-        const belowOk = !overlapsHp(expBelow.y, expBelow.height);
-        if (aboveOk && !belowOk) useBelow = false;
-        else if (!aboveOk && belowOk) useBelow = true;
-        else if (aboveOk && belowOk && imageData) {
-          const aboveScore = inkScore(imageData, expAbove.x, expAbove.y, expAbove.width, expAbove.height);
-          const belowScore = inkScore(imageData, expBelow.x, expBelow.y, expBelow.width, expBelow.height);
-          useBelow = belowScore > aboveScore;
-        }
-        // 둘 다 HP 겹치면 above default (덜 위험 — 캐릭터 정보 패널 typical layout)
+      function makeRoi(y, x, w) {
+        return { x, y: Math.round(y), width: w, height: TEXT_H };
       }
       if (useExpand) {
-        rois.exp   = useBelow ? expBelow : expAbove;
-        rois.level = useBelow ? lvlBelow : lvlAbove;
+        // 후보 y: 막대 위 (-3*TEXT_H ~ -1*TEXT_H), 막대 아래 (+1px ~ +4*TEXT_H), step=TEXT_H/3
+        const yCands = [];
+        const step = Math.max(6, Math.floor(TEXT_H / 3));
+        for (let dy = -TEXT_H * 3; dy <= -TEXT_H + 2; dy += step) {
+          const y = expBar.y + dy;
+          if (y >= 0 && y + TEXT_H <= frameH) yCands.push(y);
+        }
+        for (let dy = expBar.height + 1; dy <= TEXT_H * 4; dy += step) {
+          const y = expBar.y + dy;
+          if (y >= 0 && y + TEXT_H <= frameH) yCands.push(y);
+        }
+        // 각 후보의 EXP 영역 inkScore 평가 (HP 겹침 후보는 제외)
+        let bestY = null, bestScore = -1;
+        for (const y of yCands) {
+          if (overlapsHp(y, TEXT_H)) continue;
+          if (!imageData) continue;
+          const s = inkScore(imageData, expX, y, expW, TEXT_H);
+          if (s > bestScore) { bestScore = s; bestY = y; }
+        }
+        // imageData 없거나 모든 후보 HP 겹침 시 fallback: above default
+        if (bestY === null) bestY = Math.max(0, expBar.y - TEXT_H - 1);
+        rois.exp = makeRoi(bestY, expX, expW);
+        rois.level = makeRoi(bestY, lvlX, lvlW);
       } else {
-        rois.exp   = { x: Math.round(expBar.x + expBar.width * 0.45), y: Math.round(expBar.y), width: Math.round(expBar.width * 0.55), height: Math.round(expBar.height) };
-        rois.level = { x: Math.round(expBar.x), y: Math.round(expBar.y), width: Math.round(expBar.width * 0.4), height: Math.round(expBar.height) };
+        // 막대 두꺼움 — 텍스트 포함 가정, 자체 사용
+        rois.exp   = { x: expX, y: Math.round(expBar.y), width: expW, height: Math.round(expBar.height) };
+        rois.level = { x: lvlX, y: Math.round(expBar.y), width: lvlW, height: Math.round(expBar.height) };
       }
     }
 
