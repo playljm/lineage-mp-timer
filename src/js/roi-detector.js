@@ -478,8 +478,13 @@
       }
     }
     if (hpBar && expBar) {
-      if (expBar.y <= hpBar.y) {
-        issues.push('EXP 바가 HP 바보다 위에 있음');
+      // [v1.4.0+] 사용자 진단 (2026-05-06T12-41-26): 진짜 사용자 게임에서 EXP 바가 HP 바 8px 위에 있음.
+      //   캐릭터 정보 패널 layout(EXP 위, HP/MP 아래)도 표준 리니지 클래식 UI의 한 형태.
+      //   기존 "EXP가 HP 아래" 절대 가정은 잘못 — 같은 패널 안 인접도로 완화.
+      const yDist = Math.abs(expBar.y - hpBar.y);
+      const tolerance = (hpBar.height + expBar.height) * 4 + 30;
+      if (yDist > tolerance) {
+        issues.push(`EXP 바가 HP 바와 너무 멀리 있음 (${yDist}px > ${tolerance}px)`);
       }
     }
     if (expBar && adenaIcon && rois.exp && rois.adena) {
@@ -537,7 +542,10 @@
     for (const hp of hpCands) {
       const mpCands = findMpBarCandidates(imageData, w, h, hp).slice(0, MP_TOP);
       for (const exp of expCands) {
-        if (exp.y <= hp.y) continue; // EXP 는 HP 아래
+        // [v1.4.0+] EXP 는 HP 위/아래 둘 다 valid (사용자 캐릭터 정보 패널 layout) — 인접도만 검증
+        const yDist = Math.abs(exp.y - hp.y);
+        const yTolerance = (hp.height + exp.height) * 4 + 30;
+        if (yDist > yTolerance) continue;
         for (const mp of mpCands) {
           if (mp.x <= hp.x + hp.width) continue; // MP 는 HP 우측
           if (!validateNegativeSpace(imageData, hp, mp)) continue; // 황금 프레임 검증
@@ -566,7 +574,7 @@
 
     // 통과 tuple 있었나? layout 모든 조건 만족 시 true
     const tupleFound = !!(chosenHp && chosenMp && chosenExp && chosenAdena
-      && chosenExp.y > chosenHp.y
+      && Math.abs(chosenExp.y - chosenHp.y) <= (chosenHp.height + chosenExp.height) * 4 + 30
       && chosenMp.x > chosenHp.x + chosenHp.width
       && validateNegativeSpace(imageData, chosenHp, chosenMp));
     if (!tupleFound && hpCands.length && expCands.length) {
