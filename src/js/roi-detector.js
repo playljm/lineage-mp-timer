@@ -214,7 +214,10 @@
   // HP 바: 빨강 (hue 350~20 wrap-around), sat>0.6, val>0.4, y_rel>0.6, 가로 세장형
   // [v1.4.0+] 사용자 진단 (2026-05-05T12-14-03 + 검증 스크립트): 게임 화면 HP가 hue 12 (오렌지에 가까운 빨강)
   // 기존 hue 355~5는 너무 엄격 → wrap 350~20으로 완화
-  function findHpBar(imageData, w, h) {
+  // [v1.4.0+] 사용자 진단 (2026-05-06T12-27-50): "EXP 바가 HP 바보다 위에 있음" — 파티 멤버 HP 바
+  //   채팅 빨간 텍스트 등 다른 빨간 객체가 HP로 잡혀 layout 검증 실패. 단일 best 대신 candidates 반환
+  //   detectGameUI가 HP×EXP×ADENA combinatorial로 layout-consistent tuple 선택.
+  function findHpBarCandidates(imageData, w, h) {
     const minArea = Math.max(20, Math.floor(w * h * 0.0008));
     const posFilter = (x, y, bw, bh) => {
       if (y < h * 0.6) return false;
@@ -225,16 +228,20 @@
       hueMin: 350, hueMax: 20, satMin: 0.6, valMin: 0.4,
       minArea, posFilter
     });
-    // 가로로 긴 (width/height > 3) blob 우선
+    // 가로로 긴 (width/height > 3) 후보 먼저, 그 외는 fallback (area DESC 유지)
     const wide = blobs.filter((b) => b.width / b.height > 3);
-    return wide.length > 0 ? wide[0] : (blobs[0] || null);
+    const rest = blobs.filter((b) => b.width / b.height <= 3);
+    return wide.concat(rest);
+  }
+  function findHpBar(imageData, w, h) {
+    return findHpBarCandidates(imageData, w, h)[0] || null;
   }
 
   // MP 바: 파랑 (hue 200~245), sat>0.20, val>0.30
   // [v1.4.0+] 검증 결과 진짜 MP 바는 어두운 회색-파랑 — 임계값 더 관대하게
   // HP 기준 인접: y ∈ [hp.y-30, hp.y+30+hp.h], x > hp.x + hp.w + w*0.03
-  function findMpBar(imageData, w, h, hpBar) {
-    if (!hpBar) return null;
+  function findMpBarCandidates(imageData, w, h, hpBar) {
+    if (!hpBar) return [];
     const yMin = hpBar.y - 40;
     const yMax = hpBar.y + hpBar.height + 40;
     const xMin = hpBar.x + hpBar.width + Math.floor(w * 0.03);
@@ -252,15 +259,19 @@
       satMin: 0.10, valMin: 0.25,
       minArea, posFilter
     });
-    // 채도 너무 높은 (선명한 순수 파랑/보라 = UI 강조 아이콘) 제외 — 진짜 MP 바는 sat<=0.85
-    const filtered = blobs.filter((b) => b.avgSat <= 0.85);
-    return filtered.length > 0 ? filtered[0] : (blobs[0] || null);
+    // 채도 너무 높은 (선명한 순수 파랑/보라 = UI 강조 아이콘) 후순위 — 진짜 MP 바는 sat<=0.85
+    const calm = blobs.filter((b) => b.avgSat <= 0.85);
+    const sharp = blobs.filter((b) => b.avgSat > 0.85);
+    return calm.concat(sharp);
+  }
+  function findMpBar(imageData, w, h, hpBar) {
+    return findMpBarCandidates(imageData, w, h, hpBar)[0] || null;
   }
 
   // EXP 바: 오렌지 (hue 12~38), sat>0.55, val>0.4, x_rel<0.30, y_rel ∈ [0.65, 0.95]
   // [v1.4.0+] 검증 결과 사용자 게임 EXP 바는 hue 28 (더 노랑 톤), 위치도 yRel 0.76 부근
   // 기존 hue 15-25 + yRel 0.76-0.88 너무 엄격 → 완화
-  function findExpBar(imageData, w, h) {
+  function findExpBarCandidates(imageData, w, h) {
     const minArea = Math.max(15, Math.floor(w * h * 0.0005));
     const posFilter = (x, y, bw, bh) => {
       if (x > w * 0.30) return false;
@@ -268,18 +279,20 @@
       if (bw / Math.max(1, bh) < 2) return false;
       return true;
     };
-    const blobs = findColorBlobs(imageData, {
+    return findColorBlobs(imageData, {
       hueMin: 12, hueMax: 38,
       satMin: 0.55, valMin: 0.4,
       minArea, posFilter
     });
-    return blobs[0] || null;
+  }
+  function findExpBar(imageData, w, h) {
+    return findExpBarCandidates(imageData, w, h)[0] || null;
   }
 
   // ADENA 아이콘: 노랑 (hue 42~62), sat>0.55, val>0.4, x_rel>0.80, y_rel>0.80
   // [v1.4.0+] 검증 결과 ADENA 위치가 yRel 0.86 (인벤토리 슬롯 그리드 중간)
   // 기존 yRel>0.90 너무 엄격 → 0.80으로 완화
-  function findAdenaIcon(imageData, w, h) {
+  function findAdenaIconCandidates(imageData, w, h) {
     const minArea = Math.max(10, Math.floor(w * h * 0.0002));
     const posFilter = (x, y, bw, bh) => {
       if (x < w * 0.80) return false;
@@ -288,12 +301,14 @@
       if (ar < 0.5 || ar > 2.0) return false;
       return true;
     };
-    const blobs = findColorBlobs(imageData, {
+    return findColorBlobs(imageData, {
       hueMin: 42, hueMax: 62,
       satMin: 0.55, valMin: 0.4,
       minArea, posFilter
     });
-    return blobs[0] || null;
+  }
+  function findAdenaIcon(imageData, w, h) {
+    return findAdenaIconCandidates(imageData, w, h)[0] || null;
   }
 
   // =========================================================================
@@ -503,26 +518,65 @@
     const h = imageData.height;
     const issues = [];
 
-    const hpBar = findHpBar(imageData, w, h);
-    if (!hpBar) issues.push('HP 바 미탐지 (빨강)');
+    // [v1.4.0+] 사용자 진단 (2026-05-06T12-27-50): 단일 best 후보로는 파티 HP 바/채팅 빨간 텍스트 등
+    //   비표준 UI 요소가 HP로 오인되어 layout 검증 실패. Multi-candidate combinatorial search로 강화.
+    //   각 anchor의 top-K 후보를 가져와 layout-consistent tuple 첫 번째를 채택.
+    const HP_TOP = 5, EXP_TOP = 5, ADENA_TOP = 5, MP_TOP = 3;
+    const hpCands = findHpBarCandidates(imageData, w, h).slice(0, HP_TOP);
+    const expCands = findExpBarCandidates(imageData, w, h).slice(0, EXP_TOP);
+    const adenaCands = findAdenaIconCandidates(imageData, w, h).slice(0, ADENA_TOP);
 
-    const mpBar = findMpBar(imageData, w, h, hpBar);
-    if (!mpBar) issues.push('MP 바 미탐지 (파랑)');
+    if (hpCands.length === 0) issues.push('HP 바 미탐지 (빨강)');
+    if (expCands.length === 0) issues.push('EXP 바 미탐지 (오렌지)');
+    if (adenaCands.length === 0) issues.push('ADENA 아이콘 미탐지 (노랑)');
 
-    const expBar = findExpBar(imageData, w, h);
-    if (!expBar) issues.push('EXP 바 미탐지 (오렌지)');
-
-    const adenaIcon = findAdenaIcon(imageData, w, h);
-    if (!adenaIcon) issues.push('ADENA 아이콘 미탐지 (노랑)');
-
-    // negative space 검증 (HP/MP 모두 있을 때만)
-    if (hpBar && mpBar) {
-      if (!validateNegativeSpace(imageData, hpBar, mpBar)) {
-        issues.push('HP/MP 사이 황금 프레임 미확인 (false positive 가능)');
+    // Combinatorial layout 검증 — 첫 통과 tuple 채택
+    let chosenHp = null, chosenMp = null, chosenExp = null, chosenAdena = null;
+    let triedCombos = 0;
+    outer:
+    for (const hp of hpCands) {
+      const mpCands = findMpBarCandidates(imageData, w, h, hp).slice(0, MP_TOP);
+      for (const exp of expCands) {
+        if (exp.y <= hp.y) continue; // EXP 는 HP 아래
+        for (const mp of mpCands) {
+          if (mp.x <= hp.x + hp.width) continue; // MP 는 HP 우측
+          if (!validateNegativeSpace(imageData, hp, mp)) continue; // 황금 프레임 검증
+          // ADENA: rois 좌표 기준 검증 — exp ROI 우측에 있어야
+          for (const ad of adenaCands) {
+            triedCombos++;
+            const tentAnchors = { hpBar: hp, mpBar: mp, expBar: exp, adenaIcon: ad };
+            const tentROIs = deriveTextROIs(tentAnchors, w, h, imageData);
+            if (tentROIs.adena && tentROIs.exp && tentROIs.adena.x > tentROIs.exp.x) {
+              chosenHp = hp; chosenMp = mp; chosenExp = exp; chosenAdena = ad;
+              break outer;
+            }
+          }
+        }
       }
     }
 
-    const anchors = { hpBar, mpBar, expBar, adenaIcon };
+    // 통과 tuple 없으면 fallback — 기존 동작 유지 + 진단용 issue 기록
+    if (!chosenHp) chosenHp = hpCands[0] || null;
+    if (!chosenExp) chosenExp = expCands[0] || null;
+    if (!chosenAdena) chosenAdena = adenaCands[0] || null;
+    if (!chosenMp && chosenHp) {
+      chosenMp = findMpBarCandidates(imageData, w, h, chosenHp)[0] || null;
+    }
+    if (!chosenMp) issues.push('MP 바 미탐지 (파랑)');
+
+    // 통과 tuple 있었나? layout 모든 조건 만족 시 true
+    const tupleFound = !!(chosenHp && chosenMp && chosenExp && chosenAdena
+      && chosenExp.y > chosenHp.y
+      && chosenMp.x > chosenHp.x + chosenHp.width
+      && validateNegativeSpace(imageData, chosenHp, chosenMp));
+    if (!tupleFound && hpCands.length && expCands.length) {
+      issues.push(`레이아웃 검증 통과 조합 없음 (HP×EXP×ADENA ${hpCands.length}×${expCands.length}×${adenaCands.length} 시도, ${triedCombos} 조합)`);
+    }
+    if (!tupleFound && chosenHp && chosenMp && !validateNegativeSpace(imageData, chosenHp, chosenMp)) {
+      issues.push('HP/MP 사이 황금 프레임 미확인 (false positive 가능)');
+    }
+
+    const anchors = { hpBar: chosenHp, mpBar: chosenMp, expBar: chosenExp, adenaIcon: chosenAdena };
     const textROIs = deriveTextROIs(anchors, w, h, imageData);
     const validation = validateROIs(textROIs, anchors, w, h);
     issues.push(...validation.issues);
@@ -530,7 +584,7 @@
     return {
       anchors,
       textROIs,
-      valid: !!(validation.valid && hpBar && mpBar && expBar && adenaIcon),
+      valid: !!(validation.valid && chosenHp && chosenMp && chosenExp && chosenAdena),
       issues
     };
   }
@@ -544,9 +598,13 @@
     rgbToHsv,
     findColorBlobs,
     findHpBar,
+    findHpBarCandidates,
     findMpBar,
+    findMpBarCandidates,
     findExpBar,
+    findExpBarCandidates,
     findAdenaIcon,
+    findAdenaIconCandidates,
     validateNegativeSpace,
     deriveTextROIs,
     validateROIs
