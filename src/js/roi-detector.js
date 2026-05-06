@@ -372,6 +372,86 @@
     return total > 0 ? edges / total : 0;
   }
 
+  // [v1.4.0+] 사용자 진단 (2026-05-06T13-37-58 + 픽셀 분석):
+  //   EXP가 0%에 가까우면 진행 막대가 거의 안 채워져 자동 탐지가 다른 객체를 EXP로 오인.
+  //   해결: LV 텍스트 자체를 검출하여 막대 의존도 제거.
+  // 좌측 미니 패널 영역에서 흰/베이지 픽셀 가로 라인을 검출하여 첫 번째 라인의
+  // 좌측(LEV) + 우측(EXP%) cluster bounding box 반환.
+  function findLevelTextLines(imageData, frameW, frameH) {
+    if (!imageData || !imageData.data) return [];
+    const data = imageData.data;
+    const fw = imageData.width;
+    const xMin = 0;
+    const xMax = Math.floor(frameW * 0.20);
+    const yMin = Math.floor(frameH * 0.75);
+    const yMax = Math.floor(frameH * 0.95);
+    const isText = (r, g, b) => {
+      const max = Math.max(r, g, b), min = Math.min(r, g, b);
+      const lum = (r + g + b) / 3;
+      const sat = max === 0 ? 0 : (max - min) / max;
+      return lum > 180 && sat < 0.35;
+    };
+    // 행별 텍스트 픽셀 수
+    const rowCounts = [];
+    for (let y = yMin; y < yMax; y++) {
+      let count = 0;
+      for (let x = xMin; x < xMax; x++) {
+        const i = (y * fw + x) * 4;
+        if (isText(data[i], data[i+1], data[i+2])) count++;
+      }
+      rowCounts.push({ y, count });
+    }
+    // 텍스트 라인 그룹화 (count >= 15 + 인접 행)
+    const lines = [];
+    let lineStart = null;
+    for (let i = 0; i < rowCounts.length; i++) {
+      const c = rowCounts[i].count;
+      if (c >= 15 && lineStart === null) lineStart = rowCounts[i].y;
+      else if (c < 15 && lineStart !== null) {
+        if (rowCounts[i].y - lineStart >= 8) {
+          lines.push({ yStart: lineStart, yEnd: rowCounts[i].y - 1, height: rowCounts[i].y - lineStart });
+        }
+        lineStart = null;
+      }
+    }
+    if (lineStart !== null) {
+      const last = rowCounts[rowCounts.length - 1];
+      lines.push({ yStart: lineStart, yEnd: last.y, height: last.y - lineStart });
+    }
+    // 각 라인에서 가로 cluster 검출
+    for (const line of lines) {
+      const colHits = new Array(xMax - xMin).fill(0);
+      for (let y = line.yStart; y <= line.yEnd; y++) {
+        for (let x = xMin; x < xMax; x++) {
+          const i = (y * fw + x) * 4;
+          if (isText(data[i], data[i+1], data[i+2])) colHits[x - xMin]++;
+        }
+      }
+      const minColPixels = Math.max(1, Math.floor(line.height * 0.2));
+      const clusters = [];
+      let cs = null;
+      for (let x = 0; x < colHits.length; x++) {
+        if (colHits[x] >= minColPixels) {
+          if (cs === null) cs = x;
+        } else if (cs !== null) {
+          // 글자 사이 작은 gap (3px) 무시
+          let gapEnd = -1;
+          for (let nx = x + 1; nx <= Math.min(x + 3, colHits.length - 1); nx++) {
+            if (colHits[nx] >= minColPixels) { gapEnd = nx; break; }
+          }
+          if (gapEnd > 0) { x = gapEnd - 1; continue; }
+          if (x - cs >= 8) clusters.push({ xStart: cs, xEnd: x - 1, width: x - cs });
+          cs = null;
+        }
+      }
+      if (cs !== null && colHits.length - cs >= 8) {
+        clusters.push({ xStart: cs, xEnd: colHits.length - 1, width: colHits.length - cs });
+      }
+      line.clusters = clusters;
+    }
+    return lines;
+  }
+
   function deriveTextROIs(anchors, frameW, frameH, imageData) {
     const { hpBar, mpBar, expBar, adenaIcon } = anchors;
     const rois = {};
@@ -387,54 +467,84 @@
     }
 
     if (expBar) {
-      // [v1.4.0+] 사용자 진단 (2026-05-06T13-28-48 + ink density 픽셀 분석):
-      //   사용자 게임에서 진짜 EXP/Level 텍스트는 expBar 막대 +42~+60px 아래 (HP 바 너머)에 있음.
-      //   기존 단순 above/below 선택으론 HP 바를 뛰어넘어야 하는 케이스 대응 못 함.
-      //   해결: 막대로부터 위/아래 다양한 거리에서 후보 영역들을 만들어 HP 겹치지 않는 것 중
-      //         inkScore 가장 높은 영역 채택. 막대 두꺼우면(>=12px) 자체 사용 (기존 동작).
-      const TEXT_H = Math.max(18, Math.round(expBar.height * 4));
+      // [v1.4.0+] 사용자 진단 (2026-05-06T13-37-58 + 픽셀 분석):
+      //   EXP가 0%에 가까우면 막대 의존 탐지가 노이즈를 EXP로 오인.
+      //   해결: 막대가 얇으면(height<12) findLevelTextLines로 좌측 미니 패널의
+      //         LV 텍스트 라인을 직접 검출하여 ROI 도출. 막대 두꺼우면 기존 동작.
       const useExpand = expBar.height < 12;
-      const expX = Math.round(expBar.x + expBar.width * 0.45);
-      const expW = Math.round(expBar.width * 0.55);
-      const lvlX = Math.round(expBar.x);
-      const lvlW = Math.round(expBar.width * 0.4);
-      function overlapsHp(roiY, roiH) {
-        if (!hpBar) return false;
-        const r1 = roiY, r2 = roiY + roiH;
-        const h1 = hpBar.y, h2 = hpBar.y + hpBar.height;
-        return Math.min(r2, h2) - Math.max(r1, h1) > 0;
-      }
-      function makeRoi(y, x, w) {
-        return { x, y: Math.round(y), width: w, height: TEXT_H };
-      }
-      if (useExpand) {
-        // 후보 y: 막대 위 (-3*TEXT_H ~ -1*TEXT_H), 막대 아래 (+1px ~ +4*TEXT_H), step=TEXT_H/3
-        const yCands = [];
-        const step = Math.max(6, Math.floor(TEXT_H / 3));
-        for (let dy = -TEXT_H * 3; dy <= -TEXT_H + 2; dy += step) {
-          const y = expBar.y + dy;
-          if (y >= 0 && y + TEXT_H <= frameH) yCands.push(y);
+      const expX_bar = Math.round(expBar.x + expBar.width * 0.45);
+      const expW_bar = Math.round(expBar.width * 0.55);
+      const lvlX_bar = Math.round(expBar.x);
+      const lvlW_bar = Math.round(expBar.width * 0.4);
+      if (useExpand && imageData) {
+        // 1차: LV 텍스트 라인 검출 시도 (좌측 미니 패널)
+        const textLines = findLevelTextLines(imageData, frameW, frameH);
+        // 2개 이상 cluster를 가진 첫 번째 라인 사용 (LEV 좌측 + EXP% 우측 layout)
+        const lvLine = textLines.find((l) => l.clusters && l.clusters.length >= 2);
+        if (lvLine) {
+          const PAD_Y = 4;
+          const PAD_X = 2;
+          const y = Math.max(0, lvLine.yStart - PAD_Y);
+          const h = Math.min(frameH - y, lvLine.height + PAD_Y * 2);
+          // 가장 좌측 cluster = Level, 가장 우측 cluster들의 통합 = EXP%
+          const sorted = lvLine.clusters.slice().sort((a, b) => a.xStart - b.xStart);
+          const leftMost = sorted[0];
+          const rightMost = sorted[sorted.length - 1];
+          // Level: 첫 cluster (LEV + 숫자) — 인접한 cluster 통합
+          let lvlEnd = sorted[0].xEnd;
+          for (let i = 1; i < sorted.length; i++) {
+            if (sorted[i].xStart - lvlEnd <= 25) lvlEnd = sorted[i].xEnd;
+            else break;
+          }
+          // EXP%: 우측 cluster들 통합 — Level cluster 끝 이후의 모든 cluster
+          let expStart_x = -1;
+          for (const c of sorted) {
+            if (c.xStart > lvlEnd + 10) { expStart_x = c.xStart; break; }
+          }
+          if (expStart_x < 0) expStart_x = rightMost.xStart;
+          rois.level = {
+            x: Math.max(0, leftMost.xStart - PAD_X),
+            y: y,
+            width: (lvlEnd - leftMost.xStart) + PAD_X * 2,
+            height: h
+          };
+          rois.exp = {
+            x: Math.max(0, expStart_x - PAD_X),
+            y: y,
+            width: (rightMost.xEnd - expStart_x) + PAD_X * 2,
+            height: h
+          };
+        } else {
+          // 2차 fallback: 막대 위/아래 후보 inkScore 검색 (이전 fix)
+          const TEXT_H = Math.max(18, Math.round(expBar.height * 4));
+          function overlapsHp(roiY, roiH) {
+            if (!hpBar) return false;
+            return Math.min(roiY + roiH, hpBar.y + hpBar.height) - Math.max(roiY, hpBar.y) > 0;
+          }
+          const yCands = [];
+          const step = Math.max(6, Math.floor(TEXT_H / 3));
+          for (let dy = -TEXT_H * 3; dy <= -TEXT_H + 2; dy += step) {
+            const y2 = expBar.y + dy;
+            if (y2 >= 0 && y2 + TEXT_H <= frameH) yCands.push(y2);
+          }
+          for (let dy = expBar.height + 1; dy <= TEXT_H * 4; dy += step) {
+            const y2 = expBar.y + dy;
+            if (y2 >= 0 && y2 + TEXT_H <= frameH) yCands.push(y2);
+          }
+          let bestY = null, bestScore = -1;
+          for (const y of yCands) {
+            if (overlapsHp(y, TEXT_H)) continue;
+            const s = inkScore(imageData, expX_bar, y, expW_bar, TEXT_H);
+            if (s > bestScore) { bestScore = s; bestY = y; }
+          }
+          if (bestY === null) bestY = Math.max(0, expBar.y - TEXT_H - 1);
+          rois.exp   = { x: expX_bar, y: Math.round(bestY), width: expW_bar, height: TEXT_H };
+          rois.level = { x: lvlX_bar, y: Math.round(bestY), width: lvlW_bar, height: TEXT_H };
         }
-        for (let dy = expBar.height + 1; dy <= TEXT_H * 4; dy += step) {
-          const y = expBar.y + dy;
-          if (y >= 0 && y + TEXT_H <= frameH) yCands.push(y);
-        }
-        // 각 후보의 EXP 영역 inkScore 평가 (HP 겹침 후보는 제외)
-        let bestY = null, bestScore = -1;
-        for (const y of yCands) {
-          if (overlapsHp(y, TEXT_H)) continue;
-          if (!imageData) continue;
-          const s = inkScore(imageData, expX, y, expW, TEXT_H);
-          if (s > bestScore) { bestScore = s; bestY = y; }
-        }
-        // imageData 없거나 모든 후보 HP 겹침 시 fallback: above default
-        if (bestY === null) bestY = Math.max(0, expBar.y - TEXT_H - 1);
-        rois.exp = makeRoi(bestY, expX, expW);
-        rois.level = makeRoi(bestY, lvlX, lvlW);
       } else {
         // 막대 두꺼움 — 텍스트 포함 가정, 자체 사용
-        rois.exp   = { x: expX, y: Math.round(expBar.y), width: expW, height: Math.round(expBar.height) };
-        rois.level = { x: lvlX, y: Math.round(expBar.y), width: lvlW, height: Math.round(expBar.height) };
+        rois.exp   = { x: expX_bar, y: Math.round(expBar.y), width: expW_bar, height: Math.round(expBar.height) };
+        rois.level = { x: lvlX_bar, y: Math.round(expBar.y), width: lvlW_bar, height: Math.round(expBar.height) };
       }
     }
 
