@@ -4794,6 +4794,13 @@
     autoDetect.mpRegion    = toAbsRegion(textROIs.mp);
     autoDetect.expRegion   = toAbsRegion(textROIs.exp);
     autoDetect.levelRegion = toAbsRegion(textROIs.level);
+    // [v1.4.0+] 사용자 진단 (2026-05-06T13-02-14): _adenaManualOverride=true 인데 stale sourceId(screen:0:0)로
+    //   "캡처 스트림이 없습니다" 무한 실패. 자동 모드에서 override 영역이 다른 모니터(stale)면 자동 해제.
+    if (autoDetect._adenaManualOverride && autoDetect.adenaRegion
+        && autoDetect.adenaRegion.sourceId !== gr.sourceId) {
+      pushHybridLog('🤖 ADENA 수동 override가 다른 모니터(stale: ' + autoDetect.adenaRegion.sourceId + ' vs gameRegion: ' + gr.sourceId + ') — 자동 해제');
+      autoDetect._adenaManualOverride = false;
+    }
     // [v1.4.0+] ADENA 수동 override 존중 — 사용자 진단 (2026-05-05T13-24-06):
     //   자동 탐지가 인벤토리 노란 아이템을 ADENA로 오인하는 케이스 (UI 다양성)
     //   _adenaManualOverride 플래그 있으면 사용자 지정 ADENA 영역 보존
