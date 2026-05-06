@@ -1813,10 +1813,29 @@
 
   async function setupCaptureStreams() {
     // 사용 중인 모든 sourceId의 스트림 준비
+    // [v1.4.0+] 사용자 진단 (2026-05-06T12-07-31): 자동 모드에서 gameRegion 누락 → 캡처 스트림 미생성
+    //   원인: 자동 모드는 gameRegion만 지정하고 mp/mpBar/exp/level/adena는 이전 세션 stale 값.
+    //         setupCaptureStreams가 stale sourceId로만 스트림을 만들고 gameRegion(screen:1:0)은 빠뜨려
+    //         ensureAutoModeROIs가 매 틱 "캡처 스트림이 없습니다" 실패. screen:0:0 스트림으로 캡처돼도
+    //         좌표가 다른 모니터의 가상 데스크톱 좌표라 빈 영역(검은/흰 픽셀) → OCR 전부 실패.
+    //   해결: 모드별로 필요한 region만 사용. 자동 모드 → gameRegion만. 수동 모드 → 5개 영역.
+    //         이렇게 해야 OFF 모드의 stale sourceId가 getUserMedia 실패를 일으키지 않음.
     const sourceIds = new Set();
-    [autoDetect.mpRegion, autoDetect.mpBarRegion, autoDetect.expRegion, autoDetect.levelRegion, autoDetect.adenaRegion]
-      .forEach((r) => { if (r && r.sourceId) sourceIds.add(r.sourceId); });
-    if (sourceIds.size === 0) throw new Error('지정된 영역의 sourceId가 없습니다');
+    if (autoDetect.mode === 'auto') {
+      // 자동 모드: gameRegion이 단일 진실 — mp/exp/level/adena는 이후 ensureAutoModeROIs가 동적 할당
+      if (autoDetect.gameRegion && autoDetect.gameRegion.sourceId) {
+        sourceIds.add(autoDetect.gameRegion.sourceId);
+      }
+    } else {
+      // 수동 모드: 사용자가 직접 지정한 영역들의 sourceId
+      [autoDetect.mpRegion, autoDetect.mpBarRegion, autoDetect.expRegion, autoDetect.levelRegion, autoDetect.adenaRegion]
+        .forEach((r) => { if (r && r.sourceId) sourceIds.add(r.sourceId); });
+    }
+    if (sourceIds.size === 0) {
+      throw new Error(autoDetect.mode === 'auto'
+        ? '게임 화면 영역이 미지정 — [📷 게임 화면 영역 지정] 버튼으로 영역을 잡아주세요'
+        : '지정된 영역의 sourceId가 없습니다');
+    }
     // 사용 안 하는 stream 정리
     Array.from(captureStreams.keys()).forEach((sid) => {
       if (!sourceIds.has(sid)) {
