@@ -389,12 +389,11 @@
     if (expBar) {
       // [v1.4.0+] 사용자 진단 (2026-05-06T13-02-14): EXP 막대 height=6 — 텍스트 ROI도 6px라
       //   OCR이 거의 흰색만 보고 "???" 결과. 진짜 LV/EXP 숫자는 막대 위/아래에 있음.
-      //   해결: 막대 위/아래 후보 영역을 typical text height(18~24px)로 확장하고
-      //         inkScore로 텍스트 밀도 높은 쪽 채택 (ADENA 패턴과 동일).
-      //   ADENA와 다른 점: EXP/Level은 같은 막대를 좌우로 분할하므로 위/아래 결정은 공유.
+      // [v1.4.0+] 사용자 진단 (2026-05-06T13-12-09): below ROI가 HP 바(y=714 height=24)와
+      //   정확히 겹쳐 inkScore가 HP 텍스트를 EXP로 오인 (exp.png에 "HP:209/242" 캡처).
+      //   해결: HP 바와 y 영역 겹치는 후보는 자동 제외, 진짜 EXP 텍스트 영역만 후보로.
       const TEXT_H = Math.max(18, Math.round(expBar.height * 4));
-      const PAD = 1; // 막대와 텍스트 사이 여백
-      // 우측(EXP 숫자) — 막대 위 후보
+      const PAD = 1;
       const expAbove = {
         x: Math.round(expBar.x + expBar.width * 0.45),
         y: Math.max(0, expBar.y - TEXT_H - PAD),
@@ -407,22 +406,33 @@
         width: Math.round(expBar.width * 0.55),
         height: TEXT_H
       };
-      // 좌측(Level) 같은 위치 결정에 따름
       const lvlAbove = { x: Math.round(expBar.x), y: expAbove.y, width: Math.round(expBar.width * 0.4), height: TEXT_H };
       const lvlBelow = { x: Math.round(expBar.x), y: expBelow.y, width: Math.round(expBar.width * 0.4), height: TEXT_H };
-      // 막대 자체 (height=6) 케이스만 위/아래 inkScore 비교, 막대가 두꺼우면 자체 사용
+      // HP 바와 y 영역 겹치는지 검사 (HP 텍스트가 잡혀 misdirection 방지)
+      function overlapsHp(roiY, roiH) {
+        if (!hpBar) return false;
+        const r1 = roiY, r2 = roiY + roiH;
+        const h1 = hpBar.y, h2 = hpBar.y + hpBar.height;
+        return Math.min(r2, h2) - Math.max(r1, h1) > 0;
+      }
       const useExpand = expBar.height < 12;
       let useBelow = false;
-      if (useExpand && imageData) {
-        const aboveScore = inkScore(imageData, expAbove.x, expAbove.y, expAbove.width, expAbove.height);
-        const belowScore = inkScore(imageData, expBelow.x, expBelow.y, expBelow.width, expBelow.height);
-        useBelow = belowScore > aboveScore;
+      if (useExpand) {
+        const aboveOk = !overlapsHp(expAbove.y, expAbove.height);
+        const belowOk = !overlapsHp(expBelow.y, expBelow.height);
+        if (aboveOk && !belowOk) useBelow = false;
+        else if (!aboveOk && belowOk) useBelow = true;
+        else if (aboveOk && belowOk && imageData) {
+          const aboveScore = inkScore(imageData, expAbove.x, expAbove.y, expAbove.width, expAbove.height);
+          const belowScore = inkScore(imageData, expBelow.x, expBelow.y, expBelow.width, expBelow.height);
+          useBelow = belowScore > aboveScore;
+        }
+        // 둘 다 HP 겹치면 above default (덜 위험 — 캐릭터 정보 패널 typical layout)
       }
       if (useExpand) {
         rois.exp   = useBelow ? expBelow : expAbove;
         rois.level = useBelow ? lvlBelow : lvlAbove;
       } else {
-        // 막대 두꺼우면(텍스트 포함) 기존 동작
         rois.exp   = { x: Math.round(expBar.x + expBar.width * 0.45), y: Math.round(expBar.y), width: Math.round(expBar.width * 0.55), height: Math.round(expBar.height) };
         rois.level = { x: Math.round(expBar.x), y: Math.round(expBar.y), width: Math.round(expBar.width * 0.4), height: Math.round(expBar.height) };
       }
