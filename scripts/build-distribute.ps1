@@ -69,6 +69,12 @@ Write-Host "  + QUICKSTART.txt"
 
 # 4) CHANGELOG.txt
 $Changelog = "[LineageMPTimer v$Version - 변경내역]`r`n`r`n" +
+"== v1.4.1 자동 모드 root cause 5종 수정 (2026-05-06) ==`r`n" +
+"- EXP가 0% 가까울 때(레벨업 직후) 자동 탐지 실패 -> LV 텍스트 직접 검출로 해결`r`n" +
+"- HP/MP 캡처 스트림 누락(자동 모드 gameRegion 빠짐) 수정`r`n" +
+"- HP/EXP 위치 검증을 인접도 기반으로 완화 -> 사용자 캐릭터 정보 패널 layout 지원`r`n" +
+"- ADENA 수동 override stale sourceId 자동 해제`r`n" +
+"- multi-candidate combinatorial search -> 파티 HP / 채팅 빨간 텍스트 회피`r`n`r`n" +
 "== 새로운 기능 - 자동 ROI 탐지 (v1.4.0) ==`r`n" +
 "- 게임 화면 영역 1개만 드래그하면 MP/경험치/레벨/아데나 위치 자동 탐지`r`n" +
 "- 셋업 시간 5분 -> 1분`r`n" +
