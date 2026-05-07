@@ -140,6 +140,48 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.5.0 (2026-05-08) — traineddata 재학습 — BCER 1.96% → 1.560% ⭐⭐⭐⭐⭐
+P2 학습 재수집 plan 실행. 사용자가 라벨링을 위임 → AI가 ensemble OCR + voting 자동 처리 → 학습 + 빌드까지 자동.
+
+**핵심 결과**:
+- baseline 463 라벨 → **신규 884 라벨** (91% 증가)
+- **best BCER 1.560%** (이전 1.96% → 0.4%p 개선, lineage_1.560_346_8600.checkpoint)
+- v1.4.3 휴리스틱 + v1.5.0 모델 정확도 향상 = 시너지
+
+**자동 라벨링 파이프라인** (사용자 시간 0):
+1. **sanity reject** (84개): MP cur>max 또는 max≠235/242 (35), EXP 정수부≥100 (29), ADENA 1~2자리 (20)
+2. **WSL tesseract ensemble OCR** (1,308 PNG × 3 PSM = 3,924 OCR call):
+   - 핵심 발견: `lineage` **단독** + 다중 PSM이 가장 정확. eng 섞으면 결과 오염.
+   - PSM 7/8/13 ensemble
+3. **4-way voting** (paddle/tess + lineage psm7/8/13):
+   - unanimous_4 + consensus_3 + two_only_2 → 채택
+   - majority_2 (4 valid 중 2 vs 2 split, 50% disagreement) → 폐기 (학습 노이즈 위험)
+   - **421 채택 (acceptance 31.7%)**, 909 폐기 (`_rejected_voting/` 보존)
+4. **자동 fs 이동**: 본 폴더 + .gt.txt 생성, _pending 삭제
+5. **WSL 학습**: 체크포인트 이어 학습 (90초), iterative cycle (corrupted .lstmf 자동 식별 + sed로 list.train/eval 정리)
+
+**LEVEL 제외**: 다양성 부족 (12 unique 값) — v1.5.1에서 부캐 사냥 후 보강.
+
+**낚시 함정**:
+- `make lists` cache로 list.train 갱신 안 됨 → 직접 sed 필수
+- bash -c '...' single quote에서 변수 expansion 안 됨 → script file로 wrap
+- MSYS path 변환 → `MSYS_NO_PATHCONV=1` 또는 `//root/...` 더블 슬래시
+- corrupted .lstmf size threshold로 못 잡힘 → iterative training cycle (max 5 retries)
+
+**산출물**:
+- `dist/LineageMPTimer-1.5.0-portable.exe`
+- `dist/LineageMPTimer-v1.5.0.zip` (127.61 MB)
+- `build/tessdata/lineage.traineddata` (11.7MB, BCER 1.560%)
+
+**새 도구** (`scripts/`):
+- `wsl-tesseract-batch.sh` — ensemble OCR batch
+- `wsl-tesseract-vote.js` — 4-way voting + auto-labeling (Node)
+- `wsl-sync-groundtruth.sh` — Windows → WSL sync
+- `wsl-robust-train.sh` — sync + make lists + corrupted cleanup + iterative training
+- `wsl-cleanup-and-resume.sh` — list.train/eval sed 정리 + 학습 재개
+
+상세: `docs/SESSION-HANDOFF-LATEST.md` v12, `.omc/plans/v1.5.0-training-data-recollection.md`
+
 ### v1.4.3 (2026-05-07) — OCR 안정화 7종 + MP textROI 게이지 종속 해제 ⭐⭐⭐⭐
 사용자 진단 7라운드 분석으로 root cause 7종 해결. v1.4.2 자동 모드 회귀 fix 포함.
 

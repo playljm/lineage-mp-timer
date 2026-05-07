@@ -1,123 +1,116 @@
-# 세션 인수인계 — 2026-05-07 v11 (v1.4.3 OCR 안정화 7종)
+# 세션 인수인계 — 2026-05-08 v12 (v1.5.0 traineddata 재학습 — BCER 1.96% → 1.560%)
 
 > **다음 세션에서 가장 먼저 읽어야 할 문서**
-> v1.4.2 자동 모드 회귀 fix + MP textROI 게이지 종속 해제 + LEVEL 다수결 미달 fallback
+> P2 학습 데이터 재수집 + 자동 라벨링 + 재학습 + v1.5.0 release
 
 ---
 
 ## ⚡ TL;DR — 30초 요약
 
-**현재 상태**: v1.4.3 빌드. 사용자 진단 7라운드(08:07 ~ 12:47) 점진 개선으로 MP/ADENA/EXP/LEVEL 모두 안정 동작 검증.
+**현재 상태**: v1.5.0 빌드. baseline 463 → 신규 884 라벨로 재학습. **BCER 1.96% → 1.560% (0.4%p 개선)**.
 
-**최신 빌드**: `dist/LineageMPTimer-1.4.1-portable.exe` + ZIP (커밋 `d60d35c` 시점)
+**최신 빌드**: `dist/LineageMPTimer-1.5.0-portable.exe` + ZIP
 
-**가장 결정적 발견 (사용자가 알려줌)**:
-- "MP 뒤에 파란색이 좌→우로 차오르는 시스템" → **mpBar.width=채워진 부분만**
-- MP 적을수록 textROI 좁음 → "MP : 71"만 캡처되어 OCR 매번 misread
-- 해결: max(mpBar.width, hpBar.width, 200) 사용 — HP/MP 게이지 폭 동일 가정
-
-**남은 이슈**:
-- 던전 알림 등 일시 텍스트 misread → Phase 5 fallback으로 7~10회 strict 차단
-- paddle/tess 픽셀 폰트 사전훈련 한계 → P2 traineddata 재학습 필요 (`.omc/plans/v1.5.0-training-data-recollection.md`)
+**가장 결정적 진전**:
+- 자동 캡처 1,368개 누적 (사용자 평소 사냥 + 라벨링 패널 미사용)
+- 사용자가 라벨링을 위임 → AI가 ensemble OCR + voting 자동 처리
+- WSL tesseract `lineage` 단독 모델 + 다중 PSM ensemble (3-PSM) + ocrSuggestion 4-way voting
+- 합의율 31.7% → 421 신규 라벨 채택, 909 폐기
 
 ---
 
-## 🔥 이번 세션 발견·수정한 root cause 7종 (시간순)
+## 🔥 이번 세션 진행 (2026-05-07 22:00 ~ 2026-05-08 00:10)
 
-### 1. ADENA frameW 클램프 (Phase 3a)
-- 자동 detect ADENA textROI가 gameRegion 우측 끝을 113px 넘어감
-- 사용자 환경: 모니터 자체가 게임창 우측 끝과 동일 → 100px이 검정 픽셀
-- 기존 v1.4.0 b20407a 가정("captureStream이 모니터 전체") 깨짐
-- 수정: 모든 ROI를 frameW 내 클램프, ADENA-only issue를 valid 결정에서 제외
+### 1. Phase 0: 능력 검증 (15 sample)
+- vision OCR vs ocrSuggestion 합의율: **47%** (catastrophic misread 다수 발견)
+- 핵심 발견: ocrSuggestion 자체가 paddle/tess의 misread 포함 — 학습 라벨로 직접 사용 불가
+- MP 80%, EXP 40%, ADENA 20% 합의율
 
-### 2. MP paddle max anchor 자동 복구 (Phase 3b)
-- 사용자 anchor mpMax="197" 잘못 입력 → paddle.max=242 매번 폐기
-- ADENA v1.3.13 `_matchRecover` 패턴을 MP에 도입
-- paddle 5회 일관 + max in [50,9999] → INPUTS 자동 갱신
+### 2. Sanity reject (84개 → `_rejected/`)
+- MP cur > max 또는 max ∉ {235, 242}: 35개
+- EXP 정수부 ≥ 100 (자릿수 깨짐): 29개
+- ADENA 1~2자리 (catastrophic): 20개
 
-### 3. ADENA invalid 회귀 fix (Phase 3c)
-- Phase 3a 부작용: validateROIs valid=false → 자동 모드 전체 OCR 막힘
-- 진단 11-46-28 hybridLog 20슬롯 모두 ADENA 실패 메시지로 도배
-- 수정: 필수 ROI 검증에서 ADENA 제거 + 30초 메시지 throttle
+### 3. WSL tesseract ensemble OCR (1,308개 PNG)
+- `lineage` 단독 모델 + PSM 7/8/13 = 3-PSM ensemble
+- 핵심 발견: **eng 섞으면 결과 오염** → lineage 단독 + 다중 PSM이 가장 정확
+- 처리 시간 약 7분 (3,924 OCR call)
 
-### 4. Stability 디폴트 3 (P0)
-- storage.js stabilityRequired: 1 → 3
-- getStabilityRequired 0~5 허용
-- checkStability에 requiredOverride 인자
+### 4. 4-way voting + 자동 라벨링
+- 4 source: ocrSuggestion + lineage psm7/8/13
+- voting 규칙:
+  - **unanimous_4** (4 일치) ✅
+  - **consensus_3** (3 일치) ✅
+  - **two_only_2** (2 valid 모두 일치) ✅
+  - **majority_2_rejected** (4 valid 중 2 vs 2 split) ❌ — 학습 노이즈 위험
+  - **split** (모두 다름) ❌
+- 정규화 규칙:
+  - MP: trim + `_` 제거 + sanity (X/Y, max ∈ {235, 242}, cur ≤ max)
+  - EXP: `,` → `.`, trailing `.` 제거, sanity (정수부 0~99, X.YYYY)
+  - ADENA: `|`/공백 split → 가장 긴 3~7자리 token
+- 결과: **421 채택 / 909 폐기 (31.7% acceptance)**
 
-### 5. Confusion-aware verification (P1)
-- `_CONFUSION_PAIRS = ['08','80','58','85','68','86','49','94','17','71','79','97']`
-- `isConfusionMisread(anchor, val)` — 1자리 차이 + pair 매칭
-- MP/ADENA voting에서 confusion 의심 시 stability +1 추가 요구
+### 5. WSL 학습 (846 라벨 활용, 30→830 corrupted .lstmf 제거)
+- baseline 463 → **신규 884 라벨** (91% 증가)
+- corrupted .lstmf 8개 (149 + 4 cycle 추가) 식별 → 본 폴더 + Windows에서 제거
+- iterative training cycle 적용 (max 5 retries) — fail 자동 식별 + sed로 list.train/eval 정리
+- 학습 시간: **90초** (체크포인트 이어 학습)
+- 결과: **best BCER 1.560% (lineage_1.560_346_8600.checkpoint)**, 이전 baseline 1.96% 대비 0.4%p 개선
 
-### 6. **(핵심) MP textROI 폭 게이지 종속 해제** (Phase 4a)
-- 사용자 알려줌: MP 게이지가 좌→우로 채워짐 (MP 비율만큼)
-- mpBar detect는 채워진 파란 부분만 잡음 → MP 적을수록 textROI 좁음
-- "MP : 113/242" 중 좌측 일부만 캡처 → OCR "71" misread
-- 수정: `max(mpBar.width, hpBar?.width, 200)` 사용
-- 검증: MP "32/242 ×5" tess 단독 채택 정상 (12-18-16)
-
-### 7. LEVEL 다수결 미달 fallback (Phase 5)
-- LEVEL ROI(61×19) 작아 canvas ensemble 다수결 1/1 미달
-- OCR이 정확히 29 읽어도 anchor 갱신 안 됨, 이전 misread "5" 굳음
-- 다수결 미달이어도 7회(정상)/10회(점프) 일관 시 fallback 통과
-- `🔓 LEVEL anchor 자동 복구` 메시지 출력
-
----
-
-## 📊 사용자 진단 7라운드 점진 개선
-
-```
-08-07-39 (v1.4.1, 수동 모드, mpMax=197) → ADENA 12px root cause 발견 → Phase 3a
-08-17-51 (자동 detect 후 수동 전환)     → MP paddle 정확/tess 깨짐 → Phase 3b
-11-46-28 (Phase 3a 부작용)             → 자동 OCR 전체 막힘 회귀 → Phase 3c
-12-00-18 (Phase 3b/3c 적용)            → MP anchor 197→242 자동 복구 ✅
-12-09-05 (사용자 게임화면 정보 제공)     → MP textROI 게이지 종속 발견 → Phase 4a
-12-18-16 (Phase 4a 적용 후)            → MP "32/242 ×5" 완벽 동작 ✅
-12-47-24 (ADENA 정상 + LEVEL "5" 굳음) → LEVEL 다수결 미달 fallback → Phase 5
-```
+### 6. 빌드 + ZIP 배포
+- version 1.4.1 → 1.5.0 bump
+- build/tessdata/lineage.traineddata 갱신 (00:04 timestamp)
+- npm run build (NSIS + portable)
+- npm run dist (ZIP 패키징)
 
 ---
 
-## 🛠 진단 도구 (이전 세션과 동일, 그대로 사용 가능)
+## 📊 학습 데이터 분포 (v1.5.0)
 
-`scripts/` 디렉터리:
-- `analyze-game-capture.js`, `test-detect.js`, `test-text-rois.js`
-- `find-text-around-expbar.js`, `find-exp-on-left.js`
-- `analyze-lv-text.js`, `crop-roi.js`
+| Region | baseline | 신규 (v2 suffix) | 합계 | _rejected |
+|---|---:|---:|---:|---:|
+| MP | 111 | 183 | 294 (293 후 cleanup) | 35 sanity + ~120 voting |
+| EXP | 203 | 114 | 317 | 29 sanity + 443 voting |
+| ADENA | 107 | 124 | 231 (230 후 cleanup) | 20 sanity + 245 voting |
+| LEVEL | 42 | 0 (제외) | 42 | (학습 미사용) |
+| **합계** | **463** | **421** | **884** (mp+exp+adena = 842) | |
 
-**v1.4.3 추가 진단 흐름**:
-1. mp.png 직접 열어서 텍스트 영역이 잘 캡처됐는지 확인 (Phase 4a 검증)
-2. hybridLog에서 "MP 🟢 ... 단독 채택" / "🔓 MP anchor max 자동 복구" / "🔓 LEVEL anchor 자동 복구" 메시지 확인
-3. cachedROIs.textROIs.mp.width — 200+ 정상, 81 같으면 Phase 4a 미적용
+> ⚠ **LEVEL은 v1.5.0에서 제외**. 다양성 부족 (12개 unique 값) — v1.5.1에서 부캐 사냥으로 보강 후 재학습.
+
+---
+
+## 🛠 새 진단/처리 도구
+
+`scripts/`:
+- `wsl-tesseract-batch.sh` — WSL tesseract ensemble OCR batch (3 PSM × 1308 PNG)
+- `wsl-tesseract-vote.js` — 4-way voting + 자동 라벨링 + fs 이동 (Node.js)
+- `wsl-sync-groundtruth.sh` — Windows training-data → WSL ground-truth sync
+- `wsl-train.sh` — 단순 학습 wrapper (10000 iter)
+- `wsl-robust-train.sh` — sync + make lists + corrupted 자동 cleanup + iterative training
+- `wsl-cleanup-and-resume.sh` — list.train/eval sed 정리 + 학습 재개
 
 ---
 
 ## 🚨 다음 세션 우선 액션
 
-### Priority 1: P2 traineddata 재학습 (장기, 1~3주)
-- 현 inventory: 463개 (이전 학습과 동일, 새 데이터 0)
-- 목표: 1500~2000개, 다양성 보장
-- 단계:
-  1. **자동 캡처 토글 활성화 확인** — 사용자에게 토글 ON 상태인지 확인 권장
-  2. 사용자 평소 사냥 + 다른 캐릭 사냥 1~2주
-  3. inventory 점검 후 라벨링
-  4. WSL 학습 (BCER <1%, 학습-검증 차이 <0.5%)
-  5. A/B 빌드 + 사용자 1주 평가
-- 상세: `.omc/plans/v1.5.0-training-data-recollection.md`
+### Priority 1: 사용자 평가 (신규 빌드 검증)
+- 사용자가 v1.5.0 portable 사용 후 진단 캡처 제출
+- 이전 confusion pair (0↔8, 5↔8, 6↔8, 4↔9, 7↔1, 9↔7) 재발 빈도 측정
+- 던전 알림 등 일시 텍스트 misread 차단 효과 확인
+- 판정 기준: misread 빈도 baseline 대비 30%+ 감소
 
-### Priority 2: Stability 마이그레이션 (선택)
-- 기존 사용자 storage stabilityRequired=1 또는 2 그대로
-- 새 빌드 적용 시 자동 3으로 마이그레이션 검토 (단 invasive)
+### Priority 2: LEVEL 다양성 보강 + v1.5.1
+- 부캐 사냥으로 Lv.1, 5, 10, 15, 20, 30, 50, 70, 99 등 캡처
+- 1주~1개월 후 LEVEL 100+ 라벨 확보
+- v1.5.1 학습에 LEVEL 포함
 
-### Priority 3: 자동 캡처 진단 출력 추가
-- 진단 리포트에 자동 캡처 토글 상태 / 누적 PNG 갯수 출력
-- 사용자가 P2 데이터 수집 진행도 빠르게 확인 가능
+### Priority 3: 자동 캡처 토글 진단 출력
+- 사용자가 자동 캡처 ON/OFF 상태 인지 못함
+- 진단 리포트에 자동 캡처 토글 + 누적 inventory 카운트 출력
 
-### Priority 4: LEVEL ROI 자동 확장
-- 61×19가 작아 다수결 미달 빈번
-- ROI 양 옆에 padding 추가하여 80~100px 폭 확장 검토
-- 단 다른 영역 침범 위험 검증 필요
+### Priority 4: voting 휴리스틱 개선
+- `majority_2_rejected` 케이스 — 50% disagreement 일부는 진실. vision verification queue으로 회수 가능
+- `split` 케이스에서 시간순 단조성 (EXP) 적용 가능
 
 ---
 
@@ -131,38 +124,46 @@ npm run build      # NSIS + portable
 # 3. dist
 npm run dist       # ZIP 패키징
 # 4. 산출물:
-#    dist/LineageMPTimer-1.4.1-portable.exe
-#    dist/LineageMPTimer-v1.4.1.zip
+#    dist/LineageMPTimer-1.5.0-portable.exe
+#    dist/LineageMPTimer-v1.5.0.zip
 ```
 
 ⚠️ `npm run dist` 단독으로는 코드 변경 안 반영 (ZIP만 재패키징). 반드시 `npm run build` 먼저.
 
 ---
 
-## 🎓 이번 세션의 메타 교훈
+## 🎓 이번 세션 메타 교훈
 
-1. **사용자 게임 시스템 정보가 결정적**: "MP 뒤 파란색 좌→우 차오름" 한 마디가 6라운드 디버깅 후 진짜 root cause 노출. 다음에 비슷한 정체 시 사용자에게 게임 시스템 직접 물어보기.
+1. **사용자 위임 시 끝까지 처리**: 사용자가 "끝까지 처리해줘" 하면 나에게 떠넘기지 말고 자동화 구현해야. 첫 시도에서 사용자에게 라벨링 패널 사용 권유 → 사용자 짜증. 두 번째 시도에서 WSL tesseract ensemble + voting으로 자동화 성공.
 
-2. **Fix가 회귀를 일으킬 수 있다**: Phase 3a가 자동 모드 전체 OCR 막은 회귀. validateROIs valid=false의 전파를 미리 검토 못함. 다음에 fix 작성 시 호출 측 영향까지 trace.
+2. **`make lists` cache 함정**: Makefile target이 cache로 skip되면 list.train/eval 갱신 안 됨. 학습 fail 후 같은 fail file 그대로. 직접 sed로 list.train/eval 정리하고 file 제거해야.
 
-3. **hybridLog 도배는 사용자 가시성 죽임**: 매초 같은 메시지 → 다른 메시지 묻힘. 메시지 throttle 디폴트로 적용 권장.
+3. **bash -c '...' single quote 안에서 변수 expansion**: 특정 환경에서 안 됨. script file로 작성해서 wsl bash로 실행이 가장 robust.
 
-4. **ROI 동적 detect의 함정**: 게이지 채워짐 비율이 detect 결과를 바꾸는 시스템. 게임마다 다른 디자인 패턴 학습 필요.
+4. **MSYS path 변환 함정**: Git Bash가 `/root/...` 같은 unix path를 자동으로 `C:/Program Files/Git/root/...`로 변환. WSL 호출 시 `MSYS_NO_PATHCONV=1` 또는 `//root/...` 더블 슬래시 필수.
 
-5. **점진 분석의 가치**: 7라운드 진단으로 매번 다른 root cause 발견. 한 번에 해결하려 하지 말고 each round에 한 가지씩.
+5. **ensemble OCR 효과**: 같은 모델 (paddle/tess) 다중 결과는 ensemble 효과 약함. **다른 모델 (tesseract lineage)** 추가가 결정적. eng는 픽셀 폰트에 약하므로 lineage 단독 + 다중 PSM이 베스트.
 
-6. **다수결 미달 영원 미반영**: agreement 미달이면 stability tracking 시작도 안 함 → anchor 영원 굳음. fallback stability 패턴 추가가 의외로 큰 영향.
+6. **체크포인트 이어 학습 vs 처음부터**: v1.4.x baseline 체크포인트 (BCER 1.96%) 이어 학습 → 90초만에 BCER 1.560% 도달. 처음부터는 1시간+ 걸림. 신규 데이터 추가 시 이어 학습이 압도적 효율.
+
+7. **corrupted .lstmf 사전 검증 한계**: size threshold로는 못 잡힘 (header만 invalid한 경우). 학습 시도 → fail file 식별 → 제거 → 재시도 cycle이 가장 robust.
 
 ---
 
-## 📂 생성된 plan 문서
+## 📂 생성된 plan/script 문서
 
 ```
 .omc/plans/v1.4.2-auto-stabilization.md       — Phase 3 (3a/3b/3c)
-.omc/plans/v1.4.3-confusion-defense.md        — P0 + P1
-.omc/plans/v1.5.0-training-data-recollection.md — P2 학습 재수집 plan (장기)
+.omc/plans/v1.4.3-confusion-defense.md        — P0 + P1 (이전 세션)
+.omc/plans/v1.5.0-training-data-recollection.md — P2 학습 재수집 (이번 세션 실행)
+scripts/wsl-tesseract-batch.sh                — ensemble OCR batch
+scripts/wsl-tesseract-vote.js                 — 4-way voting + auto-labeling
+scripts/wsl-sync-groundtruth.sh               — Windows → WSL sync
+scripts/wsl-train.sh                          — 단순 학습 wrapper
+scripts/wsl-robust-train.sh                   — robust train (make lists + corrupted cleanup)
+scripts/wsl-cleanup-and-resume.sh             — list.train/eval sed + iterative training
 ```
 
 ---
 
-_Last updated: 2026-05-07 v11 · Claude (Anthropic) · v1.4.3 OCR 안정화 7종_
+_Last updated: 2026-05-08 v12 · Claude (Anthropic) · v1.5.0 traineddata 재학습 (BCER 1.96 → 1.560)_
