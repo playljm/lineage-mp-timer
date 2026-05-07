@@ -277,6 +277,10 @@
       if (x > w * 0.30) return false;
       if (y < h * 0.65 || y > h * 0.95) return false;
       if (bw / Math.max(1, bh) < 2) return false;
+      // [v1.5.1 fix] expBar 절대 최소 width — 너무 짧은 orange element는 expBar 아님
+      //   사용자 진단 2026-05-07T15-11-42 (v1.5.0): width=58 후보가 expBar로 잘못 채택 → EXP/LEVEL textROI 모두 LV.29 박스 잡음
+      //   정상 expBar는 width>=80 (보통 100~250)
+      if (bw < 80) return false;
       return true;
     };
     return findColorBlobs(imageData, {
@@ -655,6 +659,21 @@
       if (rois.adena.x <= rois.exp.x) {
         issues.push('ADENA가 EXP 좌측에 있음');
       }
+    }
+
+    // [v1.5.1 fix] expBar width sanity — 너무 짧으면 다른 orange element 오인 가능성
+    //   사용자 진단 2026-05-07T15-11-42 (v1.5.0): expBar.width=58px → EXP textROI w=32, LEVEL textROI w=23
+    //   결과: EXP/LEVEL 모두 같은 LV.29 박스 부분만 분리해서 캡처 → OCR catastrophic.
+    //   정상 expBar는 width>=80 (보통 100~250). 너무 작으면 invalid 처리해 cache 재탐지 유도.
+    if (expBar && expBar.width < 80) {
+      issues.push(`expBar 후보 너무 짧음 (${expBar.width}px<80) — orange element 오인 가능성`);
+    }
+    // EXP/LEVEL textROI width 최소 — expBar.width의 0.4/0.55 비율로 도출되므로 expBar 검증 보완
+    if (rois.exp && rois.exp.width < 50) {
+      issues.push(`EXP textROI 폭 너무 좁음 (${rois.exp.width}px<50)`);
+    }
+    if (rois.level && rois.level.width < 30) {
+      issues.push(`LEVEL textROI 폭 너무 좁음 (${rois.level.width}px<30)`);
     }
 
     // [v1.4.2 fix] ADENA 단독 issue(폭 부족 등)는 valid에 영향 X — MP/EXP/LEVEL은 정상 사용 가능.

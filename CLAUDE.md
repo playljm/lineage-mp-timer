@@ -140,6 +140,20 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.5.1 (2026-05-08) — expBar 후보 width 최소 sanity (EXP/LEVEL ROI 잘못 잡힘 fix) ⭐⭐
+사용자 진단 2026-05-07T15-11-42 (v1.5.0 빌드 사용 시): expBar.width=58px 짧은 후보 채택 → EXP textROI w=32, LEVEL textROI w=23 → 둘 다 LV.29 박스 부분만 캡처 → OCR catastrophic ("C", "???").
+
+**원인**: `findExpBarCandidates` posFilter에 width 최소값 없음 → 다른 짧은 orange element (LV 인디케이터 등)가 expBar로 채택. 그 결과 textROI 도출 시 expBar.x ± width*0.4/0.55로 분할 → EXP/LEVEL 모두 같은 LV 박스 영역 분리.
+
+**수정** (`roi-detector.js`):
+- `findExpBarCandidates` posFilter에 `bw >= 80` 추가 (정상 expBar 100~250)
+- `validateROIs` cross-check에 sanity 추가:
+  - expBar.width < 80 → invalid
+  - EXP textROI width < 50 → invalid
+  - LEVEL textROI width < 30 → invalid
+
+**결과**: 짧은 orange 후보 차단 → 정상 expBar 또는 v1.4.1 `findLevelTextLines` fallback 동작.
+
 ### v1.5.0 (2026-05-08) — traineddata 재학습 — BCER 1.96% → 1.560% ⭐⭐⭐⭐⭐
 P2 학습 재수집 plan 실행. 사용자가 라벨링을 위임 → AI가 ensemble OCR + voting 자동 처리 → 학습 + 빌드까지 자동.
 
