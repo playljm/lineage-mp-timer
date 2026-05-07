@@ -457,11 +457,16 @@
     const rois = {};
 
     if (mpBar) {
-      // mpTextROI: mpBar 영역 그대로 + 좌측 5px padding
+      // [v1.4.3 fix] MP textROI 폭은 mpBar.width(파란 채워진 부분)에 종속되면 안 됨.
+      //   사용자 진단 (2026-05-07T12-09-05 + 게임 화면): MP가 적을수록 게이지 채워짐 폭이 줄어
+      //   "MP : 113/242" 텍스트 중 우측 부분이 ROI 밖으로 나가 OCR이 "71" 같은 일부만 인식.
+      //   해결: HP textROI 폭(거의 항상 가득찬 게이지 폭) 또는 최소 200px과 max 사용.
+      //   게임 디자인상 HP/MP 게이지 영역 폭은 동일.
+      const mpFullWidth = Math.max(mpBar.width, hpBar ? hpBar.width : 0, 200);
       rois.mp = {
         x: Math.round(mpBar.x + 5),
         y: Math.round(mpBar.y),
-        width: Math.round(Math.max(0, mpBar.width - 5)),
+        width: Math.round(Math.max(0, mpFullWidth - 5)),
         height: Math.round(mpBar.height)
       };
     }
@@ -575,12 +580,17 @@
       rois.adena = chosen;
     }
 
-    // 경계 클램프 — ADENA는 우측 overflow 허용 (gameRegion 외부도 captureStream에 있음)
+    // 경계 클램프 — 모든 ROI를 frameW로 클램프
+    // [v1.4.2 fix] 사용자 진단 (2026-05-07T08-17-51): 게임창이 모니터 우측 가장자리에 가까이 있어
+    //   ADENA textROI 우측 100px이 모니터 밖 = 캡처 검정 픽셀 → OCR "???" 실패.
+    //   v1.4.0 b20407a "ADENA 우측 overflow 허용" 가정(captureStream이 모니터 전체)이
+    //   듀얼 모니터 / 우측 가장자리 게임창 환경에선 깨짐. 모든 ROI를 frameW로 클램프하고
+    //   ADENA는 width<50px이 되면 별도 issue로 사용자에게 게임 영역 확장 안내.
     for (const k of Object.keys(rois)) {
       const r = rois[k];
       if (r.x < 0) { r.width += r.x; r.x = 0; }
       if (r.y < 0) { r.height += r.y; r.y = 0; }
-      if (k !== 'adena' && r.x + r.width > frameW) r.width = frameW - r.x;
+      if (r.x + r.width > frameW) r.width = frameW - r.x;
       if (r.y + r.height > frameH) r.height = frameH - r.y;
       if (r.width < 0) r.width = 0;
       if (r.height < 0) r.height = 0;
@@ -594,17 +604,26 @@
   // =========================================================================
   function validateROIs(rois, anchors, frameW, frameH) {
     const issues = [];
+    const adenaOnlyIssues = [];
 
     const checkRoi = (name, r) => {
-      if (!r) { issues.push(`${name} ROI 누락`); return false; }
+      const push = (msg) => {
+        if (name === 'adena') adenaOnlyIssues.push(msg);
+        else issues.push(msg);
+      };
+      if (!r) { push(`${name} ROI 누락`); return false; }
       if (r.width <= 10 || r.height <= 5) {
-        issues.push(`${name} ROI 너무 작음 (${r.width}x${r.height})`);
+        push(`${name} ROI 너무 작음 (${r.width}x${r.height})`);
         return false;
       }
-      // [v1.4.0+] ADENA는 우측 overflow 허용 (consumer가 모니터 캡처 사용 — gameRegion 우측 외부 OK)
-      const rightOver = (r.x + r.width > frameW) && name !== 'adena';
-      if (r.x < 0 || r.y < 0 || rightOver || r.y + r.height > frameH) {
-        issues.push(`${name} ROI 경계 초과`);
+      // [v1.4.2 fix] 모든 ROI는 frameW 내. ADENA가 frameW 우측 가장자리에 너무 가까워
+      //   클램프 후 width가 부족하면 별도 issue (게임 영역 우측 확장 권장).
+      if (r.x < 0 || r.y < 0 || r.x + r.width > frameW || r.y + r.height > frameH) {
+        push(`${name} ROI 경계 초과`);
+        return false;
+      }
+      if (name === 'adena' && r.width < 50) {
+        adenaOnlyIssues.push(`ADENA ROI 폭 부족 (${r.width}px) — 게임 영역을 우측으로 더 넓게 다시 지정해주세요`);
         return false;
       }
       return true;
@@ -638,7 +657,15 @@
       }
     }
 
-    return { valid: issues.length === 0, issues, okMp, okExp, okAdena };
+    // [v1.4.2 fix] ADENA 단독 issue(폭 부족 등)는 valid에 영향 X — MP/EXP/LEVEL은 정상 사용 가능.
+    //   호출자(app.js ensureAutoModeROIs)는 result.okAdena=false면 ADENA region만 비우고
+    //   나머지 ROI는 그대로 사용. 사용자에게는 throttled 안내.
+    return {
+      valid: issues.length === 0,
+      issues: [...issues, ...adenaOnlyIssues],
+      adenaIssues: adenaOnlyIssues,
+      okMp, okExp, okAdena
+    };
   }
 
   // =========================================================================

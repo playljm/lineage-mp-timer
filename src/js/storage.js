@@ -112,7 +112,7 @@
       preprocess: true,        // 그레이스케일+threshold 전처리
       autoStart: false,        // 인식 후 타이머 자동 시작
       autoStartTracker: false, // 첫 경험치 인식 시 트래커 자동 시작 (시작값을 첫 인식값으로)
-      stabilityRequired: 1,    // OCR 결과 안정성 검증 (0=즉시, 1=1회, 2=2회 연속)
+      stabilityRequired: 3,    // [v1.4.3] OCR 결과 안정성 — 디폴트 3 (5↔8/0↔8 단발 misread 흡수)
       ocrEngine: 'hybrid',     // 'tesseract' | 'paddle' | 'hybrid' — paddle MP 검출 실패(빈 결과) 보완 위해 hybrid 기본
       mpSingleNumber: true,    // MP 영역을 단일 숫자(cur)로만 OCR + max는 INPUTS의 사용자 입력값 사용
                                // — 슬래시/콜론/배너 텍스처 우회. 사용자가 MP 영역을 cur 숫자만 좁게 잡으면 LEVEL/ADENA처럼 안정.

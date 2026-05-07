@@ -4056,6 +4056,35 @@
       }
     }
 
+    // [v1.4.2] paddle max anchor 자동 복구 — userMax 사용자 잘못 입력 케이스
+    //   사용자 진단 (2026-05-07T11-36-20): 화면 max=242인데 INPUTS userMax=197 잘못 입력 →
+    //   pBaseValid 검증(max === userMax) 매번 false → 모든 paddle 결과 폐기 → MP 인식 영원 실패.
+    //   ADENA의 v1.3.13 anchor 자동 복구 패턴을 MP에 도입.
+    //   조건: paddle이 5회 연속 같은 max 출력 + max in [50,9999] + 0 <= cur <= max
+    //   효과: userMax 자동 갱신 → 다음 사이클부터 pBaseValid=true → paddle 단독 채택 자연 동작.
+    if (pr && pr.parsed && Number.isFinite(pr.parsed.max) && Number.isFinite(pr.parsed.cur)) {
+      const um = parseInt(dom.inMaxMp.value, 10) || 0;
+      const pmx = pr.parsed.max, pcr = pr.parsed.cur;
+      if (um >= 10 && pmx !== um && pmx >= 50 && pmx <= 9999 && pcr >= 0 && pcr <= pmx) {
+        if (!ocrMpRegionHybrid._maxRecover) ocrMpRegionHybrid._maxRecover = { val: 0, count: 0 };
+        const mr = ocrMpRegionHybrid._maxRecover;
+        if (mr.val === pmx) mr.count++;
+        else { mr.val = pmx; mr.count = 1; }
+        if (mr.count >= 5) {
+          pushHybridLog('🔓 MP anchor max 자동 복구 (paddle 5회 일관, ' + um + ' → ' + pmx + ')');
+          dom.inMaxMp.value = pmx;
+          if (typeof saveLast === 'function') { try { saveLast(); } catch (e) {} }
+          mr.count = 0; mr.val = 0;
+        } else if (mr.count > 1) {
+          pushHybridLog('MP ⏳ max 복구 검증 (' + mr.count + '/5) paddle=' + pmx + ' vs userMax=' + um);
+        }
+      } else if (ocrMpRegionHybrid._maxRecover && pmx === (parseInt(dom.inMaxMp.value, 10) || 0)) {
+        // 같아지면 카운터 리셋
+        ocrMpRegionHybrid._maxRecover.val = 0;
+        ocrMpRegionHybrid._maxRecover.count = 0;
+      }
+    }
+
     if (!pr || !tr || !pr.parsed || !tr.parsed) {
       return voteHybrid('MP', pr, tr, (a, b) => a.cur === b.cur && a.max === b.max);
     }
@@ -4583,17 +4612,33 @@
   let adenaStableCount = 0;
 
   function getStabilityRequired() {
-    const v = autoDetect.stabilityRequired;
-    if (v === 0 || v === '0') return 0;
-    if (v === 1 || v === '1') return 1;
-    return 2;  // 기본 2 (안정성 우선)
+    const v = parseInt(autoDetect.stabilityRequired, 10);
+    if (Number.isFinite(v) && v >= 0 && v <= 5) return v;
+    return 3;  // [v1.4.3] 디폴트 3 (5↔8/0↔8 단발 misread 흡수)
   }
 
-  function checkStability(key, lastKey, count) {
-    const req = getStabilityRequired();
+  function checkStability(key, lastKey, count, requiredOverride) {
+    const req = (typeof requiredOverride === 'number') ? requiredOverride : getStabilityRequired();
     if (req === 0) return { lastKey: key, count: 1, stable: true };  // 즉시 통과
     if (key === lastKey) return { lastKey, count: count + 1, stable: count + 1 >= req };
     return { lastKey: key, count: 1, stable: 1 >= req };
+  }
+
+  // [v1.4.3 P1] Confusion-aware verification
+  //   픽셀 폰트의 알려진 confusion pair: 0↔8 (slashed zero), 5↔8, 6↔8, 4↔9, 7↔1, 9↔7
+  //   anchor와 1글자 차이 + confusion pair 해당 → 의심 misread → stability +1 추가 요구
+  //   효과: "1908 → 1508" 같은 단발 misread 자동 거부, 정상 변화는 거의 영향 없음
+  const _CONFUSION_PAIRS = new Set(['08','80','58','85','68','86','49','94','17','71','79','97']);
+  function isConfusionMisread(anchor, val) {
+    if (!Number.isFinite(anchor) || !Number.isFinite(val)) return false;
+    if (anchor <= 0) return false;
+    const a = String(anchor), v = String(val);
+    if (a.length !== v.length) return false;
+    let diffPair = null, diffCount = 0;
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] !== v[i]) { diffPair = a[i] + v[i]; diffCount++; if (diffCount > 1) return false; }
+    }
+    return diffCount === 1 && _CONFUSION_PAIRS.has(diffPair);
   }
 
   // ============================================================================
@@ -4671,11 +4716,20 @@
         pushHybridLog('🤖 RoiDetector 예외: ' + (e.message || e));
         return false;
       }
+      // [v1.4.2 fix] ADENA 단독 fail (width<50 등)은 통과시킴 — MP/EXP/LEVEL은 정상 사용
+      //   사용자 진단 (2026-05-07T11-46-28): ADENA fail이 valid=false 만들어 전체 OCR 막힘 회귀.
+      //   해결: result.valid + 필수 ROI 존재만 검증. ADENA는 별도 처리.
       if (!result || !result.valid || !result.anchors
           || !result.textROIs || !result.textROIs.mp || !result.textROIs.exp
-          || !result.textROIs.level || !result.textROIs.adena) {
+          || !result.textROIs.level) {
         const issues = (result && result.issues && result.issues.length) ? result.issues.join(', ') : 'unknown';
-        pushHybridLog('🤖 자동 ROI 탐지 실패: ' + issues);
+        // 동일 메시지 30초 throttle — 매초 도배 방지
+        const nowMs = Date.now();
+        if (!ensureAutoModeROIs._lastFailMsg || ensureAutoModeROIs._lastFailMsg.text !== issues
+            || (nowMs - ensureAutoModeROIs._lastFailMsg.at) > 30000) {
+          pushHybridLog('🤖 자동 ROI 탐지 실패: ' + issues);
+          ensureAutoModeROIs._lastFailMsg = { text: issues, at: nowMs };
+        }
         // [v1.4.0+] 첫 실패 시 캡처 프레임을 진단 폴더에 저장 → 사용자 공유용
         if (!ensureAutoModeROIs._diagSaved && api && api.saveDiagnosticReport) {
           ensureAutoModeROIs._diagSaved = true;
@@ -4777,6 +4831,20 @@
       }
     }
 
+    // [v1.4.2 fix] ADENA width<50 단독 fail은 통과시키되 안내 + region 갱신 차단.
+    //   사용자 진단 (2026-05-07T11-46-28): ADENA invalid가 전체 OCR을 막던 회귀 해결.
+    //   다른 ROI(MP/EXP/LEVEL)는 정상 사용. ADENA만 사용자가 게임 영역을 우측으로 확장해야 함.
+    if (textROIs.adena && textROIs.adena.width < 50) {
+      const nowMs = Date.now();
+      const warnKey = `ADENA-${textROIs.adena.width}px`;
+      if (!ensureAutoModeROIs._lastAdenaWarn || ensureAutoModeROIs._lastAdenaWarn.text !== warnKey
+          || (nowMs - ensureAutoModeROIs._lastAdenaWarn.at) > 30000) {
+        pushHybridLog('⚠️ ADENA ROI 폭 부족 (' + textROIs.adena.width + 'px) — 게임 영역을 우측으로 더 넓게 다시 지정 (MP/EXP/LEVEL은 정상 동작)');
+        ensureAutoModeROIs._lastAdenaWarn = { text: warnKey, at: nowMs };
+      }
+      textROIs.adena = null;  // adenaRegion 갱신 차단 → 기존 region(수동 지정/직전 값) 유지
+    }
+
     // textROIs를 절대 좌표 region으로 변환 → 기존 OCR 함수가 참조하는 필드에 동적 할당
     // [v1.4.0+] HiDPI 보정: roi.* 는 physical 캔버스 좌표, region.* 는 logical 데스크톱 좌표
     const gr = autoDetect.gameRegion;
@@ -4804,7 +4872,8 @@
     // [v1.4.0+] ADENA 수동 override 존중 — 사용자 진단 (2026-05-05T13-24-06):
     //   자동 탐지가 인벤토리 노란 아이템을 ADENA로 오인하는 케이스 (UI 다양성)
     //   _adenaManualOverride 플래그 있으면 사용자 지정 ADENA 영역 보존
-    if (!autoDetect._adenaManualOverride) {
+    // [v1.4.2 fix] textROIs.adena가 null(width 부족)이면 갱신 skip — 기존 값 유지
+    if (!autoDetect._adenaManualOverride && textROIs.adena) {
       autoDetect.adenaRegion = toAbsRegion(textROIs.adena);
     }
     return true;
@@ -4987,7 +5056,16 @@
             const passConfidence = r.confidence >= threshold;
             // 일관성 검증
             const key = validParsed ? `${r.parsed.cur}/${r.parsed.max}` : null;
-            const stab = checkStability(key, mpStableLast, mpStableCount);
+            // [v1.4.3 P1] confusion-misread 의심 시 stability +1 추가 요구 (예: 153 ↔ 158)
+            let mpDynamicReq;
+            if (validParsed) {
+              const prevCurAnchor = parseInt(dom.inCurMp.value, 10) || 0;
+              const prevMaxAnchor = parseInt(dom.inMaxMp.value, 10) || 0;
+              const curConf = isConfusionMisread(prevCurAnchor, r.parsed.cur);
+              const maxConf = isConfusionMisread(prevMaxAnchor, r.parsed.max);
+              if (curConf || maxConf) mpDynamicReq = getStabilityRequired() + 1;
+            }
+            const stab = checkStability(key, mpStableLast, mpStableCount, mpDynamicReq);
             mpStableLast = stab.lastKey;
             mpStableCount = stab.count;
             console.log('[OCR MP decision]', { parsed: r.parsed, validParsed, conf: r.confidence, threshold, passConfidence, stableCount: mpStableCount, stable: stab.stable });
@@ -5184,7 +5262,9 @@
               const diff = Math.abs(ad - prev);
               const isFirstAd = !(prev > 0);
               const isJump = isFirstAd || diff > 100000 || diff > prev * 0.2;
-              const requiredStable = isJump ? 5 : 3;
+              // [v1.4.3 P1] confusion-misread (1908 ↔ 1508) 의심이면 +1 추가 요구
+              const isConfusion = !isJump && isConfusionMisread(prev, ad);
+              const requiredStable = isJump ? 5 : (isConfusion ? 4 : 3);
 
               if (adenaStableCount >= requiredStable) {
                 if (ad !== prev) {
