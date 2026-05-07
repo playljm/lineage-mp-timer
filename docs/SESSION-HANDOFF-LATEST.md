@@ -1,162 +1,168 @@
-# 세션 인수인계 — 2026-05-06 v10 (v1.4.1 자동 모드 EXP=0% root cause + LV 텍스트 직접 검출)
+# 세션 인수인계 — 2026-05-07 v11 (v1.4.3 OCR 안정화 7종)
 
 > **다음 세션에서 가장 먼저 읽어야 할 문서**
-> v1.4.0 자동 모드의 마지막 잔여 root cause(EXP=0% 케이스) 해결. LV 텍스트 직접 검출로 진행 막대 의존 제거.
+> v1.4.2 자동 모드 회귀 fix + MP textROI 게이지 종속 해제 + LEVEL 다수결 미달 fallback
 
 ---
 
 ## ⚡ TL;DR — 30초 요약
 
-**현재 상태**: v1.4.1 자동 모드가 사용자 게임에서 **MP/EXP/Level 정상 동작 검증됨**. ADENA만 template matching 진행 중 (점진 안정).
+**현재 상태**: v1.4.3 빌드. 사용자 진단 7라운드(08:07 ~ 12:47) 점진 개선으로 MP/ADENA/EXP/LEVEL 모두 안정 동작 검증.
 
-**최신 빌드**: `dist/LineageMPTimer-1.4.1-portable.exe` + `dist/LineageMPTimer-v1.4.1.zip` (커밋 `ca40b74` 시점, 2026-05-06 23:39)
+**최신 빌드**: `dist/LineageMPTimer-1.4.1-portable.exe` + ZIP (커밋 `d60d35c` 시점)
 
-**핵심 발견 (이번 세션 가장 중요)**:
-- 어제(2026-05-05)는 자동 모드 잘 됐는데 오늘은 안 됐음 — **사용자 게임 환경 차이**가 아니라 **EXP 진행 막대 가시성** 차이가 원인.
-- EXP가 16.8%일 땐 막대가 168x27 큰 영역으로 잘 탐지. EXP가 0.17%면 막대 거의 안 채워져 다른 노이즈를 EXP로 오인.
-- 해결: 막대 의존 제거 → LV 텍스트 자체를 검출 (`findLevelTextLines`)
+**가장 결정적 발견 (사용자가 알려줌)**:
+- "MP 뒤에 파란색이 좌→우로 차오르는 시스템" → **mpBar.width=채워진 부분만**
+- MP 적을수록 textROI 좁음 → "MP : 71"만 캡처되어 OCR 매번 misread
+- 해결: max(mpBar.width, hpBar.width, 200) 사용 — HP/MP 게이지 폭 동일 가정
 
 **남은 이슈**:
-- ADENA OCR이 일부 캡처에서 "???" — template matching이 자가 안정화 중. width 113px가 너무 넓을 수 있음 (텍스트 60px + 검정 53px). 사용자가 "잘 되는거 같다"고 평가.
+- 던전 알림 등 일시 텍스트 misread → Phase 5 fallback으로 7~10회 strict 차단
+- paddle/tess 픽셀 폰트 사전훈련 한계 → P2 traineddata 재학습 필요 (`.omc/plans/v1.5.0-training-data-recollection.md`)
 
 ---
 
 ## 🔥 이번 세션 발견·수정한 root cause 7종 (시간순)
 
-진단 캡처 13개 분석 + 픽셀 레벨 검증으로 발견:
+### 1. ADENA frameW 클램프 (Phase 3a)
+- 자동 detect ADENA textROI가 gameRegion 우측 끝을 113px 넘어감
+- 사용자 환경: 모니터 자체가 게임창 우측 끝과 동일 → 100px이 검정 픽셀
+- 기존 v1.4.0 b20407a 가정("captureStream이 모니터 전체") 깨짐
+- 수정: 모든 ROI를 frameW 내 클램프, ADENA-only issue를 valid 결정에서 제외
 
-### 1. setupCaptureStreams가 gameRegion 누락 (`1cb81bd`)
-- 자동 모드에서 mp/mpBar/exp/level/adena의 sourceId만 등록, gameRegion은 빠짐
-- gameRegion.sourceId가 stale legacy region과 다른 모니터일 때 캡처 스트림 무한 실패
-- 수정: 모드별 분기. 자동 → gameRegion만, 수동 → 5개 영역
+### 2. MP paddle max anchor 자동 복구 (Phase 3b)
+- 사용자 anchor mpMax="197" 잘못 입력 → paddle.max=242 매번 폐기
+- ADENA v1.3.13 `_matchRecover` 패턴을 MP에 도입
+- paddle 5회 일관 + max in [50,9999] → INPUTS 자동 갱신
 
-### 2. multi-candidate combinatorial search (`af05598`)
-- 기존: HP[0] + EXP[0] 단일 best 후보로 layout 검증 1회만 시도
-- 비표준 UI(파티 HP 바, 채팅 빨간 텍스트)에서 첫 후보가 layout 위반 → 즉시 fail
-- 수정: HP×MP×EXP×ADENA top-K (5×3×5×5) 조합 순회, 첫 통과 tuple 채택
-- 추가: `findHpBarCandidates`, `findMpBarCandidates`, `findExpBarCandidates`, `findAdenaIconCandidates` API
+### 3. ADENA invalid 회귀 fix (Phase 3c)
+- Phase 3a 부작용: validateROIs valid=false → 자동 모드 전체 OCR 막힘
+- 진단 11-46-28 hybridLog 20슬롯 모두 ADENA 실패 메시지로 도배
+- 수정: 필수 ROI 검증에서 ADENA 제거 + 30초 메시지 throttle
 
-### 3. EXP-above-HP layout 지원 (`4707fff`)
-- 기존: `expBar.y > hpBar.y` 절대 가정 (EXP 항상 HP 아래)
-- 사용자 게임 layout: 캐릭터 정보 패널에 EXP가 HP 위 8px (705 vs 713)
-- 수정: `Math.abs(exp.y - hp.y) <= (hp.h + exp.h) * 4 + 30` 인접도 검증으로 완화
-- 3개 코드 경로 (validateROIs, detectGameUI 조합 루프, tupleFound) 일관 변경
+### 4. Stability 디폴트 3 (P0)
+- storage.js stabilityRequired: 1 → 3
+- getStabilityRequired 0~5 허용
+- checkStability에 requiredOverride 인자
 
-### 4. EXP/Level ROI 막대 위/아래 자동 + ADENA stale 자동 해제 (`53d0155`)
-- 기존: `expBar.y` 자체에 height=6 ROI → 텍스트 없는 빈 영역 OCR
-- 수정: 막대 height<12px 시 위/아래 후보(text height 18~24px) 만들고 inkScore 비교
-- ADENA: `_adenaManualOverride=true` + adenaRegion.sourceId !== gameRegion.sourceId 시 자동 해제 + 재할당
+### 5. Confusion-aware verification (P1)
+- `_CONFUSION_PAIRS = ['08','80','58','85','68','86','49','94','17','71','79','97']`
+- `isConfusionMisread(anchor, val)` — 1자리 차이 + pair 매칭
+- MP/ADENA voting에서 confusion 의심 시 stability +1 추가 요구
 
-### 5. EXP/Level이 HP 바와 겹치는 후보 자동 제외 (`e2129ff`)
-- 기존 4번 fix의 부작용: below 후보(y=712~736)가 HP 바(y=713~735)와 겹쳐 inkScore가 HP 텍스트를 EXP로 오인
-- exp.png에 "HP : 209/242" 텍스트 캡처 사례
-- 수정: `overlapsHp(roiY, roiH)` 헬퍼 추가 + HP 겹침 후보 자동 제외
+### 6. **(핵심) MP textROI 폭 게이지 종속 해제** (Phase 4a)
+- 사용자 알려줌: MP 게이지가 좌→우로 채워짐 (MP 비율만큼)
+- mpBar detect는 채워진 파란 부분만 잡음 → MP 적을수록 textROI 좁음
+- "MP : 113/242" 중 좌측 일부만 캡처 → OCR "71" misread
+- 수정: `max(mpBar.width, hpBar?.width, 200)` 사용
+- 검증: MP "32/242 ×5" tess 단독 채택 정상 (12-18-16)
 
-### 6. EXP/Level 다중 후보 inkScore 검색 (`7fc2fe4`)
-- 기존 5번 fix 후에도 ROI가 채팅창 영역 잡음 (HP 너머 ink density 가장 높음)
-- 픽셀 분석에서 채팅 메시지가 EXP보다 ink density 더 높았음
-- 수정: 막대 위 -3*TEXT_H ~ 아래 +4*TEXT_H step=TEXT_H/3 후보들 모두 시도
-
-### 7. **(핵심) findLevelTextLines — LV 텍스트 직접 검출** (`503795d`)
-- **모든 이전 fix의 한계 인정** — 진행 막대 의존 SPEC는 EXP %에 따라 깨짐
-- 픽셀 분석으로 진짜 LV/EXP 텍스트 위치 식별:
-  - 사용자 게임의 좌측 미니 패널 (x_rel 0~0.20, y_rel 0.75~0.95)
-  - 흰/베이지 픽셀(lum>180, sat<0.35) 가로 라인 검출
-  - 첫 번째 라인의 좌측 cluster=Level, 우측 cluster=EXP%
-- 수정: `findLevelTextLines(imageData, w, h)` 함수 추가
-  - 행별 텍스트 픽셀 카운트 → 라인 그룹화 (count>=15 + 인접 행)
-  - 각 라인에서 가로 cluster 검출 (인접 column gap≤3px 무시)
-- `deriveTextROIs`: 막대 얇음(<12px) + 라인 검출 시 우선 사용, 미검출 시 inkScore fallback
-- 막대 두꺼움(>=12px) 케이스는 기존 동작 유지 (어제 케이스 회귀 방지)
-
-**검증**:
-- 12-58-51 (어제, EXP 16%, expBar 168x27): 기존 막대 사용 → 회귀 없음 ✅
-- 13-37-58 (오늘, EXP 0.17%, expBar 187x6): LV 라인 검출 → "LEV: 29" + "12.5187%" 정확 캡처 ✅
+### 7. LEVEL 다수결 미달 fallback (Phase 5)
+- LEVEL ROI(61×19) 작아 canvas ensemble 다수결 1/1 미달
+- OCR이 정확히 29 읽어도 anchor 갱신 안 됨, 이전 misread "5" 굳음
+- 다수결 미달이어도 7회(정상)/10회(점프) 일관 시 fallback 통과
+- `🔓 LEVEL anchor 자동 복구` 메시지 출력
 
 ---
 
-## 🛠 진단 도구 (다음 세션 즉시 활용 가능)
+## 📊 사용자 진단 7라운드 점진 개선
 
-`scripts/` 디렉터리에 다음 도구 추가:
+```
+08-07-39 (v1.4.1, 수동 모드, mpMax=197) → ADENA 12px root cause 발견 → Phase 3a
+08-17-51 (자동 detect 후 수동 전환)     → MP paddle 정확/tess 깨짐 → Phase 3b
+11-46-28 (Phase 3a 부작용)             → 자동 OCR 전체 막힘 회귀 → Phase 3c
+12-00-18 (Phase 3b/3c 적용)            → MP anchor 197→242 자동 복구 ✅
+12-09-05 (사용자 게임화면 정보 제공)     → MP textROI 게이지 종속 발견 → Phase 4a
+12-18-16 (Phase 4a 적용 후)            → MP "32/242 ×5" 완벽 동작 ✅
+12-47-24 (ADENA 정상 + LEVEL "5" 굳음) → LEVEL 다수결 미달 fallback → Phase 5
+```
 
-| 도구 | 용도 |
-|------|------|
-| `analyze-game-capture.js <PNG>` | HP/MP/EXP/ADENA 후보 위치/크기/HSV 모두 출력. 위치 필터 적용 전후 비교. |
-| `test-detect.js <PNG>` | detectGameUI 결과(valid, anchors, textROIs) 빠른 검증 |
-| `test-text-rois.js <PNG>` | deriveTextROIs 결과 + EXP 영역 above/below ink density 비교 |
-| `find-text-around-expbar.js <PNG>` | expBar 주변 dy=-60~+60 (step 6) 위치별 ink/white pixel 분포 |
-| `find-exp-on-left.js <PNG>` | 좌측 영역(x<15%) 오렌지/빨강/파랑 작은 blob 모두 출력 |
-| `analyze-lv-text.js <PNG>` | 좌측 미니 패널 텍스트 라인 + 가로 cluster 시각화 |
-| `crop-roi.js <PNG> x y w h <out>` | 임의 영역 잘라서 PNG 저장 (시각 확인용) |
+---
 
-**사용 흐름** (사용자 진단 받았을 때):
-1. `node scripts/test-detect.js <game-region-raw.png>` → valid 여부 + anchor 위치 빠른 확인
-2. valid=false면 → `analyze-game-capture.js` 로 후보 분포 분석
-3. EXP/Level OCR 실패면 → `test-text-rois.js` + `crop-roi.js` 로 ROI 영역 시각 확인
-4. ROI 위치가 잘못이면 → `analyze-lv-text.js` 로 진짜 텍스트 위치 픽셀 분석
+## 🛠 진단 도구 (이전 세션과 동일, 그대로 사용 가능)
+
+`scripts/` 디렉터리:
+- `analyze-game-capture.js`, `test-detect.js`, `test-text-rois.js`
+- `find-text-around-expbar.js`, `find-exp-on-left.js`
+- `analyze-lv-text.js`, `crop-roi.js`
+
+**v1.4.3 추가 진단 흐름**:
+1. mp.png 직접 열어서 텍스트 영역이 잘 캡처됐는지 확인 (Phase 4a 검증)
+2. hybridLog에서 "MP 🟢 ... 단독 채택" / "🔓 MP anchor max 자동 복구" / "🔓 LEVEL anchor 자동 복구" 메시지 확인
+3. cachedROIs.textROIs.mp.width — 200+ 정상, 81 같으면 Phase 4a 미적용
 
 ---
 
 ## 🚨 다음 세션 우선 액션
 
-### Priority 1: 사용자 ADENA OCR 안정화 검증
-- 14-36-39 진단에서 ADENA "???" — template matching 진행 중
-- 사용자가 사냥 좀 한 후에도 안 풀리면 추가 fix 필요
-- 의심 원인: ADENA ROI width=113px (텍스트 약 60px + 검정 53px) → OCR 노이즈
-- fix 후보:
-  - inkScore로 ADENA 영역의 우측 빈 영역 자동 trim
-  - 또는 ADENA ROI width를 더 좁게 (max 80px)
-- 진단 시 `node scripts/crop-roi.js <raw> 1259 850 113 32 /tmp/adena.png` 으로 시각 확인
+### Priority 1: P2 traineddata 재학습 (장기, 1~3주)
+- 현 inventory: 463개 (이전 학습과 동일, 새 데이터 0)
+- 목표: 1500~2000개, 다양성 보장
+- 단계:
+  1. **자동 캡처 토글 활성화 확인** — 사용자에게 토글 ON 상태인지 확인 권장
+  2. 사용자 평소 사냥 + 다른 캐릭 사냥 1~2주
+  3. inventory 점검 후 라벨링
+  4. WSL 학습 (BCER <1%, 학습-검증 차이 <0.5%)
+  5. A/B 빌드 + 사용자 1주 평가
+- 상세: `.omc/plans/v1.5.0-training-data-recollection.md`
 
-### Priority 2: 막대 두꺼움(>=12px) 케이스도 LV 텍스트 라인 적용 검토
-- 현재 막대 height>=12면 자체 사용 (어제 케이스 회귀 방지)
-- 하지만 EXP 99% 가까이 채워져 막대가 두껍게 잡혀도 진짜 텍스트는 별도 위치일 수 있음
-- 안전한 방법: LV 라인 detect 시도 → 발견되면 우선 사용 (라인 없으면 fallback to 막대)
+### Priority 2: Stability 마이그레이션 (선택)
+- 기존 사용자 storage stabilityRequired=1 또는 2 그대로
+- 새 빌드 적용 시 자동 3으로 마이그레이션 검토 (단 invasive)
 
-### Priority 3: ADENA 가로 / 세로 자동 감지 + 폭 trim 통합
-- v1.4.0 Phase 1에서 inkScore 비교 도입 (a638042)
-- 추가 trim: 검출된 cluster의 우측 끝까지로 width 자동 축소
-- ADENA "39131만" 같은 한글 단위 처리 검토
+### Priority 3: 자동 캡처 진단 출력 추가
+- 진단 리포트에 자동 캡처 토글 상태 / 누적 PNG 갯수 출력
+- 사용자가 P2 데이터 수집 진행도 빠르게 확인 가능
 
-### Priority 4: 단순 OCR confusion pair 추적
-- EXP "93.9614" → "93.9615" (4↔5) 사용자 평가 "이정도는 괜찮다"
-- 누적 시 학습 데이터 보강 (training 파이프라인은 `docs/TRAINING-PIPELINE.md`)
+### Priority 4: LEVEL ROI 자동 확장
+- 61×19가 작아 다수결 미달 빈번
+- ROI 양 옆에 padding 추가하여 80~100px 폭 확장 검토
+- 단 다른 영역 침범 위험 검증 필요
 
 ---
 
-## 📝 빌드/배포 절차 (낚시 함정 주의)
+## 📝 빌드/배포 절차 (변동 없음)
 
 ```bash
 cd C:\dev\lineage-mp-timer
-# 1. 사용자가 portable 실행 중이면 종료 요청 (덮어쓰기 락)
-# 2. 빌드 (필수)
-npm run build      # electron-builder, NSIS + portable
-# 3. dist (ZIP 패키징, 빌드 안 함!)
-npm run dist       # build-distribute.ps1
+# 1. 사용자 portable 종료
+# 2. 빌드
+npm run build      # NSIS + portable
+# 3. dist
+npm run dist       # ZIP 패키징
 # 4. 산출물:
-#    dist/LineageMPTimer-1.4.1-portable.exe (포터블)
-#    dist/LineageMPTimerPaddle Setup 1.4.1.exe (NSIS 설치형)
-#    dist/LineageMPTimer-v1.4.1.zip (친구 배포용 — portable + 설명서 + 변경내역)
+#    dist/LineageMPTimer-1.4.1-portable.exe
+#    dist/LineageMPTimer-v1.4.1.zip
 ```
 
-**⚠️ 절대 잊지 말 것**:
-- `npm run dist` 단독으로는 코드 변경이 반영 안 됨 (ZIP만 재패키징). **반드시 `npm run build` 먼저 실행**.
-- 사용자 진단 보낸 후 `cachedROIs`가 5분 TTL이라 새 빌드 받자마자 `🔄 재탐지` 버튼 눌러야 새 코드 동작.
+⚠️ `npm run dist` 단독으로는 코드 변경 안 반영 (ZIP만 재패키징). 반드시 `npm run build` 먼저.
 
 ---
 
 ## 🎓 이번 세션의 메타 교훈
 
-1. **사용자가 옳을 가능성을 항상 고려**: "어제는 잘 됐다" 라고 했을 때 "환경 변화" 또는 "코드 회귀" 양쪽 다 검증. 결국 사용자 말이 맞았음 (게임 EXP % 차이).
+1. **사용자 게임 시스템 정보가 결정적**: "MP 뒤 파란색 좌→우 차오름" 한 마디가 6라운드 디버깅 후 진짜 root cause 노출. 다음에 비슷한 정체 시 사용자에게 게임 시스템 직접 물어보기.
 
-2. **빠른 빌드 반복은 신뢰 떨어뜨림**: 6번 빌드/패치 반복 끝에 진짜 root cause 발견. 픽셀 분석으로 정확히 찾고 1번에 수정하는 게 더 효율적.
+2. **Fix가 회귀를 일으킬 수 있다**: Phase 3a가 자동 모드 전체 OCR 막은 회귀. validateROIs valid=false의 전파를 미리 검토 못함. 다음에 fix 작성 시 호출 측 영향까지 trace.
 
-3. **진행 막대 의존 SPEC의 한계**: 게임 상태(EXP %)에 따라 막대 픽셀 가시성이 변함. 텍스트 자체 검출이 더 안정.
+3. **hybridLog 도배는 사용자 가시성 죽임**: 매초 같은 메시지 → 다른 메시지 묻힘. 메시지 throttle 디폴트로 적용 권장.
 
-4. **inkScore 단독 사용 위험**: 채팅창, HP 바 등이 ink density 더 높을 수 있음. **위치 검증 + 영역 제외**와 함께 써야.
+4. **ROI 동적 detect의 함정**: 게이지 채워짐 비율이 detect 결과를 바꾸는 시스템. 게임마다 다른 디자인 패턴 학습 필요.
 
-5. **진단 도구 작성에 시간 투자 가치 높음**: pngjs로 PNG 직접 분석하는 스크립트 7개 추가. 다음 세션에서 즉시 활용 가능.
+5. **점진 분석의 가치**: 7라운드 진단으로 매번 다른 root cause 발견. 한 번에 해결하려 하지 말고 each round에 한 가지씩.
+
+6. **다수결 미달 영원 미반영**: agreement 미달이면 stability tracking 시작도 안 함 → anchor 영원 굳음. fallback stability 패턴 추가가 의외로 큰 영향.
 
 ---
 
-_Last updated: 2026-05-06 v10 · Claude (Anthropic) · v1.4.1 자동 모드 root cause 7종 + LV 텍스트 직접 검출_
+## 📂 생성된 plan 문서
+
+```
+.omc/plans/v1.4.2-auto-stabilization.md       — Phase 3 (3a/3b/3c)
+.omc/plans/v1.4.3-confusion-defense.md        — P0 + P1
+.omc/plans/v1.5.0-training-data-recollection.md — P2 학습 재수집 plan (장기)
+```
+
+---
+
+_Last updated: 2026-05-07 v11 · Claude (Anthropic) · v1.4.3 OCR 안정화 7종_

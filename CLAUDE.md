@@ -140,6 +140,65 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.4.3 (2026-05-07) — OCR 안정화 7종 + MP textROI 게이지 종속 해제 ⭐⭐⭐⭐
+사용자 진단 7라운드 분석으로 root cause 7종 해결. v1.4.2 자동 모드 회귀 fix 포함.
+
+**핵심 발견 (이번 세션 가장 중요)**:
+- **MP 게이지가 좌→우로 차오르는 시스템** → mpBar.width = 채워진 부분만 → MP 적을수록 textROI 좁음
+- MP=113/242일 때 textROI=81px → "MP : 71"만 캡처 → OCR 매번 misread
+- 해결: HP/MP 게이지 영역 폭 동일 가정 → max(mpBar, hpBar, 200)
+
+수정 commit:
+- `d60d35c` `fix(ocr): v1.4.3 자동 모드 안정화 + MP ROI/anchor 자동 복구`
+
+적용된 fix 7종:
+
+1. **[Phase 3a] ADENA frameW 클램프** (`roi-detector.js`)
+   - 게임창 우측 가장자리 ADENA가 frameW 밖 100px → 검정 픽셀 캡처 → OCR "???"
+   - 모든 ROI를 frameW 내 클램프, ADENA-only issue를 valid 결정에서 제외
+
+2. **[Phase 3b] MP paddle max anchor 자동 복구** (`app.js`)
+   - userMax 잘못 입력(197) vs 화면 max(242) → paddle 결과 매번 폐기
+   - paddle 5회 연속 같은 max + 합리적 범위 → INPUTS 자동 갱신
+   - ADENA v1.3.13 `_matchRecover` 패턴을 MP에 도입
+
+3. **[Phase 3c] ADENA invalid 회귀 fix** (`app.js`)
+   - 3a 부작용: validateROIs valid=false → 전체 OCR 호출 안 됨
+   - 필수 ROI 검증에서 ADENA 제거 (mp/exp/level만 필수)
+   - ADENA width<50 시 textROIs.adena=null + 30s throttled 안내
+
+4. **[P0] Stability 디폴트 3** (`storage.js` + `app.js`)
+   - 1회 misread 자동 흡수
+   - getStabilityRequired 0~5 허용
+
+5. **[P1] Confusion-aware verification** (`app.js`)
+   - 픽셀 폰트 confusion: 0↔8, 5↔8, 6↔8, 4↔9, 7↔1, 9↔7
+   - `isConfusionMisread(anchor, val)` helper — 1자리 차이 + pair 매칭
+   - MP voting + ADENA voting에 적용 (정상 변화 +1 stability)
+
+6. **[Phase 4a] MP textROI 폭 게이지 종속 해제** (`roi-detector.js`)
+   - mpBar.width(파란 채워진 부분)에 종속되면 MP 적을수록 텍스트 일부만 캡처
+   - max(mpBar.width, hpBar?.width, 200) — HP/MP 게이지 폭 동일 가정
+
+7. **[Phase 5] LEVEL 다수결 미달 fallback** (`app.js`)
+   - LEVEL ROI(61×19) 작아 canvas ensemble 다수결 1/1 영원 미달
+   - OCR이 정확히 29 읽어도 anchor 갱신 안 됨, 이전 misread "5" 굳음
+   - 다수결 미달이어도 7회(정상)/10회(점프) 일관 시 fallback 통과
+   - `🔓 LEVEL anchor 자동 복구` 메시지로 사용자에게 노출
+
+**검증 (사용자 진단 7라운드 점진 개선)**:
+- 08-07-39 (수동, mpMax=197 잘못) → ADENA 12px root cause 발견
+- 08-17-51 (자동 detect 후 수동 전환) → MP paddle 정확/tess 깨짐
+- 11-46-28 (Phase 3a 부작용) → 자동 OCR 전체 막힘 회귀
+- 12-00-18 (Phase 3b/3c 적용) → MP anchor 197→242 자동 복구 ✅
+- 12-09-05 (사용자 게임화면 + ADENA "14") → MP textROI 게이지 종속 발견
+- 12-18-16 (Phase 4a 적용 후) → MP "32/242 ×5" 완벽 동작 ✅
+- 12-47-24 (ADENA 정상 + LEVEL anchor 굳음) → Phase 5 LEVEL fallback 추가
+
+**남은 한계 (P2 traineddata 재학습으로 해결 — `.omc/plans/v1.5.0-training-data-recollection.md`)**:
+- 던전 알림 등 일시 텍스트 misread (Phase 5 fallback strict로 차단되지만 본질적 해결 X)
+- paddle/tess 픽셀 폰트 사전훈련 분포 한계 (0/8/5/6 confusion)
+
 ### v1.4.1 (2026-05-06) — 자동 모드 root cause 7종 + LV 텍스트 직접 검출 ⭐⭐⭐
 사용자 진단 13개 캡처 + 픽셀 레벨 분석으로 v1.4.0 자동 모드의 모든 잔여 root cause 해결.
 **핵심 발견**: EXP %가 0% 가까우면(레벨업 직후) 진행 막대가 거의 비어 자동 탐지 깨짐 → LV 텍스트 자체를 직접 검출하는 방식으로 막대 의존도 제거.

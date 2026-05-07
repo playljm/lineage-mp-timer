@@ -5234,7 +5234,29 @@
                   console.log('[OCR LEVEL plausibility]', { lv, prev, isJump, levelStableCount, requiredStable });
                 }
               } else {
-                dom.adLevelLast.textContent = `🔄 Lv.${lv} (${agreement}/${total} — 다수결 미달)`;
+                // [v1.4.3+] 다수결 미달 fallback stability — 사용자 진단 (2026-05-07T12-47-24):
+                //   LEVEL ROI(61×19)가 작아 canvas ensemble 다수결 1/1로 영원 미달 →
+                //   OCR이 정확히 29 읽어도 anchor 갱신 안 됨. 이전 misread "5" 굳음.
+                //   해결: 다수결 미달이어도 같은 값 N회 연속 일관 시 fallback 통과
+                //         (정상=7회, 큰 점프=10회) — strict하게 던전 알림 등 일시 misread 차단.
+                if (lv === levelStableLast) levelStableCount++;
+                else { levelStableLast = lv; levelStableCount = 1; }
+                const prev = parseInt(dom.trkLevelNow.value, 10) || 0;
+                const isFirstLvLow = !(prev > 1);
+                const isJumpLow = isFirstLvLow || Math.abs(lv - prev) > 2;
+                const lowConfReq = isJumpLow ? 10 : 7;
+                if (levelStableCount >= lowConfReq) {
+                  if (lv !== prev) {
+                    dom.trkLevelNow.value = lv;
+                    renderTracker();
+                    saveTrackerCurrent();
+                    pushHybridLog('🔓 LEVEL anchor 자동 복구 (다수결 미달 but ' + lowConfReq + '회 일관): ' + prev + ' → ' + lv);
+                  }
+                  dom.adLevelLast.textContent = `✅ Lv.${lv} (${agreement}/${total} — 미달이지만 ${lowConfReq}회 일관)`;
+                } else {
+                  const jumpHint = isJumpLow ? ' 🚧 점프' : '';
+                  dom.adLevelLast.textContent = `🔄 Lv.${lv} (${agreement}/${total} 미달 · 검증 ${levelStableCount}/${lowConfReq})${jumpHint}`;
+                }
               }
             } else {
               dom.adLevelLast.textContent = `❌ "${(r.text || '???').slice(0, 20)}"`;
