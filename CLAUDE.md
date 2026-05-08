@@ -140,6 +140,24 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.5.7 (2026-05-08) — EXP 0↔9 confusion 안정화 (H1+H2+H3) ⭐⭐
+사용자 진단 2026-05-08T13-51-20 (v1.5.6): LEVEL ✅ G fix 작동 확인. EXP "40.8843%"가 OCR에서 "49.8843%"로 매번 misread (0↔9 confusion, traineddata 학습 한계).
+
+**H1 EXP 점프 검증 confusion 케이스 강화** (`app.js:4555`)
+- 정수부 차이 5/9 + |delta| 패턴 일치 시 confusion 의심 → requiredJumpCount 15→30회.
+- 매번 일관 misread 케이스에서 anchor stale 굳기 직전까지 시간 ↑.
+
+**H2 사용자 anchor 직접 입력 보호 60초→180초** (`app.js:253 markUserEdit`)
+- 사용자가 trkExpNow 직접 수정 후 OCR이 60초 후 덮어쓰던 부담 완화.
+- 3분 동안 OCR 자동 갱신 무시 → 짧은 사냥 도중 anchor 보호 유지.
+
+**H3 EXP/LEVEL textROI PAD_X 2→4** (`roi-detector.js`)
+- cluster 분리 결과의 좌우 padding ↑ → 글자 안티앨리어싱 영향 ↓ → OCR 정확도 미세 향상.
+
+**검증**: npm test 36/36, node --check OK
+
+**알려진 한계**: 0↔9 confusion 자체는 traineddata 학습 한계. 코드 fix는 우회 휴리스틱이며 100% 해결 X. v1.6.0 학습 데이터 보강 (EXP 40대 케이스) 후 근본 해결 가능.
+
 ### v1.5.6 (2026-05-08) — LEVEL anchor stale 자동 복구 (G fix) ⭐⭐
 사용자 진단 2026-05-08T13-37-57 (v1.5.5): MP/EXP/ADENA 진전 ✅ but LEVEL anchor=23 stale로 굳어 D fix 발동 못함.
 

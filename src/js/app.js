@@ -251,10 +251,11 @@
   // blur 후 5초 grace period — 그 사이 같은 칸 다시 클릭하면 grace 갱신
   const userEditUntil = { exp: 0, level: 0, adena: 0, mp: 0 };
   function markUserEdit(key) {
-    // [v1.3.4] 5초 → 60초 — 사용자 명시적 anchor 편집은 강한 신호.
-    //   OCR이 일관 misread 응답하면 5초 후 통과되어 사용자 편집이 무력화되는 문제.
-    //   60초 동안 anchor 절대 보호 → 사용자가 영역 재지정/조치할 시간 확보.
-    userEditUntil[key] = Date.now() + 60000;
+    // [v1.3.4] 5초 → 60초, [v1.5.7 H2 fix] 60초 → 180초 — 사용자 명시적 anchor 편집은 강한 신호.
+    //   사용자 진단 (2026-05-08T13-51-20): EXP 0↔9 catastrophic confusion (40.8843 → 49.8843 매번)
+    //   60초 후 OCR이 다시 49로 anchor 덮어쓰기 → 사용자 1분 단위로 재입력해야 하는 부담.
+    //   180초로 늘려 사용자가 짧은 사냥 도중에도 anchor 보호 유지 가능.
+    userEditUntil[key] = Date.now() + 180000;
     // [v1.3.3] verify queue + stability 리셋 — OCR이 캐시된 misread로 즉시 anchor 덮어쓰기 차단
     //   사용자 편집 후 OCR은 처음부터 N회 일관 검증 누적해야 통과
     try {
@@ -4560,7 +4561,15 @@
           if (!ocrExpRegionHybrid._verifyQueue) ocrExpRegionHybrid._verifyQueue = { val: null, count: 0 };
           const vqJump = ocrExpRegionHybrid._verifyQueue;
           const tolJump = 0.001;
-          const requiredJumpCount = 15;
+          // [v1.5.7 H1 fix] 정수부 차이가 0↔9 / 4↔9 confusion 패턴이면 검증 횟수 강화.
+          //   사용자 진단 (2026-05-08T13-51-20): EXP "40.8843%"가 매번 "49.8843%"로 misread →
+          //   |delta|=9.0%p 큰 점프지만 매번 일관 → 15회 통과 후 anchor 잘못 갱신 위험.
+          //   정수부 차이가 정확히 5/9 (0↔9, 4↔9, 5↔9 confusion)이면 30회로 강화.
+          const anchorInt = Math.floor(anchorBoth);
+          const valInt = Math.floor(valBoth);
+          const intDiff = Math.abs(valInt - anchorInt);
+          const isConfusionJump = (intDiff === 9 || intDiff === 5) && Math.abs(absDelta - intDiff) < 0.5;
+          const requiredJumpCount = isConfusionJump ? 30 : 15;
           if (vqJump.val !== null && Math.abs(vqJump.val - valBoth) < tolJump) {
             vqJump.count++;
             if (vqJump.count >= requiredJumpCount) {

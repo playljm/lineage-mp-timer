@@ -504,7 +504,10 @@
         const lvLine = textLines.find((l) => l.clusters && l.clusters.length >= 2);
         if (lvLine) {
           const PAD_Y = 4;
-          const PAD_X = 2;
+          // [v1.5.7 H3 fix] EXP/LEVEL textROI 좌우 padding 2→4 (글자 안티앨리어싱 보호)
+          //   사용자 진단 (2026-05-08T13-51-20): EXP "40.8843%"의 0이 9로 misread (0↔9 confusion)
+          //   좌우 PAD ↑ → 글자 가장자리 손실 ↓ → OCR 정확도 미세 향상
+          const PAD_X = 4;
           const y = Math.max(0, lvLine.yStart - PAD_Y);
           const h = Math.min(frameH - y, lvLine.height + PAD_Y * 2);
           // 가장 좌측 cluster = Level, 가장 우측 cluster들의 통합 = EXP%
