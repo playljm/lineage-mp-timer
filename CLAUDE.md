@@ -140,6 +140,16 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.5.6 (2026-05-08) — LEVEL anchor stale 자동 복구 (G fix) ⭐⭐
+사용자 진단 2026-05-08T13-37-57 (v1.5.5): MP/EXP/ADENA 진전 ✅ but LEVEL anchor=23 stale로 굳어 D fix 발동 못함.
+
+**G fix LEVEL paddle 3회 일관 + anchor 자동 복구** (`app.js:4157`)
+- v1.5.5 D fix 한계: `paddle === anchor` 만 채택 → anchor stale 23 + paddle 29 시 발동 못함.
+- 추가: paddle 1~99 sanity + 3회 연속 일관 + anchor 다름 → anchor 자동 복구 + paddle 채택.
+- 3회 검증으로 paddle 자체 misread 차단.
+
+**검증**: npm test 36/36, node --check OK
+
 ### v1.5.5 (2026-05-08) — anchor stale 양방향 자동 복구 + LEVEL paddle 우선 ⭐⭐⭐
 사용자 진단 2026-05-08T13-19-43 (v1.5.4): EXP 정상 인식 ✅ but MP/LEVEL/ADENA paddle 정확 결과가 anchor stale + voting 정책으로 매번 폐기.
 

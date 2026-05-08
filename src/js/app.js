@@ -4160,18 +4160,37 @@
   }
   async function ocrLevelRegionHybrid() {
     const [pr, tr] = await Promise.all([ocrLevelRegionPaddle(), ocrLevelRegionTesseract()]);
-    // [v1.5.5 D fix] LEVEL은 짧은 글자(LV.NN) 특성상 paddle이 일반적으로 더 정확.
-    //   사용자 진단 (2026-05-08T13-19-43): paddle level=29 정확, tess "23" 매번 일관 misread →
-    //   voteHybrid disagree 폐기 → LEVEL anchor 영영 갱신 안 됨.
-    //   해결: paddle 결과가 1~99 sanity + 트래커 anchor와 일치 → paddle 단독 채택 (tess 무시).
-    //   anchor와 다르면 기존 voteHybrid 흐름 (paddle/tess 합의 또는 검증).
+    // [v1.5.5 D / v1.5.6 G fix] LEVEL paddle 우선 + anchor stale 자동 복구.
+    //   D 한계 (v1.5.5): anchor 일치 케이스만 paddle 단독 채택 → anchor가 stale 23이면 발동 못함.
+    //   사용자 진단 (2026-05-08T13-37-57): anchor levelNow=23 stale, paddle=29 정확 매 사이클 → D fix 못 발동.
+    //   G 추가: paddle 1~99 sanity + 3회 연속 일관 → paddle 단독 채택 + anchor 자동 복구.
+    //   3회 일관 검증으로 paddle 자체 misread도 거름.
     if (pr && pr.parsed && Number.isFinite(pr.parsed.level)
         && pr.parsed.level >= 1 && pr.parsed.level <= 99) {
       const anchor = parseInt(dom.trkLevelNow ? dom.trkLevelNow.value : '', 10) || 0;
+      // D: anchor 일치 즉시 채택
       if (anchor > 0 && pr.parsed.level === anchor && tr && tr.parsed && tr.parsed.level !== anchor) {
         pushHybridLog('LEVEL 🟢 paddle 단독 채택 (anchor=' + anchor + ' 일치, tess=' + tr.parsed.level + ' 무시)');
+        if (ocrLevelRegionHybrid._stale) ocrLevelRegionHybrid._stale = { val: 0, count: 0 };
         return pr;
       }
+      // G: paddle 3회 연속 일관 + anchor 다름 → anchor 자동 복구 + paddle 채택
+      if (!ocrLevelRegionHybrid._stale) ocrLevelRegionHybrid._stale = { val: 0, count: 0 };
+      const sr = ocrLevelRegionHybrid._stale;
+      if (sr.val === pr.parsed.level) sr.count++;
+      else { sr.val = pr.parsed.level; sr.count = 1; }
+      if (sr.count >= 3 && anchor !== pr.parsed.level) {
+        pushHybridLog('🔓 LEVEL anchor 자동 복구 (paddle 3회 일관, ' + anchor + ' → ' + pr.parsed.level + ')');
+        if (dom.trkLevelNow) dom.trkLevelNow.value = pr.parsed.level;
+        if (dom.trkLevelStart && !parseInt(dom.trkLevelStart.value, 10)) dom.trkLevelStart.value = pr.parsed.level;
+        try { saveTrackerCurrent && saveTrackerCurrent(); } catch (_) {}
+        sr.count = 0; sr.val = 0;
+        return pr;
+      } else if (sr.count === 2) {
+        pushHybridLog('LEVEL ⏳ anchor 복구 검증 (' + sr.count + '/3) paddle=' + pr.parsed.level + ' vs anchor=' + anchor);
+      }
+    } else if (ocrLevelRegionHybrid._stale) {
+      ocrLevelRegionHybrid._stale.count = 0;
     }
     return voteHybrid('LEVEL', pr, tr, (a, b) => a.level === b.level);
   }
