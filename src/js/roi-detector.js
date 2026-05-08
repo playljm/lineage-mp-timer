@@ -482,9 +482,12 @@
       //         LV 텍스트 라인을 직접 검출하여 ROI 도출. 막대 두꺼우면 기존 동작.
       const useExpand = expBar.height < 12;
       const expX_bar = Math.round(expBar.x + expBar.width * 0.45);
-      const expW_bar = Math.round(expBar.width * 0.55);
+      // [v1.5.2 fix] expW_bar 최소 50px 보장 — validateROIs sanity (rois.exp.width<50) invalid 차단.
+      //   사용자 진단 (2026-05-08T12-21-25): expBar.width=82 → 0.55*82=45.1 → invalid 도배.
+      //   정상 expBar(width≥80) 케이스에서도 textROI 부족 가능 → 보정.
+      const expW_bar = Math.max(50, Math.round(expBar.width * 0.55));
       const lvlX_bar = Math.round(expBar.x);
-      const lvlW_bar = Math.round(expBar.width * 0.4);
+      const lvlW_bar = Math.max(30, Math.round(expBar.width * 0.4));
       if (useExpand && imageData) {
         // 1차: LV 텍스트 라인 검출 시도 (좌측 미니 패널)
         const textLines = findLevelTextLines(imageData, frameW, frameH);

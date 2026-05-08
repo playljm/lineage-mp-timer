@@ -3507,13 +3507,29 @@
     let hybridAdena = NaN;
     let hybridDetail = null;
     let hybridOverrides = 0;
+    // [v1.5.2 fix] template 자체가 잘못 인식한 경우(자릿수별 일치율 매우 낮음) override 전체 skip
+    //   사용자 진단 (2026-05-08T12-21-25): template "96097" vs OCR "25399" 일치 1/5 = 20%
+    //   기존 B-noisy tier가 마지막 자리 NOISY 9→7 변형 → 표시값 잘못 25,297
+    //   template과 OCR이 너무 다르면 template canvas 매칭 자체가 catastrophic — 신뢰 불가.
+    let tplOcrMatchRate = 1;
+    if (templatePerCharFixed && templatePerCharFixed.length === dominantLen && perPos.length === dominantLen) {
+      let _m = 0;
+      for (let _i = 0; _i < dominantLen; _i++) {
+        if (templatePerCharFixed[_i] && templatePerCharFixed[_i].char === perPos[_i].best) _m++;
+      }
+      tplOcrMatchRate = _m / dominantLen;
+    }
+    const trustTemplate = tplOcrMatchRate >= 0.4;
+    if (!trustTemplate && templatePerCharFixed) {
+      pushHybridLog('🔒 ADENA template 신뢰 거부 (일치율 ' + Math.round(tplOcrMatchRate*100) + '% <40%) — per-digit override skip');
+    }
     if (perPos.length > 0 && perPos.length === dominantLen && sameLenList.length > 0) {
       const finalDigits = [];
       const overrideLogs = [];
       const totalSame = sameLenList.length;
       for (let i = 0; i < dominantLen; i++) {
         const v = perPos[i];
-        const t = templatePerCharFixed ? templatePerCharFixed[i] : null;
+        const t = trustTemplate && templatePerCharFixed ? templatePerCharFixed[i] : null;
         const votingMargin = v.count / Math.max(1, totalSame);
         const votingStrong = !v.tie && votingMargin >= 0.75;
         let chosen = v.best;
@@ -4648,11 +4664,21 @@
   //   → 이후 기존 OCR 함수가 그대로 동작 (수정 X)
   //   캐시: cachedROIs 존재 + 나이 < roiCacheMaxAge*1000 + 연속 실패 < threshold → Phase 1 스킵
   // ============================================================================
-  async function ensureAutoModeROIs() {
+  async function ensureAutoModeROIs(opts) {
+    opts = opts || {};
     if (!autoDetect.gameRegion) return false;
     if (!window.RoiDetector || typeof window.RoiDetector.detectGameUI !== 'function') {
       pushHybridLog('🤖 RoiDetector 미로딩 — script tag 누락');
       return false;
+    }
+    // [v1.5.2 fix] OCR 트래커 미작동 중엔 자동 ROI 새 탐지 사이클 skip
+    //   사용자 진단 (2026-05-08T12-21-25): autoDetect.active=false (트래커 PAUSE) 인데
+    //   hybridLog "ADENA ROI 폭 부족" 메시지 도배 → 사용자 체감 노이즈
+    //   해결: active=false 시 cachedROIs 유효성 반환만 하고 새 탐지/로그 skip.
+    //   opts.force=true (재탐지 버튼) 시 bypass.
+    if (!autoDetect.active && !opts.force) {
+      const c = autoDetect.cachedROIs;
+      return !!(c && c.textROIs && c.textROIs.mp && c.textROIs.exp && c.textROIs.level);
     }
     const now = Date.now();
     const maxAgeMs = (autoDetect.roiCacheMaxAge || 300) * 1000;
@@ -4724,11 +4750,18 @@
           || !result.textROIs.level) {
         const issues = (result && result.issues && result.issues.length) ? result.issues.join(', ') : 'unknown';
         // 동일 메시지 30초 throttle — 매초 도배 방지
+        // [v1.5.2 fix] throttle 키를 issues 전체 문자열 → 알파벳순 첫 issue로 정규화
+        //   사용자 진단 (2026-05-08T12-21-25): "EXP textROI 폭 너무 좁음" + "ADENA ROI 폭 부족"
+        //   alternate 발생 → 30s 윈도우 매번 reset → 같은 root cause 5회 반복 노출.
+        //   해결: 핵심 issue 1개로 정규화 → 같은 issue 30s 안 1회만 출력.
+        const _coreIssueKey = (result && result.issues && result.issues.length)
+          ? result.issues.slice().sort()[0]
+          : 'unknown';
         const nowMs = Date.now();
-        if (!ensureAutoModeROIs._lastFailMsg || ensureAutoModeROIs._lastFailMsg.text !== issues
+        if (!ensureAutoModeROIs._lastFailMsg || ensureAutoModeROIs._lastFailMsg.text !== _coreIssueKey
             || (nowMs - ensureAutoModeROIs._lastFailMsg.at) > 30000) {
           pushHybridLog('🤖 자동 ROI 탐지 실패: ' + issues);
-          ensureAutoModeROIs._lastFailMsg = { text: issues, at: nowMs };
+          ensureAutoModeROIs._lastFailMsg = { text: _coreIssueKey, at: nowMs };
         }
         // [v1.4.0+] 첫 실패 시 캡처 프레임을 진단 폴더에 저장 → 사용자 공유용
         if (!ensureAutoModeROIs._diagSaved && api && api.saveDiagnosticReport) {
@@ -4868,6 +4901,21 @@
         && autoDetect.adenaRegion.sourceId !== gr.sourceId) {
       pushHybridLog('🤖 ADENA 수동 override가 다른 모니터(stale: ' + autoDetect.adenaRegion.sourceId + ' vs gameRegion: ' + gr.sourceId + ') — 자동 해제');
       autoDetect._adenaManualOverride = false;
+    }
+    // [v1.5.2 fix] mpBarRegion stale sourceId 자동 무효화
+    //   사용자 진단 (2026-05-08T12-21-25): regions.mpBar.sourceId = "screen:0:0" stale,
+    //   gameRegion = "screen:1:0" → captureRegionToCanvas 호출 시 captureStream 없어
+    //   throw "캡처 스트림이 없습니다" 무한 발생 → MP gauge 검증 실패 → MP "???" 영원.
+    //   mp/exp/level/adena Region은 매 틱 toAbsRegion으로 새로 할당되어 stale 안 되지만
+    //   mpBarRegion은 사용자 수동 지정 + 별도 갱신 경로 없어 stale 남음.
+    //   해결: gameRegion sourceId와 다르면 무효화 → useMpBar 기능은 일시 중지되지만
+    //   MP 텍스트 OCR 회로는 살아남음 (게이지 보조 검증 < MP 본 OCR 우선).
+    if (autoDetect.mpBarRegion && autoDetect.mpBarRegion.sourceId
+        && autoDetect.mpBarRegion.sourceId !== gr.sourceId) {
+      pushHybridLog('🤖 mpBarRegion stale sourceId(' + autoDetect.mpBarRegion.sourceId + ') vs gameRegion(' + gr.sourceId + ') — 자동 무효화');
+      autoDetect.mpBarRegion = null;
+      autoDetect.useMpBar = false;
+      try { S.saveAutoDetect(autoDetect); } catch (_) {}
     }
     // [v1.4.0+] ADENA 수동 override 존중 — 사용자 진단 (2026-05-05T13-24-06):
     //   자동 탐지가 인벤토리 노란 아이템을 ADENA로 오인하는 케이스 (UI 다양성)
@@ -6001,8 +6049,12 @@
           // 메타데이터 + 로그
           const safeText = (el, max) => (el && el.textContent ? el.textContent.slice(0, max || 5000) : '');
           // [v1.3.21] displayId 일치 검증 — 진단 리포트에 자동 포함
+          // [v1.5.2 fix] mpBar도 검증 대상에 포함 — sourceId stale을 자체 진단 가능하게.
+          //   사용자 진단 (2026-05-08T12-21-25): mpBar.sourceId=screen:0:0 stale인데
+          //   displayCheck.status=ok로 표시 → 사용자/디버그 모두 root cause 식별 불가했음.
           const _diagRegions = {
             mp: autoDetect.mpRegion,
+            mpBar: autoDetect.mpBarRegion,
             exp: autoDetect.expRegion,
             level: autoDetect.levelRegion,
             adena: autoDetect.adenaRegion,

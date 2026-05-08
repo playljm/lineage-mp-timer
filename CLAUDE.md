@@ -140,6 +140,22 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.5.2 (2026-05-08) — 자동 인식 회로 root cause 5종 fix ⭐⭐⭐
+사용자 진단 2026-05-08T12-21-25 (v1.5.1): MP 영원 `???` (anchor 8/8 stale) + ADENA 마지막 자리 변형 25399→25297 + hybridLog 도배.
+
+**Root cause + fix**:
+1. **mpBarRegion stale sourceId** (P0) — `regions.mpBar.sourceId=screen:0:0` 인데 `gameRegion=screen:1:0` → captureStream 없음 → MP gauge 검증 throw → MP "???" 영원. v1.4.0+ ADENA stale 해제 패턴(line 4877)을 mpBarRegion에도 확장 (`app.js:~4882`).
+2. **ADENA template catastrophic mismatch** (P1) — template "96097" vs OCR "25399" 자릿수 일치 1/5=20% 인데도 B-noisy tier가 마지막 자리 9→7 변형. `tplOcrMatchRate < 0.4` 시 per-digit override 전체 skip (`app.js:3505`).
+3. **EXP textROI<50 sanity 도배** (P2) — `expBar.width=82 → 0.55*82=45 → invalid` 무한 반복. roi-detector.js의 `expW_bar = Math.max(50, ...)` clamp + throttle 키를 `issues.sort()[0]` 정규화로 변경.
+4. **autoDetect.active=false 시 자동 ROI 사이클** (P3) — 트래커 PAUSE 중인데 hybridLog 도배. ensureAutoModeROIs 진입부에 `!active && !opts.force` skip 추가.
+5. **displayCheck mpBar 누락** (P4) — `_diagRegions`에 mpBar 추가 → 사용자 진단 시 sourceId mismatch 자체 진단 가능.
+
+**파일 변경**: `src/js/app.js` 4곳, `src/js/roi-detector.js` 1곳, 총 ~50 LOC.
+
+**검증**: npm test 36/36 통과 + node --check 양호.
+
+**상세**: `.omc/plans/v1.5.2-auto-recognition-fix.md`
+
 ### v1.5.1 (2026-05-08) — expBar 후보 width 최소 sanity (EXP/LEVEL ROI 잘못 잡힘 fix) ⭐⭐
 사용자 진단 2026-05-07T15-11-42 (v1.5.0 빌드 사용 시): expBar.width=58px 짧은 후보 채택 → EXP textROI w=32, LEVEL textROI w=23 → 둘 다 LV.29 박스 부분만 캡처 → OCR catastrophic ("C", "???").
 
