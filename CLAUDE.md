@@ -140,6 +140,28 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.5.5 (2026-05-08) — anchor stale 양방향 자동 복구 + LEVEL paddle 우선 ⭐⭐⭐
+사용자 진단 2026-05-08T13-19-43 (v1.5.4): EXP 정상 인식 ✅ but MP/LEVEL/ADENA paddle 정확 결과가 anchor stale + voting 정책으로 매번 폐기.
+
+**A++ MP anchor 양방향 stale** (`app.js:4081`)
+- v1.5.4 게이트 `pmx >= um*2` 가 mpMax=292 stale(paddle 242, 차이 50)을 막음.
+- 변경: `Math.abs(pmx-um) / max(pmx,um) >= 0.1` (10% 차이) → stale 의심.
+- 5회 일관 시 max+cur 동시 복구.
+
+**D LEVEL paddle 우선** (`app.js:4157`)
+- tess가 매번 LV.29를 "23"으로 misread → voteHybrid disagree 폐기.
+- paddle.level 1~99 sanity 통과 + 트래커 anchor와 일치 → paddle 단독 채택.
+
+**E ADENA anchor 자릿수 부족 자동 복구** (`app.js:4181`)
+- anchor=778(3자리) stale + tess=10778(5자리) 정확 + paddle=778 catastrophic misread.
+- tess 자릿수가 anchor +2 이상 + tess 5회 일관 → anchor 자동 복구 + tess 단독 채택.
+
+**F (보류)**: autoStartTracker 첫 사이클 sanity. 추가 분석 후 v1.5.6 검토.
+
+**파일 변경**: `src/js/app.js` 3곳, ~50 LOC.
+
+**검증**: npm test 36/36, node --check OK.
+
 ### v1.5.4 (2026-05-08) — EXP 막대 없는 UI 대응 + MP anchor stale 동시 복구 ⭐⭐⭐
 사용자 진단 2026-05-08T12-58-41 (v1.5.3) + 게임 스크린샷:
 - LEVEL `LLEW`, EXP `???`, MP `3/8 ×3` (실제 화면 LV.29 + 39.6107% + 131/242)

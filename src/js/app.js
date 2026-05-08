@@ -4084,7 +4084,11 @@
       const uc = parseInt(dom.inCurMp.value, 10) || 0;
       const pmx = pr.parsed.max, pcr = pr.parsed.cur;
       const paddleSane = pmx >= 50 && pmx <= 9999 && pcr >= 0 && pcr <= pmx;
-      const userMaxStale = um === 0 || pmx >= um * 2;  // userMax가 paddle max의 절반 미만 → stale
+      // [v1.5.5 A++ fix] 양방향 stale — userMax가 너무 작거나 너무 큰 경우 모두 자동 복구.
+      //   사용자 진단 (2026-05-08T13-19-43): mpMax=292 stale인데 paddle=242 (10% 차이만) →
+      //   기존 게이트 `pmx >= um*2` 미충족 → 영원 미복구. 차이가 max값의 10% 이상이면 stale 의심.
+      const stalePct = um === 0 ? 1 : Math.abs(pmx - um) / Math.max(pmx, um);
+      const userMaxStale = um === 0 || stalePct >= 0.1;  // 10% 이상 차이 → stale 의심
       if (paddleSane && userMaxStale && pmx !== um) {
         if (!ocrMpRegionHybrid._maxRecover) ocrMpRegionHybrid._maxRecover = { val: 0, count: 0 };
         const mr = ocrMpRegionHybrid._maxRecover;
@@ -4156,11 +4160,50 @@
   }
   async function ocrLevelRegionHybrid() {
     const [pr, tr] = await Promise.all([ocrLevelRegionPaddle(), ocrLevelRegionTesseract()]);
+    // [v1.5.5 D fix] LEVEL은 짧은 글자(LV.NN) 특성상 paddle이 일반적으로 더 정확.
+    //   사용자 진단 (2026-05-08T13-19-43): paddle level=29 정확, tess "23" 매번 일관 misread →
+    //   voteHybrid disagree 폐기 → LEVEL anchor 영영 갱신 안 됨.
+    //   해결: paddle 결과가 1~99 sanity + 트래커 anchor와 일치 → paddle 단독 채택 (tess 무시).
+    //   anchor와 다르면 기존 voteHybrid 흐름 (paddle/tess 합의 또는 검증).
+    if (pr && pr.parsed && Number.isFinite(pr.parsed.level)
+        && pr.parsed.level >= 1 && pr.parsed.level <= 99) {
+      const anchor = parseInt(dom.trkLevelNow ? dom.trkLevelNow.value : '', 10) || 0;
+      if (anchor > 0 && pr.parsed.level === anchor && tr && tr.parsed && tr.parsed.level !== anchor) {
+        pushHybridLog('LEVEL 🟢 paddle 단독 채택 (anchor=' + anchor + ' 일치, tess=' + tr.parsed.level + ' 무시)');
+        return pr;
+      }
+    }
     return voteHybrid('LEVEL', pr, tr, (a, b) => a.level === b.level);
   }
   async function ocrAdenaRegionHybrid() {
     let [pr, tr] = await Promise.all([ocrAdenaRegionPaddle(), ocrAdenaRegionTesseract()]);
 
+    // [v1.5.5 E fix] anchor 자릿수 부족 자동 복구 — anchor가 OCR보다 자릿수 +2 이상 작으면 stale 의심
+    //   사용자 진단 (2026-05-08T13-19-43): anchor=778 (3자리), tess=10778 (5자리, 정확) but
+    //   paddle=778 (catastrophic 3자리 misread). 기존 v15 로직이 paddle 자릿수 매치만 보고 tess 폐기.
+    //   결과: anchor 778 stale → 정확값 10778 영영 채택 안 됨.
+    //   해결: anchor 대비 tess 자릿수 +2 이상 + tess 5회 일관 + tess 자체 sane → anchor 자동 복구 후 tess 채택.
+    if (tr && tr.parsed && Number.isFinite(tr.parsed.adena)) {
+      const tDig = String(tr.parsed.adena).length;
+      const anchorAd0 = parseInt(dom.trkAdenaNow.value, 10) || 0;
+      const aDig0 = anchorAd0 > 0 ? String(anchorAd0).length : 0;
+      if (aDig0 > 0 && tDig >= aDig0 + 2 && tr.parsed.adena >= 1000) {
+        if (!ocrAdenaRegionHybrid._anchorUpRecover) ocrAdenaRegionHybrid._anchorUpRecover = { val: 0, count: 0 };
+        const ar = ocrAdenaRegionHybrid._anchorUpRecover;
+        if (ar.val === tr.parsed.adena) ar.count++;
+        else { ar.val = tr.parsed.adena; ar.count = 1; }
+        if (ar.count >= 5) {
+          pushHybridLog('🔓 ADENA anchor 자동 복구 (tess 5회 일관 + 자릿수 ' + aDig0 + '→' + tDig + '): ' + anchorAd0.toLocaleString() + ' → ' + tr.parsed.adena.toLocaleString());
+          dom.trkAdenaNow.value = tr.parsed.adena;
+          if (!parseInt(dom.trkAdenaStart.value, 10)) dom.trkAdenaStart.value = tr.parsed.adena;
+          try { saveTrackerCurrent && saveTrackerCurrent(); } catch (_) {}
+          ar.count = 0; ar.val = 0;
+          return tr;  // tess 단독 채택
+        } else if (ar.count > 1) {
+          pushHybridLog('ADENA ⏳ anchor 자릿수 복구 검증 (' + ar.count + '/5) tess=' + tr.parsed.adena);
+        }
+      }
+    }
     // [v15] tess override 결과 자릿수 sanity — paddle과 자릿수 다르면 tess 폐기
     //   per-digit / hybrid override는 5자리 strong template으로 4자리 OCR을 5자리로 확장 가능.
     //   paddle이 정상 4자리인데 tess override가 5자리면 misread 의심 → tess 폐기 후 paddle 단독.
