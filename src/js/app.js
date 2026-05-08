@@ -4072,30 +4072,34 @@
       }
     }
 
-    // [v1.4.2] paddle max anchor 자동 복구 — userMax 사용자 잘못 입력 케이스
-    //   사용자 진단 (2026-05-07T11-36-20): 화면 max=242인데 INPUTS userMax=197 잘못 입력 →
-    //   pBaseValid 검증(max === userMax) 매번 false → 모든 paddle 결과 폐기 → MP 인식 영원 실패.
-    //   ADENA의 v1.3.13 anchor 자동 복구 패턴을 MP에 도입.
-    //   조건: paddle이 5회 연속 같은 max 출력 + max in [50,9999] + 0 <= cur <= max
-    //   효과: userMax 자동 갱신 → 다음 사이클부터 pBaseValid=true → paddle 단독 채택 자연 동작.
+    // [v1.4.2 / v1.5.4] paddle max+cur anchor 자동 복구 — userMax 잘못 입력/굳음 케이스
+    //   v1.4.2: userMax=197 vs 화면 max=242 (사용자 잘못 입력) — paddle 5회 일관 시 max 자동 갱신
+    //   v1.5.4: userMax=8 같은 작은 stale 값에도 발동하도록 게이트 완화 + cur 동시 복구
+    //     사용자 진단 (2026-05-08T12-58-41): mpCur=3, mpMax=8 anchor 굳음 → 화면 131/242 OCR 매번 폐기
+    //     기존 게이트 `um >= 10`이 mpMax=8을 막아 영영 복구 안 됨.
+    //   새 게이트: paddle max가 userMax의 2배 이상 (stale 의심) 또는 userMax==0 + paddle 자체 sanity 통과.
+    //   복구 시 inMaxMp + inCurMp 동시 갱신 (둘 다 stale인 경우 정상화).
     if (pr && pr.parsed && Number.isFinite(pr.parsed.max) && Number.isFinite(pr.parsed.cur)) {
       const um = parseInt(dom.inMaxMp.value, 10) || 0;
+      const uc = parseInt(dom.inCurMp.value, 10) || 0;
       const pmx = pr.parsed.max, pcr = pr.parsed.cur;
-      if (um >= 10 && pmx !== um && pmx >= 50 && pmx <= 9999 && pcr >= 0 && pcr <= pmx) {
+      const paddleSane = pmx >= 50 && pmx <= 9999 && pcr >= 0 && pcr <= pmx;
+      const userMaxStale = um === 0 || pmx >= um * 2;  // userMax가 paddle max의 절반 미만 → stale
+      if (paddleSane && userMaxStale && pmx !== um) {
         if (!ocrMpRegionHybrid._maxRecover) ocrMpRegionHybrid._maxRecover = { val: 0, count: 0 };
         const mr = ocrMpRegionHybrid._maxRecover;
         if (mr.val === pmx) mr.count++;
         else { mr.val = pmx; mr.count = 1; }
         if (mr.count >= 5) {
-          pushHybridLog('🔓 MP anchor max 자동 복구 (paddle 5회 일관, ' + um + ' → ' + pmx + ')');
+          pushHybridLog('🔓 MP anchor 자동 복구 (paddle 5회 일관, max ' + um + '→' + pmx + ', cur ' + uc + '→' + pcr + ')');
           dom.inMaxMp.value = pmx;
+          dom.inCurMp.value = pcr;  // [v1.5.4] cur도 같이 복구 — userMax stale일 땐 userCur도 stale 가능성 큼
           if (typeof saveLast === 'function') { try { saveLast(); } catch (e) {} }
           mr.count = 0; mr.val = 0;
         } else if (mr.count > 1) {
-          pushHybridLog('MP ⏳ max 복구 검증 (' + mr.count + '/5) paddle=' + pmx + ' vs userMax=' + um);
+          pushHybridLog('MP ⏳ anchor 복구 검증 (' + mr.count + '/5) paddle=' + pcr + '/' + pmx + ' vs user=' + uc + '/' + um);
         }
-      } else if (ocrMpRegionHybrid._maxRecover && pmx === (parseInt(dom.inMaxMp.value, 10) || 0)) {
-        // 같아지면 카운터 리셋
+      } else if (ocrMpRegionHybrid._maxRecover && pmx === um) {
         ocrMpRegionHybrid._maxRecover.val = 0;
         ocrMpRegionHybrid._maxRecover.count = 0;
       }

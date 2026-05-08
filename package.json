@@ -1,6 +1,6 @@
 {
   "name": "lineage-mp-timer",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "description": "리니지 클래식 MP 자연회복 완충 시간 계산 + 알림 Electron 앱 (PaddleOCR 빌드)",
   "main": "electron/main.js",
   "scripts": {

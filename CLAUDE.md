@@ -140,6 +140,32 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.5.4 (2026-05-08) — EXP 막대 없는 UI 대응 + MP anchor stale 동시 복구 ⭐⭐⭐
+사용자 진단 2026-05-08T12-58-41 (v1.5.3) + 게임 스크린샷:
+- LEVEL `LLEW`, EXP `???`, MP `3/8 ×3` (실제 화면 LV.29 + 39.6107% + 131/242)
+- v1.5.3 mpBar stale 자동 무효화 작동 확인 (mpBar=null + displayCheck OK)
+
+**P0 EXP 진행 막대 없는 게임 UI 대응** (`roi-detector.js`)
+- 게임 화면 분석: 이 게임은 EXP 진행 막대(progress bar)가 없고 "LEV:29 [아바타] 39.6107%" 텍스트만 표시
+- expBar 후보 자동 탐지가 노란/오렌지 톤 "LEV:29" 텍스트 글자 자체를 막대로 false-positive 채택 (width 85, height 26, avgHue 28)
+- deriveTextROIs "막대 두꺼움" 분기(height≥12)가 단순 0.4/0.55 분할로 LV:29 글자를 가운데로 절단 → LEVEL "LEW", EXP ":29"
+
+**B fix**: 막대 두꺼움 분기에서도 `findLevelTextLines` 우선 시도. cluster 2개 이상 + gap>20px 명확 분리 시 텍스트 라인 ROI 채택. 실패 시 단순 분할 fallback.
+**C fix**: `findExpBarCandidates`에 aspect 기반 우선순위 — 얇은 가로 막대(aspect≥5, height≤12)를 우선, 두꺼운 후보(텍스트 의심)는 후순위. 완전 reject 아닌 ordering으로 false negative 위험 회피.
+
+**P0 MP anchor cur+max 동시 stale 복구** (`app.js:4081`)
+- 진단 anchor mpCur=3, mpMax=8 (사용자 잘못 입력 또는 stale 굳음)
+- 화면 실제 131/242 → paddle/tess 매번 폐기 (max 불일치) → tess "3/8" misread만 anchor와 일치해 통과
+- v1.4.2 mpMax 자동 복구의 게이트 `um >= 10`이 mpMax=8을 막아 영영 복구 안 됨
+
+**A fix**: 게이트 변경 — `pmx >= um*2`(stale 의심) 또는 `um===0` 시 발동. 5회 일관 시 max+cur 동시 복구.
+
+**파일 변경**: `src/js/app.js` 1곳, `src/js/roi-detector.js` 2곳, ~80 LOC.
+
+**검증**: npm test 36/36 통과 + node --check 3 파일 OK.
+
+**상세**: `.omc/plans/v1.5.4-exp-bar-absent-ui.md` (작성 예정)
+
 ### v1.5.3 (2026-05-08) — v1.5.2 회귀 fix + 창 크기 모니터 클램프 ⭐⭐
 사용자 진단 2026-05-08T12-41-24 (v1.5.2): MP 여전히 `???`, adInitStatus "시작값 자동 설정 LEVEL 5/5 실패", 창 처음 실행 시 모니터 밖.
 

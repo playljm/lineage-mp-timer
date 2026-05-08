@@ -283,11 +283,20 @@
       if (bw < 80) return false;
       return true;
     };
-    return findColorBlobs(imageData, {
+    const blobs = findColorBlobs(imageData, {
       hueMin: 12, hueMax: 38,
       satMin: 0.55, valMin: 0.4,
       minArea, posFilter
     });
+    // [v1.5.4 fix] 진짜 EXP 진행 막대(얇은 가로 막대)와 텍스트 글자(LEV:29 같은 노란 텍스트)를 구분.
+    //   사용자 진단 (2026-05-08T12-58-41 + 게임 스크린샷): EXP 진행 막대가 없는 게임 UI에서
+    //   "LEV:29" 노란/오렌지 텍스트가 expBar로 false-positive 채택 (width 85, height 26, aspect 3.27).
+    //   진짜 EXP 진행 막대 aspect 보통 5+ 이상 (얇고 김), 텍스트 글자는 보통 4 미만.
+    //   해결: aspect>=5 + height<=12 후보 우선, 그 외(텍스트 의심)는 후순위.
+    //   완전 reject 아닌 후순위 — 일부 게임 UI는 두꺼운 막대 가능성 보존.
+    const slim = blobs.filter((b) => (b.width / Math.max(1, b.height) >= 5) && b.height <= 12);
+    const thick = blobs.filter((b) => !((b.width / Math.max(1, b.height) >= 5) && b.height <= 12));
+    return slim.concat(thick);
   }
   function findExpBar(imageData, w, h) {
     return findExpBarCandidates(imageData, w, h)[0] || null;
@@ -555,8 +564,57 @@
         }
       } else {
         // 막대 두꺼움 — 텍스트 포함 가정, 자체 사용
-        rois.exp   = { x: expX_bar, y: Math.round(expBar.y), width: expW_bar, height: Math.round(expBar.height) };
-        rois.level = { x: lvlX_bar, y: Math.round(expBar.y), width: lvlW_bar, height: Math.round(expBar.height) };
+        // [v1.5.4 fix] 그러나 expBar 후보가 사실 텍스트 글자 자체(예: 노란/오렌지 LV:29 글자)일 수도
+        //   사용자 진단 (2026-05-08T12-58-41 + 게임 스크린샷): EXP 진행 막대가 없는 게임 UI에서
+        //   "LEV:29" 텍스트 글자가 expBar로 false-positive 채택 → 단순 0.4/0.55 분할이 글자 절단
+        //   → LEVEL "LEW" + EXP ":29" misread.
+        //   해결: useExpand=false 분기에서도 findLevelTextLines를 먼저 시도하고, 2개 이상 cluster가
+        //   잡히고 두 cluster 사이 충분한 gap(>20px)이 있으면 텍스트 라인 기반 ROI 채택.
+        //   실패 시 기존 단순 분할로 fallback.
+        let usedTextLine = false;
+        if (imageData) {
+          const textLines = findLevelTextLines(imageData, frameW, frameH);
+          // expBar 근처 y 라인 우선 (expBar.y±20px 안에 있는 라인 채택)
+          const nearLines = textLines.filter((l) => Math.abs(l.yStart - expBar.y) <= 30);
+          const candLine = nearLines.find((l) => l.clusters && l.clusters.length >= 2)
+            || textLines.find((l) => l.clusters && l.clusters.length >= 2);
+          if (candLine) {
+            const sorted = candLine.clusters.slice().sort((a, b) => a.xStart - b.xStart);
+            let lvlEnd = sorted[0].xEnd;
+            for (let i = 1; i < sorted.length; i++) {
+              if (sorted[i].xStart - lvlEnd <= 25) lvlEnd = sorted[i].xEnd;
+              else break;
+            }
+            let expStart_x = -1;
+            for (const c of sorted) {
+              if (c.xStart > lvlEnd + 20) { expStart_x = c.xStart; break; }
+            }
+            // gap이 20px 이상 명확히 분리된 케이스에만 채택 — 그 외엔 false split 위험
+            if (expStart_x > 0) {
+              const PAD_Y = 4, PAD_X = 2;
+              const y = Math.max(0, candLine.yStart - PAD_Y);
+              const h = Math.min(frameH - y, candLine.height + PAD_Y * 2);
+              const rightMost = sorted[sorted.length - 1];
+              rois.level = {
+                x: Math.max(0, sorted[0].xStart - PAD_X),
+                y: y,
+                width: (lvlEnd - sorted[0].xStart) + PAD_X * 2,
+                height: h
+              };
+              rois.exp = {
+                x: Math.max(0, expStart_x - PAD_X),
+                y: y,
+                width: (rightMost.xEnd - expStart_x) + PAD_X * 2,
+                height: h
+              };
+              usedTextLine = true;
+            }
+          }
+        }
+        if (!usedTextLine) {
+          rois.exp   = { x: expX_bar, y: Math.round(expBar.y), width: expW_bar, height: Math.round(expBar.height) };
+          rois.level = { x: lvlX_bar, y: Math.round(expBar.y), width: lvlW_bar, height: Math.round(expBar.height) };
+        }
       }
     }
 
