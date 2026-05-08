@@ -5482,7 +5482,22 @@
         }
       }
       // 아데나 영역 — 다수결 + stability + plausibility (큰 점프 시 5회 동일 요구)
-      if (autoDetect.adenaRegion) {
+      // [v1.5.10 CRITICAL-1] region.width<80 시 OCR 자체 skip — anchor 보호.
+      //   진단 2026-05-08T15-14-29: regions.adena.width=64px 영원 굳음 → "36891" 중 "1" 만 캡처
+      //   → anchor=35852 vs OCR=1 → 큰 점프 검증 무한 발동 → 사용자 무엇이 문제인지 인지 불가.
+      //   해결: 폭 부족 시 OCR skip + UI 명확 안내 + flashHint (30s throttle).
+      if (autoDetect.adenaRegion && autoDetect.adenaRegion.width < 80) {
+        const cur = Math.round(autoDetect.adenaRegion.width);
+        const need = 80 - cur + 10;  // 안전 마진 10px
+        const adenaWarnNow = Date.now();
+        if (!ensureAutoModeROIs._lastAdenaWidthWarn || (adenaWarnNow - ensureAutoModeROIs._lastAdenaWidthWarn) > 30000) {
+          pushHybridLog('⚠️ ADENA OCR skip (region ' + cur + 'px<80px) — 게임 영역을 우측으로 ' + need + 'px 확장 필요 (anchor 보호 중)');
+          flashHint('⚠️ ADENA 영역 폭 부족 — 게임 영역 우측 ' + need + 'px 확장');
+          ensureAutoModeROIs._lastAdenaWidthWarn = adenaWarnNow;
+        }
+        if (dom.adAdenaLast) dom.adAdenaLast.textContent = '⚠️ ROI ' + cur + 'px<80px — 게임 영역 우측 확장 필요';
+        _autoOcrStatus.adena = false;
+      } else if (autoDetect.adenaRegion) {
         try {
           const r = await ocrAdenaRegion();
           if (r) {

@@ -140,6 +140,26 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.5.10 (2026-05-09) — ADENA region.width<80 시 OCR skip + 사용자 명확 안내 ⭐⭐
+사용자 진단 2026-05-08T15-14-29 (v1.5.9 빌드): MP/EXP/LEVEL ✅ but ADENA "36891"을 "1" 로 misread.
+
+**root cause**:
+- `regions.adena.width=64px` 영원 굳음 (이전 사이클 클램프 결과 + v1.5.9 textROIs.adena=null로 갱신 skip 작동)
+- 64px ROI 안에 5자리 "36891" 못 들어가 우측 끄트머리 "1"만 OCR
+- anchor=35852 vs OCR=1 → 큰 점프 검증 무한 발동 → adAdenaLast UI는 "🔄 1 (검증 1/5) 🚧 점프" 만 노출 → 사용자가 무엇이 문제인지 인지 불가
+- 사용자 게임 영역(녹화 캡처) 우측이 모니터 끝에 가까워 ADENA 텍스트 영역(의도 90px+) 못 담음
+
+**CRITICAL-1 region.width<80 시 OCR skip** (`app.js:5485`)
+- OCR 호출 전 region.width 가드 → 부족 시 skip (anchor 보호 강화)
+- pushHybridLog: `⚠️ ADENA OCR skip (region 64px<80px) — 게임 영역을 우측으로 26px 확장 필요`
+- flashHint: 토스트로 1.5초 노출 (30s throttle)
+- adAdenaLast UI: `⚠️ ROI 64px<80px — 게임 영역 우측 확장 필요`
+- v1.5.8 임계 80px와 동일 기준 — 5자리+콤마 보장
+
+**파일 변경**: `src/js/app.js` 1곳, `package.json` version, ~18 LOC.
+
+**검증**: npm test 36/36, node --check OK.
+
 ### v1.5.9 (2026-05-08) — EXP/LEVEL ROI 겹침 fix + LEVEL sanity + EXP anchor=0 stale 보호 ⭐⭐⭐
 사용자 진단 2026-05-08T14-41-55 (v1.5.7): MP/ADENA 일부 진전 but EXP/LEVEL 한글 시스템 텍스트 캡처.
 
