@@ -4652,6 +4652,28 @@
           pushHybridLog('EXP ⏳ 검증 시작 (점프 ' + deltaBoth.toFixed(3) + '%p, 필요 ' + requiredCount + '회, 자릿수변경 ' + changedDigits + '/' + minLen + '): ' + valBoth);
           return { text: 'verifying ' + valBoth, confidence: 0, parsed: null };
         }
+      } else {
+        // [v1.5.9 HIGH-1] anchorEXP=0 stale — 첫 OCR misread 굳음 위험 차단.
+        //   진단 2026-05-08T14-41-55: ROI 버그(CRITICAL-1)로 anchorEXP 영원 0 → 한글 OCR 결과 굳을 위험.
+        //   v1.5.5 A++ MP anchor 양방향 stale 패턴을 EXP에 확장.
+        //   해결: 5회 일관(약 5초)일 때만 anchor 갱신. paddle/tess 동시 misread 5회 일관 매우 어려움.
+        if (!ocrExpRegionHybrid._zeroAnchorVq) ocrExpRegionHybrid._zeroAnchorVq = { val: null, count: 0 };
+        const zvq = ocrExpRegionHybrid._zeroAnchorVq;
+        if (zvq.val !== null && Math.abs(zvq.val - valBoth) < 0.01) {
+          zvq.count++;
+          if (zvq.count >= 5) {
+            zvq.val = null; zvq.count = 0;
+            pushHybridLog('EXP 🔓 anchor=0 stale 복구 (5회 일관: ' + valBoth + ')');
+            // fall through to voteHybrid → anchor 갱신
+          } else {
+            pushHybridLog('EXP ⏳ anchor=0 검증 (' + (zvq.count + 1) + '/5): ' + valBoth);
+            return { text: 'verifying-zero ' + valBoth, confidence: 0, parsed: null };
+          }
+        } else {
+          zvq.val = valBoth; zvq.count = 1;
+          pushHybridLog('EXP ⏳ anchor=0 검증 시작: ' + valBoth);
+          return { text: 'verifying-zero ' + valBoth, confidence: 0, parsed: null };
+        }
       }
       return voteHybrid('EXP', pr, tr, matcher);
     }
@@ -4869,8 +4891,11 @@
       // [v1.4.2 fix] ADENA 단독 fail (width<50 등)은 통과시킴 — MP/EXP/LEVEL은 정상 사용
       //   사용자 진단 (2026-05-07T11-46-28): ADENA fail이 valid=false 만들어 전체 OCR 막힘 회귀.
       //   해결: result.valid + 필수 ROI 존재만 검증. ADENA는 별도 처리.
+      // [v1.5.9] EXP cluster 분리 실패(textROIs.exp=null)도 통과 — MP/LEVEL은 정상 사용.
+      //   진단 2026-05-08T14-41-55: 좌측 한글 텍스트로 cluster 통합되어 EXP=LEVEL 같은 영역.
+      //   해결: 필수에서 exp 제거. exp는 별도 처리(adena와 동일 패턴).
       if (!result || !result.valid || !result.anchors
-          || !result.textROIs || !result.textROIs.mp || !result.textROIs.exp
+          || !result.textROIs || !result.textROIs.mp
           || !result.textROIs.level) {
         const issues = (result && result.issues && result.issues.length) ? result.issues.join(', ') : 'unknown';
         // 동일 메시지 30초 throttle — 매초 도배 방지
@@ -4958,6 +4983,7 @@
           ctx.setLineDash([4, 4]);
           for (const k of Object.keys(result.textROIs)) {
             const r = result.textROIs[k];
+            if (!r) continue;  // [v1.5.9] textROIs.exp 가 null 가능 (cluster 분리 실패)
             ctx.strokeRect(r.x, r.y, r.width, r.height);
             ctx.fillStyle = '#00ff00';
             ctx.fillText(k + '-text', r.x + 2, r.y + r.height + 12);
@@ -4985,6 +5011,17 @@
             if (r && r.ok) pushHybridLog('🤖 진단 스냅샷 저장됨: ' + r.path);
           }).catch(() => {});
         } catch (_) {}
+      }
+    }
+
+    // [v1.5.9] EXP cluster 분리 실패 (textROIs.exp === null) — region 갱신 skip + 안내.
+    //   진단 2026-05-08T14-41-55: 좌측 한글 텍스트 cluster 인접 통합 → expStart_x 미발견.
+    //   해결: roi-detector가 null 반환 → 여기서 통과시키되 안내 (anchor 보호).
+    if (textROIs.exp === null) {
+      const nowMs = Date.now();
+      if (!ensureAutoModeROIs._lastExpNullWarn || (nowMs - ensureAutoModeROIs._lastExpNullWarn) > 30000) {
+        pushHybridLog('⚠️ EXP cluster 분리 실패 — 좌측 텍스트 라인이 LEVEL 단일 단어로 통합됨. EXP region 갱신 skip (anchor 보존, MP/LEVEL/ADENA는 정상 동작)');
+        ensureAutoModeROIs._lastExpNullWarn = nowMs;
       }
     }
 
@@ -5023,7 +5060,8 @@
       scaleFactor: sf
     });
     autoDetect.mpRegion    = toAbsRegion(textROIs.mp);
-    autoDetect.expRegion   = toAbsRegion(textROIs.exp);
+    // [v1.5.9] textROIs.exp 가 null 이면 expRegion 갱신 skip (이전 값 보존)
+    if (textROIs.exp) autoDetect.expRegion = toAbsRegion(textROIs.exp);
     autoDetect.levelRegion = toAbsRegion(textROIs.level);
     // [v1.4.0+] 사용자 진단 (2026-05-06T13-02-14): _adenaManualOverride=true 인데 stale sourceId(screen:0:0)로
     //   "캡처 스트림이 없습니다" 무한 실패. 자동 모드에서 override 영역이 다른 모니터(stale)면 자동 해제.
@@ -5365,6 +5403,18 @@
         try {
           const r = await ocrLevelRegion();
           if (r) {
+            // [v1.5.9 CRITICAL-2] LEVEL OCR 1~99 sanity — 한글 글자가 ROI에 잡혀
+            //   paddle/tess가 우연히 비숫자 패턴을 추출한 경우 anchor 굳음 차단.
+            //   진단 2026-05-08T14-41-55: ROI 영역 겹침으로 한글 캡처되었지만 anchor=12로 굳음.
+            //   sanity 실패 시 parsed 직접 무효화 → 아래 else 분기로 진입 (anchor 보존).
+            if (r.parsed && (!Number.isInteger(r.parsed.level) || r.parsed.level < 1 || r.parsed.level > 99)) {
+              const nowMs = Date.now();
+              if (!ensureAutoModeROIs._lastLevelSanityWarn || (nowMs - ensureAutoModeROIs._lastLevelSanityWarn) > 30000) {
+                pushHybridLog('⚠️ LEVEL OCR 비정상 (' + r.parsed.level + ') — 1~99 범위 아님, 폐기');
+                ensureAutoModeROIs._lastLevelSanityWarn = nowMs;
+              }
+              r.parsed = null;
+            }
             _autoOcrStatus.level = !!r.parsed;
             if (r.parsed) {
               const lv = r.parsed.level;

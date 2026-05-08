@@ -140,6 +140,39 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.5.9 (2026-05-08) — EXP/LEVEL ROI 겹침 fix + LEVEL sanity + EXP anchor=0 stale 보호 ⭐⭐⭐
+사용자 진단 2026-05-08T14-41-55 (v1.5.7): MP/ADENA 일부 진전 but EXP/LEVEL 한글 시스템 텍스트 캡처.
+
+**CRITICAL-1 EXP/LEVEL ROI 영역 겹침 fix** (`roi-detector.js` + `app.js`)
+- 진단: textROIs.level=[3-86], textROIs.exp=[23-86] 동일 영역 → 좌측 한글 글자 동시 캡처.
+- root cause: roi-detector.js:524 `expStart_x<0` 폴백이 `rightMost.xStart` 사용 — rightMost는 이미 LEVEL cluster에 통합된 마지막 cluster → EXP가 LEVEL 안 좌표 가리킴.
+- fix1 (`roi-detector.js`): cluster 분리 gap 10→20 (보수화). expStart_x 미발견 시 `rois.exp = null` 반환.
+- fix2 (`app.js`): `result.textROIs.exp` 필수 검증 제거. exp=null 시 `expRegion` 갱신 skip + 30s throttled 안내. clamp loop / overlay draw / toAbsRegion 호출에 null 가드.
+
+**CRITICAL-2 LEVEL OCR 1~99 sanity** (`app.js`)
+- 진단: ROI에 한글 잡혔지만 anchor=12 굳음 → paddle/tess가 비숫자 패턴에서 우연히 숫자 추출.
+- fix: `r.parsed.level` 이 1~99 정수 아니면 `r.parsed=null` 처리 → anchor 보호 + else 분기로 자연 진입.
+
+**HIGH-1 EXP anchorEXP=0 stale 5회 일관 검증** (`app.js`)
+- 진단: anchorEXP=0 + ROI 한글 캡처 → OCR 결과 영원 anchor 영원 0.
+- root cause: `if (anchorBoth > 0)` 분기 외 케이스에서 즉시 통과 → 첫 misread 굳음 위험.
+- fix: v1.5.5 A++ MP anchor 양방향 stale 패턴을 EXP에 확장. 5회 일관(약 5초)일 때만 anchor 갱신. paddle/tess 동시 misread 5회 일관 매우 어려움.
+
+**MED-1 findLevelTextLines cluster 통합 검증 강화** (`roi-detector.js`)
+- 진단: cluster 2+개 검출되었지만 모두 25px 이내 인접 → lvlEnd로 통합 → 단일 단어 layout.
+- fix: cluster 사이 최대 gap > 20px 게이트 추가 → 미달 시 lvLine 후보 폐기 → 막대 기반 fallback 진입.
+
+**파일 변경**: `src/js/roi-detector.js` 3곳, `src/js/app.js` 5곳, `package.json` version, ~95 LOC.
+
+**검증**: npm test 36/36, node --check 양호.
+
+**상세**: `.omc/plans/v1.5.9-exp-level-roi-overlap.md`
+
+**v1.5.8 + v1.5.9 통합 빌드**:
+- `npm run build && npm run dist` (사용자가 portable 종료 후)
+- ZIP 단독으로는 빌드 안 됨 — build 먼저 필수.
+- v1.5.7 → v1.5.9 누적 변경: ADENA clamp 인지(80px), MP DISAGREE paddle 우선, EXP 사망 토스트, paddleDebug 정리, EXP/LEVEL ROI 분리, LEVEL 1~99 sanity, EXP anchor=0 보호.
+
 ### v1.5.8 (2026-05-08) — Adena ROI clamp 인지 + MP DISAGREE paddle 우선 + EXP 사망 토스트 ⭐⭐⭐
 사용자 진단 2026-05-08T14-05-41 (v1.5.7): MP/ADENA 동시 OCR 실패 + EXP 큰 감소 (사망 추정).
 

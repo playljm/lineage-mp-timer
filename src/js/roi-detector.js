@@ -500,8 +500,21 @@
       if (useExpand && imageData) {
         // 1차: LV 텍스트 라인 검출 시도 (좌측 미니 패널)
         const textLines = findLevelTextLines(imageData, frameW, frameH);
-        // 2개 이상 cluster를 가진 첫 번째 라인 사용 (LEV 좌측 + EXP% 우측 layout)
-        const lvLine = textLines.find((l) => l.clusters && l.clusters.length >= 2);
+        // [v1.5.9 MED-1] 2개 이상 cluster + 충분한 gap (>20px) 검증.
+        //   진단 2026-05-08T14-41-55: 좌측 한글 텍스트 cluster들이 모두 인접해 단일 단어로
+        //   통합되는 케이스 → 폴백이 LEVEL 영역 재사용 → EXP/LEVEL ROI 겹침.
+        //   해결: cluster 사이 최대 gap이 20px 이상인 라인만 정상 layout으로 인정.
+        //         미달 시 막대 기반 fallback 분기로 자연 진입.
+        const lvLine = textLines.find((l) => {
+          if (!l.clusters || l.clusters.length < 2) return false;
+          const sorted = l.clusters.slice().sort((a, b) => a.xStart - b.xStart);
+          let maxGap = 0;
+          for (let i = 1; i < sorted.length; i++) {
+            const gap = sorted[i].xStart - sorted[i - 1].xEnd;
+            if (gap > maxGap) maxGap = gap;
+          }
+          return maxGap > 20;
+        });
         if (lvLine) {
           const PAD_Y = 4;
           // [v1.5.7 H3 fix] EXP/LEVEL textROI 좌우 padding 2→4 (글자 안티앨리어싱 보호)
@@ -521,23 +534,32 @@
             else break;
           }
           // EXP%: 우측 cluster들 통합 — Level cluster 끝 이후의 모든 cluster
+          // [v1.5.9] cluster 분리 gap 10→20 (보수화). expStart_x 미발견 시 LEVEL cluster
+          //   재사용 금지 (이전엔 rightMost.xStart 폴백 → LEVEL과 동일 영역 생성).
+          //   진단 2026-05-08T14-41-55: 좌측 한글 텍스트 cluster들이 모두 인접 통합되어
+          //   expStart_x=-1 → 폴백이 LEVEL 안 좌표 가리킴 → EXP/LEVEL ROI 영역 겹침.
+          //   해결: 미발견 시 rois.exp = null → 호출부에서 region 갱신 skip.
           let expStart_x = -1;
           for (const c of sorted) {
-            if (c.xStart > lvlEnd + 10) { expStart_x = c.xStart; break; }
+            if (c.xStart > lvlEnd + 20) { expStart_x = c.xStart; break; }
           }
-          if (expStart_x < 0) expStart_x = rightMost.xStart;
           rois.level = {
             x: Math.max(0, leftMost.xStart - PAD_X),
             y: y,
             width: (lvlEnd - leftMost.xStart) + PAD_X * 2,
             height: h
           };
-          rois.exp = {
-            x: Math.max(0, expStart_x - PAD_X),
-            y: y,
-            width: (rightMost.xEnd - expStart_x) + PAD_X * 2,
-            height: h
-          };
+          if (expStart_x >= 0) {
+            rois.exp = {
+              x: Math.max(0, expStart_x - PAD_X),
+              y: y,
+              width: (rightMost.xEnd - expStart_x) + PAD_X * 2,
+              height: h
+            };
+          } else {
+            // EXP cluster 분리 실패 — null 반환 (호출부에서 region 갱신 skip + 안내)
+            rois.exp = null;
+          }
         } else {
           // 2차 fallback: 막대 위/아래 후보 inkScore 검색 (이전 fix)
           const TEXT_H = Math.max(18, Math.round(expBar.height * 4));
@@ -661,6 +683,8 @@
     //   "단순 폭 부족"과 "frame 경계 초과로 잘림"을 구분해 명시 메시지 출력.
     for (const k of Object.keys(rois)) {
       const r = rois[k];
+      // [v1.5.9] rois.exp 가 null 일 수 있음 (cluster 분리 실패) — skip
+      if (!r) continue;
       const intendedWidth = r.width;
       const intendedHeight = r.height;
       if (r.x < 0) { r.width += r.x; r.x = 0; }
