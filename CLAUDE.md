@@ -140,6 +140,43 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.5.3 (2026-05-08) — v1.5.2 회귀 fix + 창 크기 모니터 클램프 ⭐⭐
+사용자 진단 2026-05-08T12-41-24 (v1.5.2): MP 여전히 `???`, adInitStatus "시작값 자동 설정 LEVEL 5/5 실패", 창 처음 실행 시 모니터 밖.
+
+**P0 v1.5.2 회귀 — Fix #4 revert** (`app.js:4651`)
+- `autoDetect.active`는 코드에서 단 한 번도 set되지 않는 변수 (grep `\.active\s*=` 결과 `tracker.active`/`trainLabeling.active`만 존재).
+- v1.5.2 Fix #4가 이 변수를 게이트로 사용 → 항상 falsy → ensureAutoModeROIs 영영 막힘 → 새 ROI 탐지 0회 + Fix #1(stale 무효화) 도달 못 함.
+- v1.5.2에서 OCR이 도는 것처럼 보인 건 이전 v1.5.1 세션의 cachedROIs storage 잔존 덕분 (운).
+
+**P1 Fix #1 위치 이동** (`app.js:4651`)
+- v1.5.2에 추가한 mpBarRegion stale 검사를 toAbsRegion 직후(새 탐지 사이클 끝)에 두어 cacheHit 분기에서 도달 못 함.
+- ensureAutoModeROIs 진입부(gameRegion 검증 직후)로 이동 → 모든 호출 경로에서 1회 stale 검사.
+- 진단 mpBar.sourceId=screen:0:0 → 자동 무효화 → useMpBar=false 저장 → 다음 사이클부터 MP 텍스트 OCR 정상.
+
+**P2 창 크기 fix** (`electron/main.js`)
+- 사용자 보고: 처음 실행 시 화면이 너무 커 모니터 밖에까지 나감.
+- 원인 1: 기존 `isWithinDisplay(x, y)`가 좌상단만 검증 → 창 우측이 밖이어도 통과.
+- 원인 2: ready-to-show에서 size만 보정, position은 유지 → bounds 복원 시 클램프 안 됨.
+- 원인 3: default 1280x900이 1080p workArea(1920x1040)에서 chrome 합산 시 빠듯.
+- 수정:
+  - `isWithinDisplay(x, y, w, h)` 창 전체 검증 + workArea 사용
+  - `clampToNearestDisplay(x, y, w, h)` — 가장 가까운 모니터 workArea로 강제 끌어옴
+  - default 1100x820 (보수적)
+  - createMainWindow + ready-to-show 모두 클램프 적용
+
+**파일 변경**: `src/js/app.js` 2곳, `electron/main.js` 1곳, ~50 LOC.
+
+**v1.5.2 평가**:
+| Fix | 결과 |
+|---|---|
+| #1 mpBarRegion stale 무효화 | ❌ 미작동 (위치 잘못) → v1.5.3에서 진입부 이동으로 해결 |
+| #2 ADENA template 신뢰 거부 | ✅ 작동 (진단 `🔒 일치율 0% 거부` 확인) |
+| #3 expW_bar clamp + throttle | ⚠️ 미검증 (이번엔 EXP 메시지 자체 없음) |
+| #4 active=false 시 skip | 🚨 회귀 → v1.5.3에서 revert |
+| #5 displayCheck mpBar 포함 | ✅ 작동 (진단 `displayid_cached_mismatch` 보고) |
+
+**검증**: npm test 36/36 통과 + node --check 양호 (3 파일).
+
 ### v1.5.2 (2026-05-08) — 자동 인식 회로 root cause 5종 fix ⭐⭐⭐
 사용자 진단 2026-05-08T12-21-25 (v1.5.1): MP 영원 `???` (anchor 8/8 stale) + ADENA 마지막 자리 변형 25399→25297 + hybridLog 도배.
 

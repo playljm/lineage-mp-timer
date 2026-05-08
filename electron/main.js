@@ -62,19 +62,49 @@ function fitToWorkArea(preferredW, preferredH) {
   }
 }
 
-function isWithinDisplay(x, y) {
+// [v1.5.3 fix] 창 전체(x,y,width,height)가 어떤 모니터의 workArea 안에 들어가는지 검증.
+//   사용자 보고: 처음 실행 시 화면이 너무 커 모니터 밖에까지 나감.
+//   기존 isWithinDisplay는 좌상단 (x,y)만 검증 → 창 우측이 모니터 밖이어도 통과.
+//   멀티모니터 + 이전 bounds 복원 시 창이 경계를 넘어가는 문제 차단.
+function isWithinDisplay(x, y, w, h) {
   if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
   try {
     return screen.getAllDisplays().some((d) => {
+      const wa = d.workArea || d.bounds;
+      const ww = Number.isFinite(w) ? w : 100;
+      const hh = Number.isFinite(h) ? h : 100;
       return (
-        x >= d.bounds.x - 10 &&
-        x < d.bounds.x + d.bounds.width - 10 &&
-        y >= d.bounds.y - 10 &&
-        y < d.bounds.y + d.bounds.height - 10
+        x >= wa.x - 10 &&
+        y >= wa.y - 10 &&
+        x + ww <= wa.x + wa.width + 10 &&
+        y + hh <= wa.y + wa.height + 10
       );
     });
   } catch (_) {
     return false;
+  }
+}
+
+// [v1.5.3 fix] 창을 가장 가까운 모니터의 workArea 안으로 강제 클램프.
+//   bounds가 부분적으로 화면 밖일 때 해당 모니터 안으로 끌어옴.
+function clampToNearestDisplay(x, y, w, h) {
+  try {
+    const cursor = (Number.isFinite(x) && Number.isFinite(y))
+      ? { x: x + Math.floor((w || 0) / 2), y: y + Math.floor((h || 0) / 2) }
+      : screen.getCursorScreenPoint();
+    const target = screen.getDisplayNearestPoint(cursor) || screen.getPrimaryDisplay();
+    const wa = target.workArea || target.bounds;
+    const finalW = Math.min(w || wa.width, wa.width - 20);
+    const finalH = Math.min(h || wa.height, wa.height - 40);
+    let finalX = Number.isFinite(x) ? x : wa.x + Math.floor((wa.width - finalW) / 2);
+    let finalY = Number.isFinite(y) ? y : wa.y + Math.floor((wa.height - finalH) / 2);
+    if (finalX < wa.x + 10) finalX = wa.x + 10;
+    if (finalY < wa.y + 10) finalY = wa.y + 10;
+    if (finalX + finalW > wa.x + wa.width - 10) finalX = wa.x + wa.width - finalW - 10;
+    if (finalY + finalH > wa.y + wa.height - 10) finalY = wa.y + wa.height - finalH - 10;
+    return { x: finalX, y: finalY, width: finalW, height: finalH };
+  } catch (_) {
+    return { x, y, width: w, height: h };
   }
 }
 
@@ -96,22 +126,26 @@ function resolveIcon() {
 
 function createMainWindow() {
   const icon = resolveIcon();
-  // 새 default — 1280x900 (이전 580x980은 OCR 탭 컨텐츠 컬럼이 5개라 가로 부족)
-  const fitted = fitToWorkArea(1280, 900);
+  // [v1.5.3] default 1100x820 — 1280x900은 1080p workArea(1920x1040)에서도 너무 커
+  //   상하 작업표시줄 + 창 chrome 합산 시 일부 환경에서 모니터 경계 넘어감.
+  const DEFAULT_W = 1100;
+  const DEFAULT_H = 820;
   const last = loadBounds();
-
-  const useLastSize = last && Number.isFinite(last.width) && Number.isFinite(last.height);
-  const useLastPos = last && isWithinDisplay(last.x, last.y);
-
-  // last 사이즈도 workArea로 클램프 (이전 빌드에서 사용자가 가로 1920+ 까지 늘려 저장된 경우
-  // 새 모니터 환경에서 화면 밖으로 나가는 문제 방지)
-  const candW = useLastSize ? Math.max(440, last.width) : fitted.width;
-  const candH = useLastSize ? Math.max(560, last.height) : fitted.height;
-  const finalSize = fitToWorkArea(candW, candH);
+  const hasLastSize = last && Number.isFinite(last.width) && Number.isFinite(last.height);
+  const candW = hasLastSize ? Math.max(440, last.width) : DEFAULT_W;
+  const candH = hasLastSize ? Math.max(560, last.height) : DEFAULT_H;
+  const candX = last && Number.isFinite(last.x) ? last.x : NaN;
+  const candY = last && Number.isFinite(last.y) ? last.y : NaN;
+  // [v1.5.3 fix] 창 전체(width/height 포함)를 가장 가까운 모니터 workArea 안으로 클램프.
+  //   기존 isWithinDisplay(x,y)는 좌상단만 검증 → 우측이 화면 밖이어도 통과.
+  //   사용자 보고(처음 실행 시 화면이 너무 커 모니터 밖) 차단.
+  const clamped = clampToNearestDisplay(candX, candY, candW, candH);
 
   const opts = {
-    width: finalSize.width,
-    height: finalSize.height,
+    x: clamped.x,
+    y: clamped.y,
+    width: clamped.width,
+    height: clamped.height,
     minWidth: 440,
     minHeight: 540,
     title: 'Lineage MP Timer',
@@ -129,27 +163,19 @@ function createMainWindow() {
     }
   };
 
-  if (useLastPos) {
-    opts.x = last.x;
-    opts.y = last.y;
-  } else {
-    opts.center = true;
-  }
-
   mainWindow = new BrowserWindow(opts);
   mainWindow.setMenu(null);
   mainWindow.loadFile(path.join(__dirname, '..', 'src', 'index.html'));
 
   mainWindow.once('ready-to-show', () => {
     try {
-      const { workAreaSize } = screen.getPrimaryDisplay();
+      // [v1.5.3 fix] ready-to-show 시점에도 위치+크기 모두 다시 클램프.
+      //   useContentSize+chrome 합산으로 outer가 인자보다 커지는 케이스 방어.
       const [w, h] = mainWindow.getSize();
-      const newW = Math.min(w, workAreaSize.width - 40);
-      const newH = Math.min(h, workAreaSize.height - 80);
-      if (newW !== w || newH !== h) {
-        mainWindow.setSize(newW, newH);
-        mainWindow.center();
-      }
+      const [x, y] = mainWindow.getPosition();
+      const cl = clampToNearestDisplay(x, y, w, h);
+      if (cl.width !== w || cl.height !== h) mainWindow.setSize(cl.width, cl.height);
+      if (cl.x !== x || cl.y !== y) mainWindow.setPosition(cl.x, cl.y);
     } catch (_) { /* ignore */ }
 
     mainWindow.show();

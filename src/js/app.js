@@ -4671,14 +4671,21 @@
       pushHybridLog('🤖 RoiDetector 미로딩 — script tag 누락');
       return false;
     }
-    // [v1.5.2 fix] OCR 트래커 미작동 중엔 자동 ROI 새 탐지 사이클 skip
-    //   사용자 진단 (2026-05-08T12-21-25): autoDetect.active=false (트래커 PAUSE) 인데
-    //   hybridLog "ADENA ROI 폭 부족" 메시지 도배 → 사용자 체감 노이즈
-    //   해결: active=false 시 cachedROIs 유효성 반환만 하고 새 탐지/로그 skip.
-    //   opts.force=true (재탐지 버튼) 시 bypass.
-    if (!autoDetect.active && !opts.force) {
-      const c = autoDetect.cachedROIs;
-      return !!(c && c.textROIs && c.textROIs.mp && c.textROIs.exp && c.textROIs.level);
+    // [v1.5.3 fix] v1.5.2의 autoDetect.active 게이트 revert.
+    //   사유: autoDetect.active는 코드에서 한 번도 set되지 않는 변수 (grep \.active\s*= 결과
+    //   tracker.active와 trainLabeling.active만 있음) → 항상 falsy → 게이트가 항상 막혀
+    //   새 ROI 탐지 영영 못 함 + Fix #1(stale sourceId 자동 무효화)도 도달 못 함.
+    //   진단(2026-05-08T12-41-24)에서 cachedROIs=null인데 새 탐지 0회로 MP "???" 회복 못 함.
+    //   PAUSE 시 노이즈 차단은 별도 — runDetectionTick의 setInterval로 제어 (이미 구현됨).
+    // [v1.5.2 fix] mpBarRegion stale sourceId 자동 무효화 — 모든 호출 경로에서 검사
+    //   (cacheHit 진입 직전 1회) → cachedROIs hit 케이스에서도 stale 정리 가능.
+    if (autoDetect.gameRegion && autoDetect.gameRegion.sourceId
+        && autoDetect.mpBarRegion && autoDetect.mpBarRegion.sourceId
+        && autoDetect.mpBarRegion.sourceId !== autoDetect.gameRegion.sourceId) {
+      pushHybridLog('🤖 mpBarRegion stale sourceId(' + autoDetect.mpBarRegion.sourceId + ') vs gameRegion(' + autoDetect.gameRegion.sourceId + ') — 자동 무효화');
+      autoDetect.mpBarRegion = null;
+      autoDetect.useMpBar = false;
+      try { S.saveAutoDetect(autoDetect); } catch (_) {}
     }
     const now = Date.now();
     const maxAgeMs = (autoDetect.roiCacheMaxAge || 300) * 1000;
@@ -4902,21 +4909,8 @@
       pushHybridLog('🤖 ADENA 수동 override가 다른 모니터(stale: ' + autoDetect.adenaRegion.sourceId + ' vs gameRegion: ' + gr.sourceId + ') — 자동 해제');
       autoDetect._adenaManualOverride = false;
     }
-    // [v1.5.2 fix] mpBarRegion stale sourceId 자동 무효화
-    //   사용자 진단 (2026-05-08T12-21-25): regions.mpBar.sourceId = "screen:0:0" stale,
-    //   gameRegion = "screen:1:0" → captureRegionToCanvas 호출 시 captureStream 없어
-    //   throw "캡처 스트림이 없습니다" 무한 발생 → MP gauge 검증 실패 → MP "???" 영원.
-    //   mp/exp/level/adena Region은 매 틱 toAbsRegion으로 새로 할당되어 stale 안 되지만
-    //   mpBarRegion은 사용자 수동 지정 + 별도 갱신 경로 없어 stale 남음.
-    //   해결: gameRegion sourceId와 다르면 무효화 → useMpBar 기능은 일시 중지되지만
-    //   MP 텍스트 OCR 회로는 살아남음 (게이지 보조 검증 < MP 본 OCR 우선).
-    if (autoDetect.mpBarRegion && autoDetect.mpBarRegion.sourceId
-        && autoDetect.mpBarRegion.sourceId !== gr.sourceId) {
-      pushHybridLog('🤖 mpBarRegion stale sourceId(' + autoDetect.mpBarRegion.sourceId + ') vs gameRegion(' + gr.sourceId + ') — 자동 무효화');
-      autoDetect.mpBarRegion = null;
-      autoDetect.useMpBar = false;
-      try { S.saveAutoDetect(autoDetect); } catch (_) {}
-    }
+    // [v1.5.3] mpBarRegion stale 검사는 ensureAutoModeROIs 진입부로 이동 — cacheHit 분기에서도
+    //   동작하도록. 여기 toAbsRegion 직후는 이미 진입부에서 정리된 후라 no-op.
     // [v1.4.0+] ADENA 수동 override 존중 — 사용자 진단 (2026-05-05T13-24-06):
     //   자동 탐지가 인벤토리 노란 아이템을 ADENA로 오인하는 케이스 (UI 다양성)
     //   _adenaManualOverride 플래그 있으면 사용자 지정 ADENA 영역 보존
