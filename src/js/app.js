@@ -1773,6 +1773,33 @@
     return ocrInitPromise;
   }
 
+  // [v1.5.12] Tesseract recognize 호출 30s timeout + worker auto-restart.
+  //   진단 2026-05-08T16-01-51: recognizing text 11% (+1281s) Tesseract worker hang →
+  //   모든 OCR 사이클 정지 → 사용자 "업데이트 멈춤" 인지. recognize promise가 영원 미해결.
+  //   해결: recognize promise를 30s timeout과 race. 시간초과 시 worker terminate + 다음 사이클에 자동 재초기화.
+  const RECOGNIZE_TIMEOUT_MS = 30000;
+  async function recognizeWithTimeout(worker, canvas, label) {
+    let timer = null;
+    const timeoutPromise = new Promise((_, rej) => {
+      timer = setTimeout(() => rej(new Error('recognize timeout (30s) ' + label)), RECOGNIZE_TIMEOUT_MS);
+    });
+    try {
+      const res = await Promise.race([worker.recognize(canvas), timeoutPromise]);
+      if (timer) clearTimeout(timer);
+      return res;
+    } catch (e) {
+      if (timer) clearTimeout(timer);
+      if (e && /timeout/.test(e.message || '')) {
+        console.warn('[OCR] recognize timeout:', label, '— worker 재시작');
+        try { pushHybridLog('⚠️ Tesseract recognize timeout (' + label + ') — worker 재시작'); } catch (_) {}
+        try { if (ocrWorker) await ocrWorker.terminate(); } catch (_) {}
+        ocrWorker = null;
+        ocrInitPromise = null;
+      }
+      throw e;
+    }
+  }
+
   async function getCaptureStreamFor(sourceId) {
     if (!sourceId) throw new Error('소스 ID 없음');
     const cached = captureStreams.get(sourceId);
@@ -3124,7 +3151,7 @@
             load_unambig_dawg: '0', load_punc_dawg: '0',
             load_number_dawg: '0', load_bigram_dawg: '0'
           });
-          const res = await w.recognize(c);
+          const res = await recognizeWithTimeout(w, c, label + '/psm' + psm);
           const text = ((res && res.data && res.data.text) || '').trim();
           const rawConf = (res && res.data && res.data.confidence);
           const confidence = Math.max(0, Number.isFinite(rawConf) ? rawConf : 0);
@@ -3196,7 +3223,7 @@
           load_unambig_dawg: '0', load_punc_dawg: '0',
           load_number_dawg: '0', load_bigram_dawg: '0'
         });
-        const res = await w.recognize(canvas);
+        const res = await recognizeWithTimeout(w, canvas, 'level/psm' + psm);
         const text = ((res && res.data && res.data.text) || '').trim();
         const rawConf = (res && res.data && res.data.confidence);
         const confidence = Math.max(0, Number.isFinite(rawConf) ? rawConf : 0);
@@ -3265,32 +3292,42 @@
     let canvasOtsu = null;
     let canvasRaw = null;
     let canvasWhite = null;
+    let canvasWhiteSoft = null;
+    let canvasWhiteDeep = null;
     try { canvasSoft = captureRegionToCanvas(autoDetect.adenaRegion, 'soft', { chromaMask: true }); } catch (_) {}
     try { canvasOtsu = captureRegionToCanvas(autoDetect.adenaRegion, 'otsu', { chromaMask: true }); } catch (_) {}
     try {
       canvasRaw = captureRegionToRawCanvas(autoDetect.adenaRegion, 16, { pad: 10 });
       if (canvasRaw) maskChromaPixels(canvasRaw);  // 노란 금화 등 컬러 그래픽 제거
     } catch (_) {}
-    // [v1.3.20] White-extraction (휘도 mode T=120) 캔버스 — paddle leading-digit drop 안정화
-    //   사용자 진단 (2026-05-04T16-09-12): paddle "1317" (4자리) vs tess "10317" (5자리) — paddle 앞 "1" 누락
-    //   원인: paddle은 자연 이미지 학습 분포라 흰글자/베이지 글자에 약함, leading 글자 가장자리 손실 빈발
-    //   해결: 휘도 mode로 베이지/흰글자 robust 추출 (EXP에서 검증됨) + raw pad:10으로 leading 글자 보호
-    try {
+    // [v1.5.12] White-extraction 다단계 — EXP 패턴 도입으로 ADENA 폰트 깨끗하게.
+    //   사용자 진단 (2026-05-08T16-01-51): ADENA 미리보기가 EXP 대비 깨져 보임.
+    //   기존 단일 (T=120 lum) → EXP의 트리플 (T=140 RGB + T=120 lum + T=70 lum) 도입.
+    //   - canvasWhite (T=140 RGB): 흰글자 가까운 글자 정밀 보호
+    //   - canvasWhiteSoft (T=120 lum): 베이지 글자 — 기존 캔버스 유지
+    //   - canvasWhiteDeep (T=70 lum): 어두운 영역 위 글자 robust 추출
+    const buildWhiteCanvas = (threshold, useLuminance) => {
       const cwBase = captureRegionToRawCanvas(autoDetect.adenaRegion, 12, { pad: 10 });
-      if (cwBase) {
-        applyWhiteExtraction(cwBase, 120, { luminance: true });
-        const cwCtx = cwBase.getContext('2d');
-        const wImg = cwCtx.getImageData(0, 0, cwBase.width, cwBase.height);
-        const wd = wImg.data;
-        for (let i = 0; i < wd.length; i += 4) {
-          wd[i] = 255 - wd[i];
-          wd[i + 1] = 255 - wd[i + 1];
-          wd[i + 2] = 255 - wd[i + 2];
-        }
-        cwCtx.putImageData(wImg, 0, 0);
-        canvasWhite = cwBase;
+      if (!cwBase) return null;
+      applyWhiteExtraction(cwBase, threshold, { luminance: !!useLuminance });
+      const cwCtx = cwBase.getContext('2d');
+      const wImg = cwCtx.getImageData(0, 0, cwBase.width, cwBase.height);
+      const wd = wImg.data;
+      for (let i = 0; i < wd.length; i += 4) {
+        wd[i] = 255 - wd[i];
+        wd[i + 1] = 255 - wd[i + 1];
+        wd[i + 2] = 255 - wd[i + 2];
       }
-    } catch (_) {}
+      cwCtx.putImageData(wImg, 0, 0);
+      return cwBase;
+    };
+    try { canvasWhite = buildWhiteCanvas(140, false); } catch (_) {}      // R/G/B mode, 흰글자 정밀
+    try { canvasWhiteSoft = buildWhiteCanvas(120, true); } catch (_) {}   // 휘도 mode, 베이지 글자
+    try { canvasWhiteDeep = buildWhiteCanvas(70, true); } catch (_) {}    // 휘도 매우 관대, 어두운 영역
+    // 미리보기 — 가장 깨끗한 white 캔버스 우선 (EXP 와 동일)
+    if (canvasWhite || canvasWhiteSoft) {
+      updatePreview(dom.adAdenaPreview, canvasWhite || canvasWhiteSoft);
+    }
 
     const psmModes = ['7', '8', '13'];
     const results = [];
@@ -3304,7 +3341,7 @@
             load_unambig_dawg: '0', load_punc_dawg: '0',
             load_number_dawg: '0', load_bigram_dawg: '0'
           });
-          const res = await w.recognize(c);
+          const res = await recognizeWithTimeout(w, c, label + '/psm' + psm);
           const text = ((res && res.data && res.data.text) || '').trim();
           const rawConf = (res && res.data && res.data.confidence);
           const confidence = Math.max(0, Number.isFinite(rawConf) ? rawConf : 0);
@@ -3321,7 +3358,9 @@
     if (canvasSoft) await recognizeOn('soft', canvasSoft);
     if (canvasOtsu) await recognizeOn('otsu', canvasOtsu);
     if (canvasRaw) await recognizeOn('raw', canvasRaw);
-    if (canvasWhite) await recognizeOn('white', canvasWhite);
+    if (canvasWhite) await recognizeOn('white140', canvasWhite);
+    if (canvasWhiteSoft) await recognizeOn('whiteSoft', canvasWhiteSoft);
+    if (canvasWhiteDeep) await recognizeOn('whiteDeep', canvasWhiteDeep);
 
     if (results.length === 0) return null;
     const valid = results.filter((r) => Number.isFinite(r.adena) && r.adena >= 0 && r.adena <= 9999999999);
@@ -3718,7 +3757,7 @@
             load_unambig_dawg: '0', load_punc_dawg: '0',
             load_number_dawg: '0', load_bigram_dawg: '0'
           });
-          const res = await w.recognize(c);
+          const res = await recognizeWithTimeout(w, c, label + '/psm' + psm);
           const text = ((res && res.data && res.data.text) || '').trim();
           const rawConf = (res && res.data && res.data.confidence);
           const confidence = Math.max(0, Number.isFinite(rawConf) ? rawConf : 0);

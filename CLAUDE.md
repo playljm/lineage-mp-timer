@@ -140,6 +140,29 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.5.12 (2026-05-09) — Tesseract recognize 30s timeout + ADENA white-extraction 다단계 ⭐⭐⭐
+사용자 진단 2026-05-08T16-01-51 (v1.5.11): MP/EXP/LEVEL/ADENA(수동) ✅ but 두 가지 잔여 문제.
+1. "업데이트도 멈추고" — `recognizing text 11% (+1281s)` 21분 Tesseract worker hang.
+2. "아데나 폰트가 깨져 보여, 경험치처럼 깨끗하게" — ADENA 미리보기 노이즈/픽셀화.
+
+**HIGH-1 Tesseract recognize 30s timeout + auto-restart** (`app.js:1775~`)
+- 진단 timing 비일관 (+44s 0%, +572s 100%, +1281s 11%) — recognize 호출 자체가 가끔 hang.
+- 해결: `recognizeWithTimeout(worker, canvas, label)` helper. 30s timeout race.
+- timeout 시 worker terminate + ocrInitPromise=null → 다음 사이클에 자동 재초기화.
+- 적용 위치 4곳: MP/LEVEL/ADENA/EXP `await w.recognize()` 전부 교체.
+- pushHybridLog: `⚠️ Tesseract recognize timeout (label) — worker 재시작`
+
+**HIGH-2 ADENA white-extraction 다단계** (`app.js:3251`)
+- 기존: T=120 lum 단일 (1캔버스)
+- 변경: EXP의 buildWhiteCanvas 헬퍼 패턴 도입 — T=140 RGB + T=120 lum + T=70 lum (3캔버스)
+- 캔버스 5종 → 7종 × PSM 3 = 최대 21 results (이전 15)
+- 미리보기 캔버스도 white140 우선 노출 → 사용자가 "EXP처럼 깨끗하게" 보임
+- 다양한 글자 색상/대비 환경에 robust 추출
+
+**파일 변경**: `src/js/app.js` 3곳 (helper + ADENA + recognize 4곳 wrap), `package.json` version, ~75 LOC.
+
+**검증**: npm test 36/36, node --check OK.
+
 ### v1.5.11 (2026-05-09) — ADENA rightCand 중심 시작 + 임계 80→50 완화 (사용자 "중앙으로" 요청) ⭐⭐
 사용자 진단 2026-05-08T15-28-12 (v1.5.10): MP/EXP/LEVEL ✅ but ADENA OCR skip 발동, anchor=39517 보호 정상.
 사용자 의견: "아데나 기준을 중앙으로 잡아야 할 거 같아.. 우측 빈 공간이 너무 심해."
