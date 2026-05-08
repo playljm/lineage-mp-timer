@@ -5025,11 +5025,11 @@
       }
     }
 
-    // [v1.4.2 fix] ADENA width<80 단독 fail은 통과시키되 안내 + region 갱신 차단.
+    // [v1.4.2 fix] ADENA width<50 단독 fail은 통과시키되 안내 + region 갱신 차단.
     //   사용자 진단 (2026-05-07T11-46-28): ADENA invalid가 전체 OCR을 막던 회귀 해결.
     //   다른 ROI(MP/EXP/LEVEL)는 정상 사용. ADENA만 사용자가 게임 영역을 우측으로 확장해야 함.
-    // [v1.5.8] 임계 50→80 상향 (5자리+콤마 보장) + _clipped 플래그로 경계 잘림 명시.
-    if (textROIs.adena && textROIs.adena.width < 80) {
+    // [v1.5.11] 임계 80→50 완화 (콤마없음 5자리 39517 환경 OCR 가능). _clipped 플래그 명시 메시지 유지.
+    if (textROIs.adena && textROIs.adena.width < 50) {
       const nowMs = Date.now();
       const warnKey = `ADENA-${textROIs.adena.width}px${textROIs.adena._clipped ? '-clip' : ''}`;
       if (!ensureAutoModeROIs._lastAdenaWarn || ensureAutoModeROIs._lastAdenaWarn.text !== warnKey
@@ -5038,7 +5038,7 @@
           const need = textROIs.adena._intendedWidth - textROIs.adena.width + 10;
           pushHybridLog('⚠️ ADENA ROI 우측 클램프 (의도 ' + textROIs.adena._intendedWidth + 'px → ' + textROIs.adena.width + 'px) — 게임 영역을 우측으로 ' + need + 'px 이상 확장 (MP/EXP/LEVEL은 정상 동작)');
         } else {
-          pushHybridLog('⚠️ ADENA ROI 폭 부족 (' + textROIs.adena.width + 'px<80) — 5자리 이상 아데나 인식 위해 게임 영역을 우측으로 넓게 다시 지정 (MP/EXP/LEVEL은 정상 동작)');
+          pushHybridLog('⚠️ ADENA ROI 폭 부족 (' + textROIs.adena.width + 'px<50) — 게임 영역을 우측으로 넓게 다시 지정 (MP/EXP/LEVEL은 정상 동작)');
         }
         ensureAutoModeROIs._lastAdenaWarn = { text: warnKey, at: nowMs };
       }
@@ -5482,20 +5482,20 @@
         }
       }
       // 아데나 영역 — 다수결 + stability + plausibility (큰 점프 시 5회 동일 요구)
-      // [v1.5.10 CRITICAL-1] region.width<80 시 OCR 자체 skip — anchor 보호.
+      // [v1.5.10 CRITICAL-1] region.width<50 시 OCR 자체 skip — anchor 보호.
       //   진단 2026-05-08T15-14-29: regions.adena.width=64px 영원 굳음 → "36891" 중 "1" 만 캡처
-      //   → anchor=35852 vs OCR=1 → 큰 점프 검증 무한 발동 → 사용자 무엇이 문제인지 인지 불가.
-      //   해결: 폭 부족 시 OCR skip + UI 명확 안내 + flashHint (30s throttle).
-      if (autoDetect.adenaRegion && autoDetect.adenaRegion.width < 80) {
+      //   → anchor=35852 vs OCR=1 → 큰 점프 검증 무한 발동.
+      // [v1.5.11] 임계 80→50 완화 (콤마없음 5자리 환경 OCR 가능). 50 미만은 OCR 의미 없음.
+      if (autoDetect.adenaRegion && autoDetect.adenaRegion.width < 50) {
         const cur = Math.round(autoDetect.adenaRegion.width);
-        const need = 80 - cur + 10;  // 안전 마진 10px
+        const need = 50 - cur + 10;  // 안전 마진 10px
         const adenaWarnNow = Date.now();
         if (!ensureAutoModeROIs._lastAdenaWidthWarn || (adenaWarnNow - ensureAutoModeROIs._lastAdenaWidthWarn) > 30000) {
-          pushHybridLog('⚠️ ADENA OCR skip (region ' + cur + 'px<80px) — 게임 영역을 우측으로 ' + need + 'px 확장 필요 (anchor 보호 중)');
+          pushHybridLog('⚠️ ADENA OCR skip (region ' + cur + 'px<50px) — 게임 영역을 우측으로 ' + need + 'px 확장 필요 (anchor 보호 중)');
           flashHint('⚠️ ADENA 영역 폭 부족 — 게임 영역 우측 ' + need + 'px 확장');
           ensureAutoModeROIs._lastAdenaWidthWarn = adenaWarnNow;
         }
-        if (dom.adAdenaLast) dom.adAdenaLast.textContent = '⚠️ ROI ' + cur + 'px<80px — 게임 영역 우측 확장 필요';
+        if (dom.adAdenaLast) dom.adAdenaLast.textContent = '⚠️ ROI ' + cur + 'px<50px — 게임 영역 우측 확장 필요';
         _autoOcrStatus.adena = false;
       } else if (autoDetect.adenaRegion) {
         try {

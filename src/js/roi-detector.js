@@ -652,8 +652,11 @@
       // [v1.5.8] 5자리+콤마(22,974) 보장을 위해 belowCand 최소폭 50→80 상향.
       //   진단 2026-05-08T14-05-41: 5자리 ADENA를 width 64px ROI(클램프됨)로 잡아
       //   "22,974"를 "2,274"로 자릿수 손실 misread. rightCand는 이미 90 보장.
+      // [v1.5.11] 사용자 진단 2026-05-08T15-28-12: 게임 영역 우측 가장자리에서 frame 클램프 심각.
+      //   사용자 요청 "중앙으로 잡아라" — rightCand x 시작점을 아이콘 끝(+3)에서 아이콘 중심(0.5)으로
+      //   이동 → 동일 frameW에서 우측 여유 ~2배 확보. 5자리 콤마없음(39517) 환경 OCR 가능.
       const rightCand = {
-        x: Math.round(adenaIcon.x + adenaIcon.width + 3),
+        x: Math.round(adenaIcon.x + adenaIcon.width * 0.5),
         y: Math.round(adenaIcon.y + adenaIcon.height * 0.1),
         width: Math.max(90, Math.round(adenaIcon.width * 2.5)),
         height: Math.round(adenaIcon.height * 0.8)
@@ -728,12 +731,14 @@
       }
       // [v1.5.8] 5자리+콤마 ADENA(예: "22,974") 보장. 임계 50→80 상향.
       //   _clipped 플래그가 있으면 "frame 경계로 잘림" 명시 메시지 (정확한 확장 폭 안내).
-      if (name === 'adena' && r.width < 80) {
+      // [v1.5.11] 사용자 환경(콤마없음 5자리 "39517")에서 60~70px도 OCR 가능 → 임계 80→50 완화.
+      //   콤마있는 6자리 "22,974" 케이스는 _clipped 메시지로 별도 안내.
+      if (name === 'adena' && r.width < 50) {
         if (r._clipped && r._intendedWidth) {
           const need = r._intendedWidth - r.width + 10;
           adenaOnlyIssues.push(`ADENA ROI 우측 클램프 (의도 ${r._intendedWidth}px → ${r.width}px) — 게임 영역을 우측으로 ${need}px 이상 확장해주세요`);
         } else {
-          adenaOnlyIssues.push(`ADENA ROI 폭 부족 (${r.width}px<80) — 5자리 이상 아데나 인식 위해 게임 영역을 우측으로 넓게 다시 지정해주세요`);
+          adenaOnlyIssues.push(`ADENA ROI 폭 부족 (${r.width}px<50) — 게임 영역을 우측으로 넓게 다시 지정해주세요`);
         }
         return false;
       }

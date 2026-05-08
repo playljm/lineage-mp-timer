@@ -140,6 +140,31 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.5.11 (2026-05-09) — ADENA rightCand 중심 시작 + 임계 80→50 완화 (사용자 "중앙으로" 요청) ⭐⭐
+사용자 진단 2026-05-08T15-28-12 (v1.5.10): MP/EXP/LEVEL ✅ but ADENA OCR skip 발동, anchor=39517 보호 정상.
+사용자 의견: "아데나 기준을 중앙으로 잡아야 할 거 같아.. 우측 빈 공간이 너무 심해."
+
+**root cause 종합**:
+- adenaIcon.x=1218, frameW=1282 → 아이콘 우측 22px만 남음 (현재 시작점 icon.x+icon.width+3=1263)
+- 의도 width 105px 중 19px만 캡처 → frame 우측 클램프 86px
+- 5자리 콤마없음 게임 환경 (39517) — 60~70px ROI 충분
+- 사용자 환경 콤마있는 6자리 케이스(22,974) 아님
+
+**HIGH-1 rightCand x 시작점 아이콘 중심으로** (`roi-detector.js:633`)
+- `icon.x + icon.width + 3` → `icon.x + icon.width * 0.5` (아이콘 중심)
+- 동일 frameW에서 우측 여유 ~2배 확보 (22→43px)
+- 사용자 "중앙으로" 의도 직접 반영
+- white-extraction OCR이 아이콘 노란 픽셀 자연 차단 → 노이즈 영향 미미
+
+**HIGH-2 width 임계 80→50 완화** (`roi-detector.js:693` + `app.js:4998` + `app.js:5485`)
+- 5자리 콤마없음 (39517) = 60~70px 충분 → 50 임계로 충분히 통과
+- 6자리 콤마있음 (22,974) 케이스는 _clipped 메시지로 별도 안내 (정확한 확장 px)
+- v1.5.10 OCR skip 가드도 50으로 동기화
+
+**파일 변경**: `src/js/roi-detector.js` 2곳, `src/js/app.js` 2곳, `package.json` version, ~12 LOC.
+
+**검증**: npm test 36/36, node --check OK.
+
 ### v1.5.10 (2026-05-09) — ADENA region.width<80 시 OCR skip + 사용자 명확 안내 ⭐⭐
 사용자 진단 2026-05-08T15-14-29 (v1.5.9 빌드): MP/EXP/LEVEL ✅ but ADENA "36891"을 "1" 로 misread.
 
