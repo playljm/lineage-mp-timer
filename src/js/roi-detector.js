@@ -627,6 +627,9 @@
       //   세로: [icon] / [digits] — 일부 사용자 UI (digits이 icon 아래)
       //   해결: 두 후보 영역의 ink density (edge pixel 비율) 비교
       //         below가 right 대비 명확히(1.3배) 더 텍스트 같으면 세로 채택, 아니면 가로 default
+      // [v1.5.8] 5자리+콤마(22,974) 보장을 위해 belowCand 최소폭 50→80 상향.
+      //   진단 2026-05-08T14-05-41: 5자리 ADENA를 width 64px ROI(클램프됨)로 잡아
+      //   "22,974"를 "2,274"로 자릿수 손실 misread. rightCand는 이미 90 보장.
       const rightCand = {
         x: Math.round(adenaIcon.x + adenaIcon.width + 3),
         y: Math.round(adenaIcon.y + adenaIcon.height * 0.1),
@@ -636,7 +639,7 @@
       const belowCand = {
         x: Math.max(0, Math.round(adenaIcon.x - 5)),
         y: Math.round(adenaIcon.y + adenaIcon.height * 0.85),
-        width: Math.max(50, Math.round(adenaIcon.width * 1.8)),
+        width: Math.max(80, Math.round(adenaIcon.width * 1.8)),
         height: Math.max(20, Math.round(adenaIcon.height * 0.7))
       };
       let chosen = rightCand;
@@ -654,14 +657,23 @@
     //   v1.4.0 b20407a "ADENA 우측 overflow 허용" 가정(captureStream이 모니터 전체)이
     //   듀얼 모니터 / 우측 가장자리 게임창 환경에선 깨짐. 모든 ROI를 frameW로 클램프하고
     //   ADENA는 width<50px이 되면 별도 issue로 사용자에게 게임 영역 확장 안내.
+    // [v1.5.8] 클램프 발생 사실을 _clipped/_intendedWidth로 기록 → validateROIs에서
+    //   "단순 폭 부족"과 "frame 경계 초과로 잘림"을 구분해 명시 메시지 출력.
     for (const k of Object.keys(rois)) {
       const r = rois[k];
+      const intendedWidth = r.width;
+      const intendedHeight = r.height;
       if (r.x < 0) { r.width += r.x; r.x = 0; }
       if (r.y < 0) { r.height += r.y; r.y = 0; }
       if (r.x + r.width > frameW) r.width = frameW - r.x;
       if (r.y + r.height > frameH) r.height = frameH - r.y;
       if (r.width < 0) r.width = 0;
       if (r.height < 0) r.height = 0;
+      if (r.width < intendedWidth || r.height < intendedHeight) {
+        r._clipped = true;
+        r._intendedWidth = intendedWidth;
+        r._intendedHeight = intendedHeight;
+      }
     }
 
     return rois;
@@ -690,8 +702,15 @@
         push(`${name} ROI 경계 초과`);
         return false;
       }
-      if (name === 'adena' && r.width < 50) {
-        adenaOnlyIssues.push(`ADENA ROI 폭 부족 (${r.width}px) — 게임 영역을 우측으로 더 넓게 다시 지정해주세요`);
+      // [v1.5.8] 5자리+콤마 ADENA(예: "22,974") 보장. 임계 50→80 상향.
+      //   _clipped 플래그가 있으면 "frame 경계로 잘림" 명시 메시지 (정확한 확장 폭 안내).
+      if (name === 'adena' && r.width < 80) {
+        if (r._clipped && r._intendedWidth) {
+          const need = r._intendedWidth - r.width + 10;
+          adenaOnlyIssues.push(`ADENA ROI 우측 클램프 (의도 ${r._intendedWidth}px → ${r.width}px) — 게임 영역을 우측으로 ${need}px 이상 확장해주세요`);
+        } else {
+          adenaOnlyIssues.push(`ADENA ROI 폭 부족 (${r.width}px<80) — 5자리 이상 아데나 인식 위해 게임 영역을 우측으로 넓게 다시 지정해주세요`);
+        }
         return false;
       }
       return true;

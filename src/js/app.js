@@ -4034,6 +4034,34 @@
         hybrid: true
       };
     }
+    // [v1.5.8] MP 한정 paddle 우선 채택 휴리스틱 — DISAGREE 영원 폐기 회피.
+    //   진단 2026-05-08T14-05-41: paddle=177/242 (정확) vs tess=2/242 (자릿수 손실 misread, 5회 중 3회 일관).
+    //   조건 (모두 만족):
+    //     1) label==='MP'
+    //     2) max 일치 (paddle.max === tess.max)
+    //     3) paddle.cur 합리적: 1 ≤ cur ≤ max
+    //     4) tess.cur 자릿수 손실 의심 — 두 케이스 중 하나:
+    //        a) tess.cur < paddle.cur * 0.2 (Paddle의 20% 미만)
+    //        b) tess.cur < 10 AND paddle.cur ≥ 50 (한자릿수 vs 두자릿수+ 격차)
+    //     5) userMax sanity — userMax≥10이고 paddle.max와 일치 (anchor 보호)
+    if (label === 'MP' && pp.max && tp.max && pp.max === tp.max
+        && typeof pp.cur === 'number' && typeof tp.cur === 'number'
+        && pp.cur >= 1 && pp.cur <= pp.max) {
+      const tessCurLossSuspect = (tp.cur < pp.cur * 0.2)
+        || (tp.cur < 10 && pp.cur >= 50);
+      const userMaxLocal = parseInt(dom.inMaxMp && dom.inMaxMp.value, 10) || 0;
+      const userMaxSane = userMaxLocal >= 10 && pp.max === userMaxLocal;
+      if (tessCurLossSuspect && userMaxSane) {
+        pushHybridLog('MP ⚖️ paddle 우선 채택 (tess cur=' + tp.cur + ' 자릿수 손실 의심, paddle ' + pp.cur + '/' + pp.max + ')');
+        return {
+          text: 'paddle-priority:"' + paddleR.text + '" (tess discarded:"' + tessR.text + '")',
+          confidence: paddleR.confidence || 0,
+          parsed: pp,
+          hybrid: true,
+          paddlePriority: true
+        };
+      }
+    }
     // 둘 다 성공 + 불일치 → 거부 (anchor 보존)
     console.log('[Hybrid ' + label + '] DISAGREE: paddle=', pp, 'tess=', tp);
     pushHybridLog(label + ' ❌ DISAGREE p=' + JSON.stringify(pp) + ' t=' + JSON.stringify(tp));
@@ -4575,6 +4603,20 @@
             if (vqJump.count >= requiredJumpCount) {
               vqJump.val = null; vqJump.count = 0;
               pushHybridLog('EXP 🟢 큰 점프 검증 통과 (' + deltaBoth.toFixed(2) + '%p, ' + requiredJumpCount + '회 일관 — anchor 자동 갱신): ' + valBoth);
+              // [v1.5.8 MED-1] EXP 큰 감소(-5%p 이상) 시 사망 추정 토스트.
+              //   진단 2026-05-08T14-05-41: 49.99% → 41.60% (-8.39%p) 같은 케이스에서
+              //   사용자가 misread/리셋/사망 중 어느 것인지 인지 어려움. throttle 60초.
+              //   localStorage `lmp.expDeathToast`로 끄기 가능 (기본 ON).
+              try {
+                if (deltaBoth < -5) {
+                  const toastEnabled = localStorage.getItem('lmp.expDeathToast') !== 'false';
+                  const nowMs = Date.now();
+                  if (toastEnabled && (!ocrExpRegionHybrid._lastDeathToast || nowMs - ocrExpRegionHybrid._lastDeathToast > 60000)) {
+                    flashHint('⚠️ EXP -' + Math.abs(deltaBoth).toFixed(2) + '%p — 사망 또는 트래커 리셋?');
+                    ocrExpRegionHybrid._lastDeathToast = nowMs;
+                  }
+                }
+              } catch (_) {}
               return voteHybrid('EXP', pr, tr, matcher);
             }
             pushHybridLog('EXP ⏳ 큰 점프 검증중 (' + (vqJump.count + 1) + '/' + (requiredJumpCount + 1) + ', ' + deltaBoth.toFixed(2) + '%p): ' + valBoth);
@@ -4946,15 +4988,21 @@
       }
     }
 
-    // [v1.4.2 fix] ADENA width<50 단독 fail은 통과시키되 안내 + region 갱신 차단.
+    // [v1.4.2 fix] ADENA width<80 단독 fail은 통과시키되 안내 + region 갱신 차단.
     //   사용자 진단 (2026-05-07T11-46-28): ADENA invalid가 전체 OCR을 막던 회귀 해결.
     //   다른 ROI(MP/EXP/LEVEL)는 정상 사용. ADENA만 사용자가 게임 영역을 우측으로 확장해야 함.
-    if (textROIs.adena && textROIs.adena.width < 50) {
+    // [v1.5.8] 임계 50→80 상향 (5자리+콤마 보장) + _clipped 플래그로 경계 잘림 명시.
+    if (textROIs.adena && textROIs.adena.width < 80) {
       const nowMs = Date.now();
-      const warnKey = `ADENA-${textROIs.adena.width}px`;
+      const warnKey = `ADENA-${textROIs.adena.width}px${textROIs.adena._clipped ? '-clip' : ''}`;
       if (!ensureAutoModeROIs._lastAdenaWarn || ensureAutoModeROIs._lastAdenaWarn.text !== warnKey
           || (nowMs - ensureAutoModeROIs._lastAdenaWarn.at) > 30000) {
-        pushHybridLog('⚠️ ADENA ROI 폭 부족 (' + textROIs.adena.width + 'px) — 게임 영역을 우측으로 더 넓게 다시 지정 (MP/EXP/LEVEL은 정상 동작)');
+        if (textROIs.adena._clipped && textROIs.adena._intendedWidth) {
+          const need = textROIs.adena._intendedWidth - textROIs.adena.width + 10;
+          pushHybridLog('⚠️ ADENA ROI 우측 클램프 (의도 ' + textROIs.adena._intendedWidth + 'px → ' + textROIs.adena.width + 'px) — 게임 영역을 우측으로 ' + need + 'px 이상 확장 (MP/EXP/LEVEL은 정상 동작)');
+        } else {
+          pushHybridLog('⚠️ ADENA ROI 폭 부족 (' + textROIs.adena.width + 'px<80) — 5자리 이상 아데나 인식 위해 게임 영역을 우측으로 넓게 다시 지정 (MP/EXP/LEVEL은 정상 동작)');
+        }
         ensureAutoModeROIs._lastAdenaWarn = { text: warnKey, at: nowMs };
       }
       textROIs.adena = null;  // adenaRegion 갱신 차단 → 기존 region(수동 지정/직전 값) 유지
@@ -6193,7 +6241,12 @@
               consecutiveRoiFailures: autoDetect._consecutiveRoiFailures || 0,
             },
             hybridLog: (typeof _hybridLogQueue !== 'undefined') ? _hybridLogQueue.slice(0, 100) : [],
-            paddleDebug: safeText(dom.paddleDebugInfo, 8000),
+            // [v1.5.8 LOW-1] paddleDebug placeholder ("테스트 버튼 클릭 시 표시")는 null로
+            //   리포트 노이즈 정리. 실제 자가진단/테스트 결과만 직렬화.
+            paddleDebug: (() => {
+              const txt = safeText(dom.paddleDebugInfo, 8000);
+              return (txt === '테스트 버튼 클릭 시 표시' || !txt) ? null : txt;
+            })(),
             adInitStatus: safeText(dom.adInitStatus, 1000),
             adMpLast: safeText(dom.adMpLast, 500),
             adExpLast: safeText(dom.adExpLast, 500),

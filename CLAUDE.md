@@ -140,6 +140,42 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.5.8 (2026-05-08) — Adena ROI clamp 인지 + MP DISAGREE paddle 우선 + EXP 사망 토스트 ⭐⭐⭐
+사용자 진단 2026-05-08T14-05-41 (v1.5.7): MP/ADENA 동시 OCR 실패 + EXP 큰 감소 (사망 추정).
+
+**HIGH-1 ADENA ROI 우측 클램프 인지 + 임계값 50→80** (`roi-detector.js`)
+- 진단: `cachedROIs.textROIs.adena.width=64px` (frameW=1278에 클램프됨) → "22,974"를 "2,274"로 자릿수 손실 misread.
+- rightCand width 103px → frame 경계 1278에서 64px로 잘림 (실측). belowCand 74px → 64px 잘림.
+- 임계값 50px는 4자리 ADENA 기준 — 5자리+콤마(22,974) 보장 위해 80px로 상향.
+- belowCand 기본 폭 50→80 동시 상향 (회귀 위험 최소화).
+- 클램프 발생 시 `_clipped`/`_intendedWidth` 플래그 → "ADENA ROI 우측 클램프 (의도 103px → 64px) — 게임 영역 우측으로 49px 이상 확장" 명시 메시지.
+- `app.js:4952` 사용자 안내 메시지도 동기화.
+
+**HIGH-2 MP DISAGREE paddle 우선 채택 휴리스틱** (`app.js:4037 voteHybrid`)
+- 진단: `paddle=177/242 (정확) vs tess=2/242 (5회 중 3회 일관 misread)` → DISAGREE 영원 폐기 → MP "???".
+- 5조건 동시 만족 시 paddle 단독 채택:
+  1) `label==='MP'`
+  2) max 일치
+  3) paddle.cur 1~max 합리
+  4) tess.cur 자릿수 손실 의심 (paddle*0.2 미만, OR 한자릿수 vs 두자릿수+ 격차)
+  5) userMax sanity (≥10 + paddle.max 일치)
+- v1.5.5 D fix(LEVEL paddle 우선) 패턴을 MP cur로 확장. anchor 보호되면서 일관 misread 회피.
+
+**MED-1 EXP 큰 감소 사망 추정 토스트** (`app.js:4605`)
+- 진단: 49.99% → 41.60% (-8.39%p) — 큰 점프 검증은 정상 작동하나 사용자가 misread/리셋/사망 인지 불가.
+- 큰 점프 검증 통과 시점에 `deltaBoth < -5` 이면 `flashHint('⚠️ EXP -X.XX%p — 사망 또는 트래커 리셋?')` 발동.
+- 60초 throttle, `localStorage.lmp.expDeathToast` 로 끄기 가능 (기본 ON).
+
+**LOW-1 paddleDebug placeholder 정리** (`app.js:6244`)
+- 진단 리포트 `paddleDebug` 가 실제 결과 없을 때 `"테스트 버튼 클릭 시 표시"` 직렬화 → 자동화 파싱 노이즈.
+- placeholder 또는 빈 문자열이면 null 반환.
+
+**파일 변경**: `src/js/roi-detector.js` 2곳, `src/js/app.js` 4곳, `package.json` version, ~83 LOC.
+
+**검증**: npm test 36/36, node --check 양호.
+
+**상세**: `.omc/plans/v1.5.8-roi-clamp-and-mp-disagree.md`
+
 ### v1.5.7 (2026-05-08) — EXP 0↔9 confusion 안정화 (H1+H2+H3) ⭐⭐
 사용자 진단 2026-05-08T13-51-20 (v1.5.6): LEVEL ✅ G fix 작동 확인. EXP "40.8843%"가 OCR에서 "49.8843%"로 매번 misread (0↔9 confusion, traineddata 학습 한계).
 
