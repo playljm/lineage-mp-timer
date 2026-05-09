@@ -4578,6 +4578,36 @@
     }
     let [pr, tr] = await Promise.all([ocrAdenaRegionPaddle(), ocrAdenaRegionTesseract()]);
 
+    // [v1.8.4] 한글 단위 진입 의심 generic 검출 — paddle ≠ tess 케이스도 포착
+    //   v1.8.3 catastrophic 안 검출은 paddle===tess일 때만 발동. 진단 2026-05-09T16-18-21:
+    //   paddle "11" vs tess "1" → voting disagree → catastrophic 분기 진입 안 함 → 안내 0회
+    //   해결: pr/tr 받은 직후 둘 다 anchor 자릿수 -2 이상 작으면 (값 무관) 5회 일관 시 안내
+    {
+      const _anchorAdSus = parseInt(dom.trkAdenaNow.value, 10) || 0;
+      if (_anchorAdSus >= 1000) {
+        const aDigSus = String(_anchorAdSus).length;
+        const pVal = pr && pr.parsed && Number.isFinite(pr.parsed.adena) ? pr.parsed.adena : null;
+        const tVal = tr && tr.parsed && Number.isFinite(tr.parsed.adena) ? tr.parsed.adena : null;
+        const pDigSus = pVal !== null && pVal > 0 ? String(pVal).length : 0;
+        const tDigSus = tVal !== null && tVal > 0 ? String(tVal).length : 0;
+        if (!ocrAdenaRegionHybrid._unitSuspectGen) ocrAdenaRegionHybrid._unitSuspectGen = { count: 0, lastHintTs: 0 };
+        const usg = ocrAdenaRegionHybrid._unitSuspectGen;
+        // 둘 다 anchor 자릿수 -2 이상 작으면 한글 단위 진입 의심 (값은 달라도 OK)
+        if (pDigSus > 0 && tDigSus > 0 && pDigSus <= aDigSus - 2 && tDigSus <= aDigSus - 2) {
+          usg.count++;
+          if (usg.count >= 5 && (Date.now() - usg.lastHintTs) > 60000) {
+            pushHybridLog('⚠️ ADENA 한글 단위 진입 의심 (paddle ' + pDigSus + '자리/tess ' + tDigSus + '자리 vs anchor ' + aDigSus + '자리, 5회 일관) — NOW 직접 갱신 권장');
+            try { if (typeof flashHint === 'function') flashHint(null, '💡 ADENA 게임 화면이 "X만" 한글 단위 진입 의심 — 트래커 NOW 직접 입력', 5000); } catch (_) {}
+            usg.lastHintTs = Date.now();
+            usg.count = 0;
+          }
+        } else if (pDigSus > 0 && tDigSus > 0) {
+          // 정상 자릿수 회복 시 카운터 리셋
+          usg.count = 0;
+        }
+      }
+    }
+
     // [v1.5.5 E fix] anchor 자릿수 부족 자동 복구 — anchor가 OCR보다 자릿수 +2 이상 작으면 stale 의심
     //   사용자 진단 (2026-05-08T13-19-43): anchor=778 (3자리), tess=10778 (5자리, 정확) but
     //   paddle=778 (catastrophic 3자리 misread). 기존 v15 로직이 paddle 자릿수 매치만 보고 tess 폐기.

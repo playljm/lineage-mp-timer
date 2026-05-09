@@ -140,6 +140,25 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.8.4 (2026-05-10) — ADENA 한글 단위 generic 검출 (paddle ≠ tess 케이스 포함) ⭐⭐
+v1.8.3 한계 발견: catastrophic 안 한글 단위 의심 안내가 `paddle === tess` 일치 케이스만 발동. 사용자 진단 2026-05-09T16-18-21 실제는 paddle "11" vs tess "1" → voting disagree → catastrophic 분기 진입 안 함 → 안내 0회 발동.
+
+**HIGH-1 generic 자릿수 mismatch 검출** (`app.js:4561~`)
+- ocrAdenaRegionHybrid의 paddle/tess 결과 받은 직후 (voting/anchor 복구 전) 검사
+- anchor ≥ 1000 (4자리+) + paddle/tess 둘 다 자릿수 ≤ anchor 자릿수 -2 + 5회 일관 (값은 달라도 OK)
+- pushHybridLog: `⚠️ ADENA 한글 단위 진입 의심 (paddle X자리/tess Y자리 vs anchor Z자리, 5회 일관)`
+- flashHint: `💡 ADENA 게임 화면이 "X만" 한글 단위 진입 의심 — 트래커 NOW 직접 입력`
+- 60초 throttle, 정상 자릿수 회복 시 카운터 리셋
+
+**v1.8.3과 차이**:
+- v1.8.3 안내 (line 4652): paddle === tess 일치 케이스만 (catastrophic 거부 분기 안)
+- v1.8.4 안내 (line 4561): paddle ≠ tess 케이스 포함 (voting 진입 전)
+- 둘 다 유지 — 다른 분기에서 작동 (이중 안전망)
+
+**파일 변경**: `app.js` 1곳 (~30 LOC), `package.json` version, `CLAUDE.md` history.
+
+**검증**: npm test 36/36, node --check OK.
+
 ### v1.8.3 (2026-05-10) — ADENA 한글 단위 가드 + EXP 정수부 잘림 안내 ⭐⭐⭐
 사용자 진단 2026-05-09T16-18-21 (v1.8.1): ADENA 미리보기 "1ð만" (게임이 100,000 이상 시점부터 한국어 단위 "10만"/"100만" 압축 표시 → OCR/user template은 숫자만 학습 → 한글 "만" 인식 불가) + EXP 미리보기 ".2748%" (정수부 "59" 두 글자 잘림 → anchor 59.46과 자릿수 mismatch 영원 폐기 → anchor stale).
 
