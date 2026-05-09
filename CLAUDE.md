@@ -140,6 +140,32 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.8.1 (2026-05-10) — User Template 게이트 완화 + EXP 정수부 손실 fix ⭐⭐⭐
+사용자 스크린샷 2026-05-10 00:08 (v1.8.0): EXP 미리보기 ".6401%" (정수부 "0" 잘림), ADENA "53251" OCR "公呼" misread (사용자 학습된 자릿수가 5+ 게이트 미달).
+
+**HIGH-1 User template 게이트 5→3 완화** (`app.js:4288`)
+- v1.8.0 게이트: stats.adena.total >= 5 + uniqueDigits >= 5 → 5+ 자릿수 등록 필요
+- 사용자가 "67144"만 학습 → 4 sig (3/10 자릿수) → 게이트 미발동 → ML OCR fallback
+- 변경: total >= 3 + uniqueDigits >= 3 → 3+ 자릿수만 등록돼도 발동
+- matchUser 내부에서 미등록 자릿수는 base TEMPLATES fallback (자동 처리)
+
+**HIGH-2 EXP/LEVEL ROI PAD_X 4→8** (`roi-detector.js:519~`)
+- 사용자 진단: EXP "0.6401%" → 미리보기 ".6401%" (정수부 "0" ROI 좌측 밖)
+- PAD_X 4 → 8 (4px 더 좌측 padding) — 1자리 정수부 안전 캡처
+- belowCand 분기도 PAD_X 2→6 동기화
+
+**LOW-1 ROI 캐시 v1.8.1 자동 invalidate** (`storage.js:198~`)
+- `_roiInvalidatedFor181` 플래그로 1회 무효화
+
+**파일 변경**: `app.js` 1곳, `roi-detector.js` 2곳, `storage.js` 1곳, `package.json` version, `CLAUDE.md` history. ~15 LOC.
+
+**검증**: npm test 36/36, node --check OK.
+
+**중요 안내** (사용자 액션):
+1. 새 화면에 등장하는 ADENA의 *모든 자릿수*를 학습하려면 다양한 시점에 [📌 학습] 클릭 권장
+2. "67144" → "53251" 처럼 다른 글자가 화면에 뜰 때마다 트래커 NOW 정확값 입력 후 학습 클릭
+3. 자릿수 모두 등록(10/10) 후엔 영원히 자동 정확
+
 ### v1.8.0 (2026-05-09) — User Template 즉시 학습 (과거 픽셀 매칭 방식 도입) ⭐⭐⭐⭐⭐
 사용자 절절한 답답함: "과거 10년 전 프로그램도 잘 됐는데 왜 못하나" — ML OCR 한계 인정 + template matching 도입.
 

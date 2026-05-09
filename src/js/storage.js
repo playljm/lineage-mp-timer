@@ -192,6 +192,12 @@
       stored._roiInvalidatedFor164 = true;
       console.log('[storage] v1.6.4: cachedROIs 1회 자동 무효화 (ADENA y *0.83 + height *0.55, 글자 한 줄만) — 다음 사이클 재탐지');
     }
+    // [v1.8.1] EXP/LEVEL textROI PAD_X 4→8 (정수부 "0" 손실 차단)
+    if (stored.cachedROIs && !stored._roiInvalidatedFor181) {
+      stored.cachedROIs = null;
+      stored._roiInvalidatedFor181 = true;
+      console.log('[storage] v1.8.1: cachedROIs 1회 자동 무효화 (EXP/LEVEL PAD_X 8) — 다음 사이클 재탐지');
+    }
     // mpBarMaxX 의미 변경 (col index → filledCount). refColor 없으면 reset해서 재보정 유도.
     if (stored.mpBarMaxX > 0 && !stored.mpBarRefColor) {
       console.log('[storage] mpBarMaxX 의미 변경됨 — refColor 없어서 재보정 필요. 기존 보정값 reset.');

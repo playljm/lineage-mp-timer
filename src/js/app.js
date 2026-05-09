@@ -4401,7 +4401,9 @@
     if (window.TemplateMatcher && autoDetect.adenaRegion && window.TemplateMatcher.userTemplateStats) {
       const stats = window.TemplateMatcher.userTemplateStats();
       const uniqueDigits = stats.adena ? Object.keys(stats.adena.digits).length : 0;
-      if (stats.adena && stats.adena.total >= 5 && uniqueDigits >= 5) {
+      // [v1.8.1] 게이트 완화 5→3 — 일부 자릿수만 등록돼도 발동 (matchUser 내부에서 등록 안 된 자릿수는 base TEMPLATES fallback)
+      //   사용자 진단 (2026-05-10 00:08): "67144" 학습 후 "6,7,1,4" 4 sig (3/10 자릿수)만 등록 → 5+ 게이트 미발동 → ML OCR fallback
+      if (stats.adena && stats.adena.total >= 3 && uniqueDigits >= 3) {
         try {
           const utCanvas = captureRegionToRawCanvas(autoDetect.adenaRegion, 12, { pad: 3 });
           if (utCanvas) {

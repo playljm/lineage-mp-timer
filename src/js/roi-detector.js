@@ -517,10 +517,10 @@
         });
         if (lvLine) {
           const PAD_Y = 4;
-          // [v1.5.7 H3 fix] EXP/LEVEL textROI 좌우 padding 2→4 (글자 안티앨리어싱 보호)
-          //   사용자 진단 (2026-05-08T13-51-20): EXP "40.8843%"의 0이 9로 misread (0↔9 confusion)
-          //   좌우 PAD ↑ → 글자 가장자리 손실 ↓ → OCR 정확도 미세 향상
-          const PAD_X = 4;
+          // [v1.8.1] EXP/LEVEL textROI 좌우 padding 4→8 (정수부 "0" 손실 차단)
+          //   사용자 진단 (2026-05-10 00:08): EXP "0.6401%" 미리보기에 ".6401%"만 — 정수부 "0" ROI 좌측 밖
+          //   좌우 PAD 4→8 → 정수부 1자리 안전 캡처 + 안티앨리어싱 보호 강화
+          const PAD_X = 8;
           const y = Math.max(0, lvLine.yStart - PAD_Y);
           const h = Math.min(frameH - y, lvLine.height + PAD_Y * 2);
           // 가장 좌측 cluster = Level, 가장 우측 cluster들의 통합 = EXP%
@@ -616,7 +616,7 @@
             }
             // gap이 20px 이상 명확히 분리된 케이스에만 채택 — 그 외엔 false split 위험
             if (expStart_x > 0) {
-              const PAD_Y = 4, PAD_X = 2;
+              const PAD_Y = 4, PAD_X = 6;  // [v1.8.1] 2→6 (정수부 "0" 손실 차단)
               const y = Math.max(0, candLine.yStart - PAD_Y);
               const h = Math.min(frameH - y, candLine.height + PAD_Y * 2);
               const rightMost = sorted[sorted.length - 1];
