@@ -149,6 +149,8 @@
     btnLearnAdenaTemplate: $('btn-learn-adena-template'),
     btnClearAdenaTemplate: $('btn-clear-adena-template'),
     userTemplateStatus: $('user-template-status'),
+    userTemplateGrid: $('user-template-grid'),
+    chkAutoLearnTemplate: $('chk-auto-learn-template'),
     selTrainCaptureInterval: $('sel-train-capture-interval'),
     trainCaptureStatus: $('train-capture-status'),
     btnTrainLabelStart: $('btn-train-label-start'),
@@ -1551,23 +1553,62 @@
     }
     _trainRefreshStats();
   }
-  // [v1.8.0] User template status UI 갱신
+  // [v1.8.0/v1.8.2] User template status UI 갱신 — 0~9 자릿수 그리드 + 보조 텍스트
   function updateUserTemplateStatus() {
-    if (!dom.userTemplateStatus) return;
     if (!window.TemplateMatcher || !window.TemplateMatcher.userTemplateStats) {
-      dom.userTemplateStatus.textContent = '미등록';
+      if (dom.userTemplateStatus) dom.userTemplateStatus.textContent = '미등록';
+      if (dom.userTemplateGrid) dom.userTemplateGrid.innerHTML = '';
       return;
     }
     const stats = window.TemplateMatcher.userTemplateStats();
     const adena = stats.adena || { total: 0, digits: {} };
     const uniqueDigits = Object.keys(adena.digits).length;
-    if (adena.total === 0) {
-      dom.userTemplateStatus.textContent = '미등록';
-      dom.userTemplateStatus.style.color = 'var(--text-dim, #888)';
-    } else {
-      dom.userTemplateStatus.textContent = '✅ ADENA ' + uniqueDigits + '/10 자릿수, 총 ' + adena.total + '개 sig';
-      dom.userTemplateStatus.style.color = uniqueDigits >= 8 ? 'var(--neon, #0f0)' : 'var(--neon-dim, #aa0)';
+    // 보조 텍스트 (총합)
+    if (dom.userTemplateStatus) {
+      if (adena.total === 0) {
+        dom.userTemplateStatus.textContent = '미등록';
+        dom.userTemplateStatus.style.color = 'var(--text-dim, #888)';
+      } else {
+        dom.userTemplateStatus.textContent = uniqueDigits + '/10 자릿수, 총 ' + adena.total + '개 sig';
+        dom.userTemplateStatus.style.color = uniqueDigits >= 10 ? 'var(--neon, #0f0)' : 'var(--neon-dim, #aa0)';
+      }
     }
+    // 디지트 그리드 (0~9)
+    if (dom.userTemplateGrid) {
+      const frag = document.createDocumentFragment();
+      for (let i = 0; i < 10; i++) {
+        const ch = String(i);
+        const cnt = adena.digits[ch] || 0;
+        const cell = document.createElement('span');
+        cell.className = 'user-template-digit ' + (cnt > 0 ? 'registered' : 'missing');
+        cell.dataset.digit = ch;
+        cell.textContent = ch;
+        cell.title = cnt > 0 ? (cnt + '개 sig — 클릭으로 삭제') : '미등록';
+        frag.appendChild(cell);
+      }
+      dom.userTemplateGrid.innerHTML = '';
+      dom.userTemplateGrid.appendChild(frag);
+    }
+  }
+  // 그리드 셀 클릭 위임 — 자릿수 단독 삭제 (잘못 학습된 sig 회복용)
+  function _onUserTemplateGridClick(e) {
+    const target = e.target.closest('.user-template-digit');
+    if (!target) return;
+    const digit = target.dataset.digit;
+    if (digit == null) return;
+    if (!window.TemplateMatcher || !window.TemplateMatcher.userTemplateStats) return;
+    const stats = window.TemplateMatcher.userTemplateStats();
+    const cnt = (stats.adena && stats.adena.digits && stats.adena.digits[digit]) || 0;
+    if (cnt === 0) {
+      flashHint('자릿수 ' + digit + ' 미등록 — 학습 후 클릭');
+      return;
+    }
+    if (!window.confirm('자릿수 "' + digit + '" 등록된 ' + cnt + '개 sig 삭제?')) return;
+    if (window.TemplateMatcher.clearUserTemplateDigit) {
+      window.TemplateMatcher.clearUserTemplateDigit('adena', digit);
+    }
+    flashHint('🗑️ 자릿수 ' + digit + ' 초기화');
+    updateUserTemplateStatus();
   }
 
   function setupTrainingControls() {
@@ -1592,6 +1633,33 @@
           flashHint('⚠️ TemplateMatcher 모듈 미로드');
           return;
         }
+        // [v1.8.2] 사전 검증 — 잘못된 NOW 입력으로 corruption 방지
+        //   현재 캡처를 user template 또는 base template으로 OCR → label과 글자 단위 일치율 비교
+        //   일치율 < 50%면 confirm() 발동 (사용자가 OK 누르면 정확값 등록, 취소면 abort)
+        try {
+          let preCheck = window.TemplateMatcher.matchUser
+            ? window.TemplateMatcher.matchUser(canvas, label.length, 'adena', '0123456789')
+            : null;
+          if (!preCheck || !preCheck.text) {
+            preCheck = window.TemplateMatcher.match
+              ? window.TemplateMatcher.match(canvas, label.length, '0123456789')
+              : null;
+          }
+          if (preCheck && preCheck.text && preCheck.text.length === label.length) {
+            let matched = 0;
+            for (let i = 0; i < label.length; i++) {
+              if (preCheck.text[i] === label[i]) matched++;
+            }
+            const matchRate = matched / label.length;
+            if (matchRate < 0.5) {
+              const ok = window.confirm(
+                '⚠️ 캡처 OCR 결과 "' + preCheck.text + '" 가 입력값 "' + label + '" 과 다릅니다.\n' +
+                '입력값이 정확하면 OK, 잘못 입력했으면 취소.'
+              );
+              if (!ok) { flashHint('학습 취소됨'); return; }
+            }
+          }
+        } catch (_) { /* preCheck 실패는 무시하고 학습 진행 */ }
         const r = window.TemplateMatcher.registerUserTemplate(canvas, label, 'adena');
         if (r.ok) {
           flashHint('✅ ADENA template 학습 (' + r.message + ')');
@@ -1607,6 +1675,24 @@
         window.TemplateMatcher.clearUserTemplates('adena');
         flashHint('🗑️ ADENA template 초기화');
         updateUserTemplateStatus();
+      });
+    }
+    // [v1.8.2] 디지트 그리드 클릭 위임 (자릿수 단독 삭제)
+    if (dom.userTemplateGrid) {
+      dom.userTemplateGrid.addEventListener('click', _onUserTemplateGridClick);
+    }
+    // [v1.8.2] 자동학습 토글 — settings.autoLearnUserTemplate (default true)
+    if (dom.chkAutoLearnTemplate) {
+      try {
+        const s = S.loadSettings();
+        dom.chkAutoLearnTemplate.checked = s.autoLearnUserTemplate !== false; // default true
+      } catch (_) { dom.chkAutoLearnTemplate.checked = true; }
+      dom.chkAutoLearnTemplate.addEventListener('change', () => {
+        try {
+          const s = S.loadSettings();
+          s.autoLearnUserTemplate = !!dom.chkAutoLearnTemplate.checked;
+          S.saveSettings(s);
+        } catch (_) { /* ignore */ }
       });
     }
     updateUserTemplateStatus();
@@ -4394,6 +4480,41 @@
     }
     return voteHybrid('LEVEL', pr, tr, (a, b) => a.level === b.level);
   }
+  // [v1.8.2] ADENA OCR이 안정 검증 통과한 시점에 미등록 자릿수를 자동 학습.
+  //   사용자가 트래커 NOW를 정확하게 유지하면 사냥 중 다양한 ADENA 값이 stability 통과할 때마다
+  //   미등록 자릿수가 자동으로 채워짐 → 0~9 모두 모이면 user template 매칭이 100% 정확.
+  //   안전망: ad ≥ 100 + 5회 안정 + ad당 1회 + autoLearnUserTemplate 토글 ON.
+  //   캔버스는 방금 OCR 사이클이 갱신한 latestCaptureCanvas.adena 재사용 (수동 학습과 동일 패턴).
+  function _maybeAutoLearnAdena(ad) {
+    try {
+      const settings = S.loadSettings();
+      if (settings.autoLearnUserTemplate === false) return; // 토글 OFF
+    } catch (_) { /* settings 로드 실패 시 default true 유지 */ }
+    if (!Number.isFinite(ad) || ad < 100) return;
+    if (!window.TemplateMatcher || !window.TemplateMatcher.userTemplateStats || !window.TemplateMatcher.registerUserTemplate) return;
+
+    const stats = window.TemplateMatcher.userTemplateStats();
+    const registered = new Set(Object.keys((stats.adena && stats.adena.digits) || {}));
+    const adStr = String(ad);
+    const missing = [...new Set([...adStr].filter((d) => !registered.has(d)))];
+    if (missing.length === 0) return; // 이번 값 자릿수 모두 등록됨 — skip
+
+    if (adenaStableCount < 5) return; // 5회 일관 후에만 (분기 진입 조건 ≥3이라 부족할 수 있음)
+    if (_maybeAutoLearnAdena._lastLearned === ad) return; // 같은 ad에 대해 1회만 시도
+
+    const canvas = latestCaptureCanvas.adena;
+    if (!canvas) return; // 아직 캡처 미리보기 없음
+
+    try {
+      const r = window.TemplateMatcher.registerUserTemplate(canvas, adStr, 'adena');
+      if (r && r.ok && r.registered > 0) {
+        _maybeAutoLearnAdena._lastLearned = ad;
+        pushHybridLog('🤖 ADENA 자동학습 (신규 ' + r.registered + '자리, 안정 ' + adenaStableCount + '회): ' + missing.join(','));
+        updateUserTemplateStatus();
+      }
+    } catch (e) { console.warn('[ADENA auto-learn] failed:', e); }
+  }
+
   async function ocrAdenaRegionHybrid() {
     // [v1.8.0] User template matching 우선 — 사용자 폰트로 학습됐으면 ML OCR 우회
     //   사용자가 트래커 NOW에 정확값 입력 후 [📌 학습] 클릭하면 0~9 픽셀 패턴 등록
@@ -5854,6 +5975,8 @@
                 }
                 const stableLabel = adenaStableCount > 1 ? ` ×${adenaStableCount}` : '';
                 dom.adAdenaLast.textContent = `✅ ${formatNumber(ad)}${stableLabel}`;
+                // [v1.8.2] OCR 안정 시점에 미등록 자릿수 자동 학습 (수동 클릭 반복 제거)
+                _maybeAutoLearnAdena(ad);
               } else {
                 const jumpHint = isJump ? ' 🚧 점프' : '';
                 dom.adAdenaLast.textContent = `🔄 ${formatNumber(ad)} (검증 ${adenaStableCount}/${requiredStable})${jumpHint}`;

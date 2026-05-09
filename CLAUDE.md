@@ -140,6 +140,45 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.8.2 (2026-05-09) — User Template 학습 UX 개선 (자동 학습 + 디지트 그리드 + corruption 방지) ⭐⭐⭐⭐
+v1.8.0/v1.8.1 user template 기능의 수동 반복 클릭 통증 제거 + 진척도 시각화 + 잘못된 라벨 안전망.
+
+**문제** (CLAUDE.md v1.8.1 사용자 안내 그대로):
+- "0~9 모든 자릿수를 모으려면 다양한 ADENA 화면에서 매번 [📌 학습] 클릭해야 함"
+- 진척도가 텍스트 1줄 ("X/10 자릿수")만 노출 → *어떤* 자릿수가 빠졌는지 모름
+- 잘못된 NOW 입력 + 학습 시 corrupted sig 영구 등록 → 전체 초기화 외 회복 수단 없음
+
+**HIGH-1 자동 학습** (`app.js`):
+- ADENA stability 분기 (count ≥ requiredStable) 통과 시점에 `_maybeAutoLearnAdena(ad)` 호출
+- 안전망: ad ≥ 100 + adenaStableCount ≥ 5 + ad당 1회 + autoLearnUserTemplate 토글 ON
+- 미등록 자릿수만 신규 등록 (기존 sig 덮어쓰기 X)
+- hybridLog: `🤖 ADENA 자동학습 (신규 N자리, 안정 5회): X,Y`
+
+**HIGH-2 디지트 그리드 UI** (`index.html` + `neon.css` + `app.js`):
+- "🎯 사용자 폰트 즉시 학습" 섹션에 0~9 그리드 (10칸)
+- 등록 ✅: var(--neon) 채움 / 미등록 ○: dim
+- title attr로 sig 개수 hover 노출
+- 셀 클릭 → confirm → 해당 자릿수만 단독 삭제 (잘못 학습된 sig 회복용)
+- `template-matcher.js`에 `clearUserTemplateDigit(region, digit)` 신규 API
+
+**MED-1 사전 검증 confirm** (`app.js`):
+- 수동 [📌 학습] 클릭 시 `matchUser`/`match`로 캡처 OCR → label과 글자 단위 일치율 비교
+- 일치율 < 50% 시 confirm 다이얼로그 (사용자가 잘못된 NOW 입력했는지 재확인)
+- 첫 학습 시점(USER_TEMPLATES 비어있어 base TEMPLATES fallback)에서 한 번 confirm 발동은 안전망 의도 동작
+
+**LOW-1 자동학습 토글** (settings): `autoLearnUserTemplate` (default true) localStorage 저장
+
+**파일 변경**: `index.html` ~12 LOC, `neon.css` ~38 LOC, `template-matcher.js` ~14 LOC, `app.js` ~110 LOC, `package.json` version, `CLAUDE.md` history. 총 ~180 LOC.
+
+**검증**: npm test 36/36, node --check OK.
+
+**사용자 워크플로우 (한 번만 NOW 정확값 유지하면 끝)**:
+1. 트래커 NOW에 현재 ADENA 정확값 입력 (1회)
+2. 자동학습 토글 ON 유지 (default)
+3. 사냥 진행 → ADENA가 OCR로 안정 검증 통과할 때마다 미등록 자릿수 자동 추가
+4. 디지트 그리드에서 0~9 모두 ✅로 채워지면 user template 100% 정확 (5~10분 사냥)
+5. 잘못 학습된 sig 의심 시 해당 자릿수 셀 클릭 → confirm → 단독 삭제
+
 ### v1.8.1 (2026-05-10) — User Template 게이트 완화 + EXP 정수부 손실 fix ⭐⭐⭐
 사용자 스크린샷 2026-05-10 00:08 (v1.8.0): EXP 미리보기 ".6401%" (정수부 "0" 잘림), ADENA "53251" OCR "公呼" misread (사용자 학습된 자릿수가 5+ 게이트 미달).
 

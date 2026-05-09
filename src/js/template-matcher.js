@@ -447,6 +447,20 @@
     saveUserTemplates();
   }
 
+  /**
+   * [v1.8.2] 단일 자릿수만 삭제 — 잘못 학습된 sig 회복용.
+   * 사용자가 디지트 그리드 셀 클릭 시 해당 글자 sig 전체 삭제 + 즉시 저장.
+   */
+  function clearUserTemplateDigit(region, digit) {
+    if (!region || digit == null) return false;
+    const ch = String(digit);
+    if (!USER_TEMPLATES[region]) return false;
+    if (!USER_TEMPLATES[region][ch]) return false;
+    delete USER_TEMPLATES[region][ch];
+    saveUserTemplates();
+    return true;
+  }
+
   // 앱 시작 시 자동 로드
   try { loadUserTemplates(); } catch (_) {}
 
@@ -461,6 +475,7 @@
     matchUser,
     userTemplateStats,
     clearUserTemplates,
+    clearUserTemplateDigit,
     loadUserTemplates,
     saveUserTemplates
   };

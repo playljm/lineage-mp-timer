@@ -487,10 +487,17 @@
                 현재 캡처에서 0~9 자릿수 픽셀 패턴을 자동 추출 → 이후 OCR이 픽셀 비교로 즉시 정확.
                 ML OCR(paddle/tess)이 헷갈리는 6↔1 confusion도 한 방에 해결.
               </div>
+              <div id="user-template-grid" class="user-template-grid" aria-label="ADENA 자릿수 학습 진척"></div>
               <div class="training-stage-controls" style="margin-top:8px;">
                 <button type="button" class="btn-primary" id="btn-learn-adena-template">📌 현재 ADENA 캡처를 template으로 학습</button>
                 <button type="button" class="btn-secondary" id="btn-clear-adena-template" style="margin-left:8px;">🗑️ 초기화</button>
                 <span id="user-template-status" style="margin-left:12px; font-size:11px; opacity:0.8;">미등록</span>
+              </div>
+              <div class="training-stage-controls" style="margin-top:6px;">
+                <label class="inline-field" style="display:inline-flex; align-items:center; gap:6px;">
+                  <input type="checkbox" id="chk-auto-learn-template" />
+                  <span style="font-size:11px;">자동 학습 (OCR 안정 시 미등록 자릿수 자동 추가)</span>
+                </label>
               </div>
             </div>
           </details>

@@ -1823,6 +1823,42 @@ body.state-done .stat-value.huge {
 .training-stage-controls .btn-primary:hover {
   background: rgba(0, 255, 170, 0.35) !important;
 }
+.user-template-grid {
+  display: flex;
+  flex-direction: row;
+  gap: 4px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.user-template-digit {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  border: 1px solid var(--neon-soft, rgba(0, 255, 170, 0.3));
+  border-radius: 3px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s, color 0.15s, transform 0.1s;
+}
+.user-template-digit.registered {
+  background: var(--neon-dim, rgba(0, 255, 170, 0.6));
+  color: #000;
+  font-weight: 700;
+  border-color: var(--neon, #0f0);
+}
+.user-template-digit.missing {
+  opacity: 0.45;
+  color: var(--muted, #888);
+  background: transparent;
+}
+.user-template-digit:hover {
+  transform: scale(1.1);
+  border-color: var(--neon, #0f0);
+}
 .btn-capture-toggle.active {
   background: rgba(255, 80, 80, 0.3) !important;
   border-color: rgba(255, 80, 80, 0.6) !important;
