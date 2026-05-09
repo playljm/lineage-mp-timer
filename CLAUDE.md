@@ -140,6 +140,40 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.8.3 (2026-05-10) — ADENA 한글 단위 가드 + EXP 정수부 잘림 안내 ⭐⭐⭐
+사용자 진단 2026-05-09T16-18-21 (v1.8.1): ADENA 미리보기 "1ð만" (게임이 100,000 이상 시점부터 한국어 단위 "10만"/"100만" 압축 표시 → OCR/user template은 숫자만 학습 → 한글 "만" 인식 불가) + EXP 미리보기 ".2748%" (정수부 "59" 두 글자 잘림 → anchor 59.46과 자릿수 mismatch 영원 폐기 → anchor stale).
+
+**HIGH-1 ADENA anchor ≥ 100,000 OCR skip** (`app.js:4518`)
+- ocrAdenaRegionHybrid 진입부에 anchor 가드 — 트래커 NOW가 100k 이상이면 OCR 호출 자체를 skip + null 반환
+- 60초 throttle hybridLog: `🚫 ADENA 10만 이상 (X) — OCR skip (게임 한글 단위 표시 한계)`
+- flashHint: `💡 ADENA 10만 이상 — 트래커 NOW 직접 입력`
+
+**HIGH-2 ADENA 한글 단위 진입 의심 안내** (`app.js:4652~`)
+- catastrophic 거부 (anchor ≥ 1000 + paddle/tess 둘 다 1~2자리 일관 misread) 5회 일관 시 flashHint
+- "💡 ADENA 게임 화면이 'X만' 한글 단위 진입 의심 — 트래커 NOW 직접 입력"
+- 60초 throttle, anchor stale 100k 미만 → 사냥 진입 100k+ 케이스 사용자 인지 도움
+- 사용자가 NOW 갱신 → anchor 100k+ → HIGH-1 가드 발동 → 워크플로우 매끄러움
+
+**HIGH-3 EXP 정수부 잘림 의심 안내** (`app.js:~4949`)
+- anchor 정수부 자릿수 ≥ 2 + paddle/tess 둘 다 자릿수 작음 + 10회 일관 → ROI 좌측 잘림 의심
+- pushHybridLog: `⚠️ EXP 정수부 잘림 의심 (10회 일관) — EXP ROI 좌측 확장 또는 재지정 권장`
+- flashHint: `⚠️ EXP 정수부 잘림 의심 — ROI 재지정 권장 (메인 탭 → EXP 영역 다시 지정)`
+- 60초 throttle, 수동 ROI 사용자가 직접 재지정 필요한 시점 명확 인지
+
+**MED-1 EXP/LEVEL ROI PAD_X 8→14, 6→12** (`roi-detector.js:519~,615~`)
+- v1.8.1 4→8도 부족 (정수부 1자리만 보장) → 14/12로 정수부 2자리 안전 캡처
+- 자동 모드 사용자 영향 (수동 ROI는 사용자 지정 영역이라 영향 없음)
+
+**워크플로우** (사용자 시간 0):
+1. ADENA < 100,000 시점만 OCR 자동 인식 (정상 사냥 초반)
+2. 100,000 도달 → 사용자 NOW 직접 입력 → anchor 100k 진입 → OCR 자동 skip
+3. anchor stale 시 한글 단위 진입 의심 flashHint → 사용자 직접 NOW 갱신 유도
+4. EXP 정수부 잘림 의심 시 ROI 재지정 안내 flashHint
+
+**파일 변경**: `app.js` 3곳 (~50 LOC), `roi-detector.js` 2곳 (~6 LOC), `package.json` version, `CLAUDE.md` history.
+
+**검증**: npm test 36/36, node --check OK.
+
 ### v1.8.2 (2026-05-09) — User Template 학습 UX 개선 (자동 학습 + 디지트 그리드 + corruption 방지) ⭐⭐⭐⭐
 v1.8.0/v1.8.1 user template 기능의 수동 반복 클릭 통증 제거 + 진척도 시각화 + 잘못된 라벨 안전망.
 

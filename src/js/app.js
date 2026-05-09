@@ -4516,6 +4516,25 @@
   }
 
   async function ocrAdenaRegionHybrid() {
+    // [v1.8.3] 10만 이상 게임 한글 단위 표시 가드 — OCR 자동 인식 한계
+    //   게임이 ADENA ≥ 100,000 시점부터 화면을 "10만", "100만" 등 한국어 단위로 압축 표시
+    //   → 우리 OCR/user template은 숫자만 학습 → 한글 "만" 인식 불가 → 매번 misread
+    //   사용자 진단 (2026-05-09T16-18-21): 미리보기 "1ð만" → OCR "11" / "???"
+    //   → anchor가 100k 이상이면 OCR skip + flashHint로 사용자 직접 입력 안내
+    {
+      const _anchorAdGuard = parseInt(dom.trkAdenaNow.value, 10) || 0;
+      if (_anchorAdGuard >= 100000) {
+        if (!ocrAdenaRegionHybrid._unitGuardLog || (Date.now() - ocrAdenaRegionHybrid._unitGuardLog) > 60000) {
+          pushHybridLog('🚫 ADENA 10만 이상 (' + _anchorAdGuard.toLocaleString() + ') — OCR skip (게임 한글 단위 표시 한계)');
+          if (typeof flashHint === 'function') {
+            flashHint('💡 ADENA 10만 이상 — 트래커 NOW 직접 입력 (게임이 "X만" 한글 단위 표시)');
+          }
+          ocrAdenaRegionHybrid._unitGuardLog = Date.now();
+        }
+        return null;
+      }
+    }
+
     // [v1.8.0] User template matching 우선 — 사용자 폰트로 학습됐으면 ML OCR 우회
     //   사용자가 트래커 NOW에 정확값 입력 후 [📌 학습] 클릭하면 0~9 픽셀 패턴 등록
     //   이후 매 사이클 픽셀 비교로 매칭 → 100% 정확도 (단일 폰트 전제)
@@ -4632,6 +4651,21 @@
       //   anchor=99(2자리) → val=3 (1자리) 처럼 자릿수 차이 1~2지만 catastrophic인 케이스도 차단
       if (anchorAd >= 100 && valBoth < 100) {
         pushHybridLog('🚫 ADENA catastrophic 거부 (anchor ' + anchorAd + ' ≥100 vs val ' + valBoth + ' <100) — misread 의심');
+        // [v1.8.4] 한글 단위 진입 의심 안내 — anchor 4자리+ + paddle/tess 둘 다 1~2자리 + 5회 일관
+        //   anchor 4437 → 화면 "10만" 100,000 도달 → OCR "1"/"11" misread 5회 일관
+        //   사용자가 직접 NOW 100,000+ 입력해야 v1.8.3 가드(>=100k) 발동 → 자동 인식 종료 워크플로우
+        if (anchorAd >= 1000) {
+          if (!ocrAdenaRegionHybrid._unitSuspect) ocrAdenaRegionHybrid._unitSuspect = { val: 0, count: 0, lastHintTs: 0 };
+          const us = ocrAdenaRegionHybrid._unitSuspect;
+          if (us.val === valBoth) us.count++;
+          else { us.val = valBoth; us.count = 1; }
+          if (us.count >= 5 && (Date.now() - us.lastHintTs) > 60000) {
+            pushHybridLog('⚠️ ADENA 한글 단위 진입 의심 (catastrophic 5회 일관: anchor ' + anchorAd.toLocaleString() + ' vs val ' + valBoth + ') — NOW 직접 갱신 권장');
+            try { if (typeof flashHint === 'function') flashHint(null, '💡 ADENA 게임 화면이 "X만" 한글 단위 진입 의심 — 트래커 NOW 직접 입력', 5000); } catch (_) {}
+            us.lastHintTs = Date.now();
+            us.count = 0;
+          }
+        }
         return { text: 'rejected ' + valBoth, confidence: 0, parsed: null };
       }
       if (anchorAd > 0) {
@@ -4925,6 +4959,31 @@
           ocrExpRegionHybrid._digitVerifyT.val = null;
           ocrExpRegionHybrid._digitVerifyT.count = 0;
         }
+      }
+    }
+
+    // === [v1.8.4] EXP 정수부 잘림 의심 안내 (수동 ROI 사용자 ROI 재지정 권장) ===
+    //   사용자 진단 2026-05-09T16-18-21: 미리보기 ".2748%" — 정수부 "59" 두 글자 잘림.
+    //   anchor 59.46 (2자리) vs paddle/tess 모두 1자리 정수부 → digit verify로 폐기되지만
+    //   anchor 영원 stale. 매 사이클 mismatch 10회 일관 시 ROI 잘림 의심 안내 + 재지정 권장.
+    //   raw 값 사용 (이전 digit verify 로직이 pr/tr를 mutate해 parsed=null 만들었을 수 있음).
+    if (anchorIntCheck >= 10) {
+      const anchorIntDig2 = String(Math.floor(anchorIntCheck)).length;
+      const pIntDig2 = prRaw && prRaw.parsed && Number.isFinite(prRaw.parsed.exp) ? String(Math.floor(prRaw.parsed.exp)).length : 0;
+      const tIntDig2 = trRaw && trRaw.parsed && Number.isFinite(trRaw.parsed.exp) ? String(Math.floor(trRaw.parsed.exp)).length : 0;
+      if (!ocrExpRegionHybrid._cropSuspect) ocrExpRegionHybrid._cropSuspect = { count: 0, lastHintTs: 0 };
+      const cs = ocrExpRegionHybrid._cropSuspect;
+      // paddle/tess 둘 다 anchor보다 정수부 자릿수 작음 (ROI 좌측 정수부 잘림 의심)
+      if (pIntDig2 > 0 && tIntDig2 > 0 && pIntDig2 < anchorIntDig2 && tIntDig2 < anchorIntDig2) {
+        cs.count++;
+        if (cs.count >= 10 && (Date.now() - cs.lastHintTs) > 60000) {
+          pushHybridLog('⚠️ EXP 정수부 잘림 의심 (10회 일관, p=' + pIntDig2 + '자리/t=' + tIntDig2 + '자리 < anchor=' + anchorIntDig2 + '자리) — EXP ROI 좌측 확장 또는 재지정 권장');
+          try { if (typeof flashHint === 'function') flashHint(null, '⚠️ EXP 정수부 잘림 의심 — ROI 재지정 권장 (메인 탭 → EXP 영역 다시 지정)', 5000); } catch (_) {}
+          cs.lastHintTs = Date.now();
+          cs.count = 0;
+        }
+      } else {
+        cs.count = 0;
       }
     }
 
