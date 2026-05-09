@@ -266,11 +266,202 @@
     return Object.values(TEMPLATES).reduce((s, arr) => s + arr.length, 0);
   }
 
+  // =========================================================================
+  // [v1.8.0] User Template — 사용자 환경 폰트 즉시 등록
+  // 사용자가 트래커 NOW에 정확한 값 입력 후 "현재 캡처를 template으로 학습" 클릭
+  // → 캡처 canvas를 자릿수 분리 → 사용자 폰트의 0~9 픽셀 패턴 추출 → localStorage 저장
+  // 이후 OCR 시 사용자 template 우선 매칭 (ML OCR 우회)
+  // =========================================================================
+  // USER_TEMPLATES[region]['0'] = [Uint8Array signature, ...] (multiple variations)
+  let USER_TEMPLATES = { mp: {}, exp: {}, adena: {}, level: {} };
+  const USER_TEMPLATE_STORAGE_KEY = 'lmp.userTemplate';
+
+  function _bytesToB64(bytes) {
+    let s = '';
+    for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    return btoa(s);
+  }
+
+  function loadUserTemplates() {
+    try {
+      const raw = localStorage.getItem(USER_TEMPLATE_STORAGE_KEY);
+      if (!raw) return;
+      const json = JSON.parse(raw);
+      for (const region of ['mp', 'exp', 'adena', 'level']) {
+        if (!json[region]) continue;
+        USER_TEMPLATES[region] = {};
+        for (const [ch, b64Arr] of Object.entries(json[region])) {
+          USER_TEMPLATES[region][ch] = b64Arr.map(_b64ToBytes);
+        }
+      }
+      const total = Object.values(USER_TEMPLATES).reduce((s, r) => s + Object.values(r).reduce((c, a) => c + a.length, 0), 0);
+      console.log('[UserTemplate] loaded ' + total + ' signatures from localStorage');
+    } catch (e) { console.warn('[UserTemplate] load fail:', e); }
+  }
+
+  function saveUserTemplates() {
+    try {
+      const json = {};
+      for (const region of ['mp', 'exp', 'adena', 'level']) {
+        if (!USER_TEMPLATES[region]) continue;
+        json[region] = {};
+        for (const [ch, arr] of Object.entries(USER_TEMPLATES[region])) {
+          json[region][ch] = arr.map(_bytesToB64);
+        }
+      }
+      localStorage.setItem(USER_TEMPLATE_STORAGE_KEY, JSON.stringify(json));
+    } catch (e) { console.warn('[UserTemplate] save fail:', e); }
+  }
+
+  /**
+   * 사용자 정답 라벨로부터 canvas 자릿수 분리 → 각 자릿수 signature 추출 → USER_TEMPLATES 등록.
+   *
+   * @param {HTMLCanvasElement} canvas — ADENA OCR 영역 캔버스 (white-extracted invert 결과 권장)
+   * @param {string} label — 사용자 정답값 (예: "67144" for ADENA)
+   * @param {string} region — 'mp' | 'exp' | 'adena' | 'level'
+   * @returns {{ ok: boolean, registered: number, message: string }}
+   */
+  function registerUserTemplate(canvas, label, region) {
+    if (!canvas || !label || !region) return { ok: false, registered: 0, message: 'invalid input' };
+    if (!['mp', 'exp', 'adena', 'level'].includes(region)) return { ok: false, registered: 0, message: 'unknown region' };
+    // ADENA/LEVEL: 숫자만. EXP: 정수.소수. MP: cur/max.
+    // 핵심 자릿수만 추출 (특수문자 제외)
+    const digitsOnly = String(label).replace(/[^0-9]/g, '');
+    if (!digitsOnly) return { ok: false, registered: 0, message: 'no digits in label' };
+    const trimmed = _trimWhitespace(canvas);
+    if (!trimmed) return { ok: false, registered: 0, message: 'all white canvas' };
+    const { x0, x1 } = trimmed;
+    const charWidth = (x1 - x0) / digitsOnly.length;
+    if (charWidth < 4) return { ok: false, registered: 0, message: 'char width too small (' + charWidth.toFixed(1) + 'px)' };
+    if (!USER_TEMPLATES[region]) USER_TEMPLATES[region] = {};
+    let added = 0;
+    for (let i = 0; i < digitsOnly.length; i++) {
+      const ch = digitsOnly[i];
+      const xs = Math.round(x0 + i * charWidth);
+      const xe = Math.round(x0 + (i + 1) * charWidth);
+      const sig = _canvasToSignature(canvas, xs, xe);
+      if (!USER_TEMPLATES[region][ch]) USER_TEMPLATES[region][ch] = [];
+      // 중복 차단 — 동일 signature가 이미 있으면 skip
+      const exists = USER_TEMPLATES[region][ch].some(t => {
+        if (t.length !== sig.length) return false;
+        for (let j = 0; j < t.length; j++) if (t[j] !== sig[j]) return false;
+        return true;
+      });
+      if (!exists) {
+        USER_TEMPLATES[region][ch].push(sig);
+        added++;
+      }
+    }
+    saveUserTemplates();
+    console.log('[UserTemplate] registered ' + added + '/' + digitsOnly.length + ' digits for region=' + region + ' label=' + label);
+    return { ok: true, registered: added, message: digitsOnly.length + '자리 중 신규 ' + added + '개 등록' };
+  }
+
+  /**
+   * 사용자 template으로 매칭 — USER_TEMPLATES와 기본 TEMPLATES를 모두 사용.
+   * 사용자 template이 있으면 우선, 없으면 기본 fallback.
+   */
+  function matchUser(canvas, expectedLength, region, allowedChars) {
+    if (!canvas || expectedLength <= 0) return { text: null, confidence: 0, error: 'invalid input' };
+    if (!USER_TEMPLATES[region] || !Object.keys(USER_TEMPLATES[region]).length) {
+      return { text: null, confidence: 0, error: 'no user template' };
+    }
+    const trimmed = _trimWhitespace(canvas);
+    if (!trimmed) return { text: null, confidence: 0, error: 'all white' };
+    const { x0, x1 } = trimmed;
+    const charWidth = (x1 - x0) / expectedLength;
+    const result = [];
+    let totalScore = 0;
+    const allowed = allowedChars || '0123456789';
+    for (let i = 0; i < expectedLength; i++) {
+      const xs = Math.round(x0 + i * charWidth);
+      const xe = Math.round(x0 + (i + 1) * charWidth);
+      const sig = _canvasToSignature(canvas, xs, xe);
+      // USER_TEMPLATES 우선, 없으면 fallback to TEMPLATES
+      const m = _matchCharFromUser(sig, region, allowed);
+      result.push(m);
+      totalScore += m.score;
+    }
+    const avgScore = totalScore / expectedLength;
+    const text = result.map((r) => r.char || '?').join('');
+    return { text, confidence: avgScore, perChar: result, length: expectedLength, source: 'user-template' };
+  }
+
+  function _matchCharFromUser(signature, region, allowedChars) {
+    const maxDist = _maxDistance();
+    const INF = maxDist + 1;
+    let best = { char: null, dist: INF, score: 0 };
+    let secondBest = { char: null, dist: INF, score: 0 };
+    const userTpls = USER_TEMPLATES[region] || {};
+    for (const ch of allowedChars) {
+      let minDist = INF;
+      const tplsUser = userTpls[ch];
+      if (tplsUser && tplsUser.length) {
+        for (const tpl of tplsUser) {
+          if (tpl.length !== signature.length) continue;
+          const d = _distance(signature, tpl);
+          if (d < minDist) minDist = d;
+        }
+      }
+      // fallback to base TEMPLATES if no user template for this digit
+      if (minDist === INF && TEMPLATES && TEMPLATES[ch]) {
+        for (const tpl of TEMPLATES[ch]) {
+          if (tpl.length !== signature.length) continue;
+          const d = _distance(signature, tpl);
+          if (d < minDist) minDist = d;
+        }
+      }
+      if (minDist === INF) continue;
+      const score = 1 - (minDist / maxDist);
+      if (minDist < best.dist) {
+        secondBest = { ...best };
+        best = { char: ch, dist: minDist, score };
+      } else if (minDist < secondBest.dist) {
+        secondBest = { char: ch, dist: minDist, score };
+      }
+    }
+    return { ...best, secondBest };
+  }
+
+  function userTemplateStats() {
+    const out = {};
+    for (const region of ['mp', 'exp', 'adena', 'level']) {
+      const r = USER_TEMPLATES[region] || {};
+      const digits = {};
+      let total = 0;
+      for (const [ch, arr] of Object.entries(r)) {
+        digits[ch] = arr.length;
+        total += arr.length;
+      }
+      out[region] = { total, digits };
+    }
+    return out;
+  }
+
+  function clearUserTemplates(region) {
+    if (region) {
+      USER_TEMPLATES[region] = {};
+    } else {
+      USER_TEMPLATES = { mp: {}, exp: {}, adena: {}, level: {} };
+    }
+    saveUserTemplates();
+  }
+
+  // 앱 시작 시 자동 로드
+  try { loadUserTemplates(); } catch (_) {}
+
   global.TemplateMatcher = {
     load,
     match,
     matchVariableLength,
     isLoaded,
-    templateCount
+    templateCount,
+    // [v1.8.0] User template API
+    registerUserTemplate,
+    matchUser,
+    userTemplateStats,
+    clearUserTemplates,
+    loadUserTemplates,
+    saveUserTemplates
   };
 })(window);

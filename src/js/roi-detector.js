@@ -658,14 +658,19 @@
       const rightCand = {
         x: Math.round(adenaIcon.x + adenaIcon.width * 0.5),
         y: Math.round(adenaIcon.y + adenaIcon.height * 0.1),
-        width: Math.max(90, Math.round(adenaIcon.width * 2.5)),
+        width: Math.max(100, Math.round(adenaIcon.width * 2.8)),
         height: Math.round(adenaIcon.height * 0.8)
       };
+      // [v1.6.4] belowCand height 축소 — 글자 한 줄만 (다음 UI 라인 제외)
+      //   v1.6.3 height *0.75 (=23px) → 사용자 스크린샷 (2026-05-09 20:59): 미리보기에 글자 + 가로선 잔상
+      //   원인: 글자 ~14px + 9px 여유 → ROI 안에 다음 UI 라인의 가로 노이즈도 포함
+      //   해결: y *0.88→*0.83 (윗쪽 1.5px 더 확보) + height *0.75→*0.55 (~17px, 글자 + 위아래 2px)
+      //   x는 -20 유지 (좌측 시프트 효과적)
       const belowCand = {
-        x: Math.max(0, Math.round(adenaIcon.x - 5)),
-        y: Math.round(adenaIcon.y + adenaIcon.height * 0.85),
-        width: Math.max(80, Math.round(adenaIcon.width * 1.8)),
-        height: Math.max(20, Math.round(adenaIcon.height * 0.7))
+        x: Math.max(0, Math.round(adenaIcon.x - 20)),
+        y: Math.round(adenaIcon.y + adenaIcon.height * 0.83),
+        width: Math.max(100, Math.round(adenaIcon.width * 2.8)),
+        height: Math.max(18, Math.round(adenaIcon.height * 0.55))
       };
       let chosen = rightCand;
       if (imageData) {

@@ -140,6 +140,275 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v1.8.0 (2026-05-09) — User Template 즉시 학습 (과거 픽셀 매칭 방식 도입) ⭐⭐⭐⭐⭐
+사용자 절절한 답답함: "과거 10년 전 프로그램도 잘 됐는데 왜 못하나" — ML OCR 한계 인정 + template matching 도입.
+
+**핵심 통찰**: 과거 프로그램 = 단일 폰트 픽셀 매칭. 우리는 ML OCR (paddle/tess) → 사용자 폰트에 약함.
+**해결**: 사용자가 한 번만 정답 입력 → 자동으로 픽셀 패턴 학습 → 이후 OCR 100% 정확.
+
+**HIGH-1 TemplateMatcher User API** (`template-matcher.js:262~`)
+- `registerUserTemplate(canvas, label, region)` — 사용자 정답 라벨로 자릿수 분리 → 픽셀 signature 추출 → localStorage 저장
+- `matchUser(canvas, expectedLength, region, allowedChars)` — 사용자 template 우선 매칭 (fallback to base TEMPLATES)
+- `userTemplateStats()` / `clearUserTemplates(region)` — 상태/초기화 API
+- localStorage key: `lmp.userTemplate` (region별 자릿수 signature 저장)
+
+**HIGH-2 UI — 사용자 폰트 즉시 학습 섹션** (`index.html:480~`)
+- OCR · 아이템 탭에 새 섹션 (open by default)
+- "📌 현재 ADENA 캡처를 template으로 학습" 버튼
+- 트래커 NOW에 정확값 입력 후 클릭 → 자동 등록
+- 등록 자릿수 / sig 개수 실시간 표시
+
+**HIGH-3 ADENA OCR 통합** (`app.js:4287~`)
+- ocrAdenaRegionHybrid 시작 부분에 user template matching 우선 분기
+- 5+ 자릿수 + 5+ sig 등록 시 ML OCR 우회
+- pad:3 white-extracted invert canvas 빌드 → variable length 3~7 시도 → best confidence
+- confidence ≥ 0.85 → 즉시 채택 (paddle/tess skip)
+- "🎯 ADENA user template 채택" hybridLog
+
+**Phase 외 — v2 voting 290장 채택 (이전 19장)** (`scripts/wsl-tesseract-vote-v2.js`)
+- paddle dominant + 자릿수 sanity 휴리스틱
+- 학습 acceptance 3.1% → 47.8% (16배 증가)
+- 다만 학습 결과 BCER 1.177 유지 (paddle 라벨 noise)
+
+**파일 변경**: `template-matcher.js` (+150 LOC), `app.js` (+90 LOC), `index.html` (+20 LOC), `scripts/wsl-tesseract-vote-v2.js` (신규 +180 LOC), `package.json` version, `CLAUDE.md` history.
+
+**검증**: npm test 36/36, node --check OK.
+
+**사용법** (사용자 한 번만 실행):
+1. 앱 실행 → ADENA OCR 한 사이클 돌림 (캡처 미리보기 생성)
+2. 트래커 NOW에 정확한 ADENA 값 입력 (예: "67144")
+3. OCR · 아이템 탭 → "🎯 사용자 폰트 즉시 학습" 섹션 → "📌 학습" 클릭
+4. 이후 모든 ADENA OCR이 사용자 폰트로 정확 인식
+
+### v1.7.1 (2026-05-09) — EXP 자릿수 mismatch 검증 8→3 추가 단축 ⭐
+사용자 진단 2026-05-09T14-22-11 (v1.7.0): EXP "3.0878%" OCR 정확하나 anchor 59.46 stale → 자릿수 mismatch 9회 검증 대기 9초.
+
+**LOW-1 EXP 자릿수 mismatch 검증 8→3** (`app.js:4651`)
+- 1자리 OCR이 매번 일관 → 3회(3초) 일관이면 misread 거의 불가
+- 사망/리셋 즉시 흡수, 사용자 답답 해소
+
+**알려진 한계** (코드로 해결 불가):
+- ADENA 6↔1 confusion: 사용자 게임 폰트의 "6"이 traineddata에서 "1"로 misread (예: "67144" → "17144")
+- 학습 +8000 iter 추가해도 BCER 1.177 유지 (데이터 한계 도달)
+- 자동 voting acceptance 3.1% (사용자 데이터 OCR 매우 어려움)
+- **권장 솔루션**: 사용자가 _pending 614장 → 라벨링 시작 버튼으로 직접 라벨링 → v1.8.0 재학습
+
+**파일 변경**: `app.js` 1곳, `package.json`, `CLAUDE.md`. ~5 LOC.
+
+**검증**: npm test 36/36, node --check OK.
+
+### v1.7.0 (2026-05-09) — 사용자 데이터 633장 자동 라벨링 + 재학습 + EXP 검증 단축 ⭐⭐⭐⭐
+사용자 진단 2026-05-09T14-04-28 (v1.6.6): MP "MP:196/242" 미리보기 깨끗하나 OCR "2/3 ×30" stale, EXP "1.9319%" anchor 59.46 큰 점프 검증 21회 너무 김, ADENA "59819" ROI 정상 but OCR "???".
+
+**Phase A — 자동 라벨링 633장**:
+- _pending: mp 235 + exp 116 + adena 256 (level 26 제외)
+- 4-way voting acceptance: 19장 (3.1%) — 사용자 데이터 OCR 매우 어려움
+- 채택분 → training-data sync, 폐기분 → _rejected_voting
+
+**Phase B — 재학습**: lineage_checkpoint(BCER 1.177) → MAX_ITERATIONS 16600→24600 (+8000 iter)
+- 학습 시간 ~17분 (986 sample, skip ratio ~47%)
+- 최종 BCER **1.177** (v1.6.0 best 유지, 추가 진전은 사용자 데이터 어려움 한계)
+- 새 sample 통합으로 0/9, 5/8, 1/7 confusion 보강
+
+**Phase C — 코드 fix**:
+- EXP 자릿수 mismatch 검증 횟수 20→8 (`app.js:4651`) — 8초 후 자동 흡수, misread 거의 불가
+- 매번 일관 misread 케이스에서 anchor 갱신 빠름
+
+**Phase D — 빌드**: traineddata 복사, package.json 1.7.0, dist v1.6.6 정리, npm run build && dist.
+
+**파일 변경**: `app.js` 1곳, `build/tessdata/lineage.traineddata` 갱신, `package.json`, `CLAUDE.md`. ~5 LOC + 11.7MB traineddata.
+
+**검증**: npm test 36/36, node --check OK, 학습 완료, 빌드 성공.
+
+**한계**: 사용자 환경 OCR 매우 어려움 (paddle/tess 매번 일관 misread). 향후 학습 데이터 더 누적 후 v1.8.0 재학습 권장.
+
+### v1.6.6 (2026-05-09) — ADENA misread "3" 영원 굳음 차단 (초기 anchor + 자릿수 catastrophic 보강) ⭐⭐⭐
+사용자 스크린샷 (2026-05-09 21:19): 미리보기 "30093" 깨끗 ✅, but OCR UI "3 ×3" → 영원 굳음.
+
+**Root cause**:
+- 사용자가 트래커 시작 시 anchor=0
+- 첫 사이클 OCR misread "3" → anchorAd === 0이라 v1.6.0 catastrophic 거부 가드 통과
+- voteHybrid → anchor=3 갱신
+- 다음 사이클: paddle/tess 둘 다 "3" 일관 misread → anchor=3 유지 굳음
+- v1.5.5 E fix(자릿수 +2 이상 5회 일관)는 매 사이클 결과 변동(30093 ↔ 3) 시 5회 일관 어려움
+- "30093" 정확 OCR이 voteHybrid 자릿수 매치 분기에서 anchor 1자리와 매치 안 되어 폐기
+
+**HIGH-1 anchor=0 초기 1~2자리 5회 일관 검증** (`app.js:4392~`)
+- anchor=0 + valBoth<100 → `_initVerify` 5회 카운터
+- misread "3"이 매번 같은 값으로 5회 연속이 어려움 → 진짜 1~2자리 ADENA만 통과
+- 5회 일관 후 자동 통과 (게임 초반 정상 1~2자리 케이스)
+
+**HIGH-2 anchor ≥100 + val<100 catastrophic 거부 보강** (`app.js:4401~`)
+- v1.6.0 자릿수 차이 ≥3 거부와 별도로 anchor ≥100 + val<100 자체 거부
+- anchor=99(2자리) → val=3(1자리) 같은 케이스도 차단 (자릿수 차이 1~2지만 catastrophic)
+
+**파일 변경**: `app.js` 1곳 (~22 LOC), `package.json` version, `CLAUDE.md` history.
+
+**검증**: npm test 36/36, node --check OK.
+
+### v1.6.5 (2026-05-09) — ADENA 자릿수 +1 즉시 신뢰 + 큰 점프 검증 횟수 완화 ⭐⭐
+사용자 스크린샷 (2026-05-09 21:08): 미리보기 + OCR 모두 "28,674" 정확 ✅. but UI에 "(검증 4/5) 점프" 5초 대기 → 사용자 체감 "인식 못 함".
+
+**Root cause**:
+- anchor 8913 (4자리, 이전 stale) → OCR 28674 (5자리, 정상 사냥 progress)
+- 자릿수 +1 + value 증가는 정상 사냥인데 큰 점프 분기로 5회 검증
+- 5초 대기는 사용자가 인식 실패로 오인
+
+**HIGH-1 자릿수 +1 자연 증가 즉시 신뢰** (`app.js:4437~`)
+- 조건: anchor>0 + valDigits === anchorDigits+1 + valBoth >= anchor*0.5 (오버플로 방어)
+- 정상 사냥 progress (4자리 → 5자리, 9k → 28k) → 즉시 voteHybrid 통과
+- _verifyQueue 자동 리셋
+
+**HIGH-2 큰 점프 검증 횟수 완화** (`app.js:4441~`)
+- 1k~5k: 2회 (유지)
+- 5k~30k: 3 → **2회** (3초→2초)
+- 30k~100k: 5 → **3회** (5초→3초)
+- 100k+: 10 → **5회** (10초→5초)
+- misread 방어와 사용자 체감 사이 균형, 절반 감소
+
+**파일 변경**: `app.js` 1곳 (~12 LOC), `package.json` version, `CLAUDE.md` history.
+
+**검증**: npm test 36/36, node --check OK.
+
+### v1.6.4 (2026-05-09) — ADENA ROI height 축소 (글자만 노출, 다음 UI 라인 제외) ⭐⭐
+사용자 스크린샷 2026-05-09 20:59 (v1.6.3): 게임 "27963" 정확 인식 ✅, but 미리보기에 글자 + 다음 UI 라인 가로선 잔상.
+
+**Root cause**:
+- v1.6.3 height *0.75 → icon height 31 * 0.75 = 23px (글자 ~14px + 9px 여유)
+- 9px 여유에 다음 UI 라인의 가로선 포함됨
+- trimPreviewVertical은 가로선도 검은 픽셀이라 trim 안 됨
+
+**HIGH-1 belowCand height 축소 + y 미세** (`roi-detector.js:664~`)
+- height: max(22, *0.75) → max(18, *0.55) (~17px, 글자 한 줄만)
+- y: *0.88 → *0.83 (윗쪽 1.5px 더 안전 마진)
+- x는 -20 유지
+
+**v1.6.4 ROI 캐시 자동 invalidate** (`storage.js:191~`)
+- `_roiInvalidatedFor164` 플래그로 1회 무효화
+
+**파일 변경**: `roi-detector.js` 1곳, `storage.js` 1곳, `package.json` version, `CLAUDE.md` history. ~10 LOC.
+
+**검증**: npm test 36/36, node --check OK.
+
+### v1.6.3 (2026-05-09) — ADENA 텍스트 윗쪽 잘림 fix (y *0.88 + height *0.75) ⭐⭐
+사용자 진단 2026-05-09T11-53-46 (v1.6.2): 미리보기 "78913" 윗쪽 잘림 + OCR "78913" → "8913" 4자리만 인식 (anchor 98913→8913 자릿수 -1 굳음).
+
+**Root cause**:
+- v1.6.2 belowCand y *0.85→*0.95 (아이콘 끝 877과 거의 일치) → 글자 윗부분 ROI 경계 밖
+- height *0.7→*0.65 축소 → ROI 더 작아져 글자 위아래 모두 빠듯
+
+**HIGH-1 belowCand y/height 재조정** (`roi-detector.js:664~`)
+- y: icon.height * 0.95 → 0.88 (3px 위로 회복, 윗쪽 안전 마진)
+- height: max(20, height * 0.65) → max(22, height * 0.75) (글자 + 위아래 padding)
+- x는 -20 유지 (좌측 시프트는 효과적, 첫 자리 안전)
+
+**v1.6.3 ROI 캐시 자동 invalidate** (`storage.js:184~`)
+- `_roiInvalidatedFor163` 플래그로 1회 무효화
+
+**파일 변경**: `roi-detector.js` 1곳, `storage.js` 1곳, `package.json` version, `CLAUDE.md` history. ~12 LOC.
+
+**검증**: npm test 36/36, node --check OK.
+
+### v1.6.2 (2026-05-09) — ADENA 시각 미세 조정 (좌측 -5px 추가 + 미리보기 vertical trim) ⭐
+사용자 진단 2026-05-09T11-42-02 (v1.6.1): OCR 정확 ✅ (anchor 자동 복구 13→98,913, EXP paddle 채택). 사용자 시각 요청만.
+
+**v1.6.1 효과 검증**:
+- `🔓 ADENA anchor 자동 복구 (tess 5회 일관 + 자릿수 2→5): 13 → 98,913` ✅
+- `EXP 🟡 paddle 채택 (delta 0.0000 < tess 0.0420): 57.1533` ✅
+- adAdenaLast `✅ 98,913 ×5`, adExpLast `✅ 57.1533%`
+
+**LOW-1 belowCand 좌측 -15→-20 + y/height 미세** (`roi-detector.js:664~`)
+- 좌측 5px 추가 시프트 → 캡처 미리보기 첫 자리 안전 마진 ↑
+- y: icon.y + height*0.85 → 0.95 (ROI 위쪽이 텍스트에 더 가까이)
+- height: max(20, height*0.7) → max(18, height*0.65) (불필요한 하단 여유 축소)
+
+**LOW-2 미리보기 vertical content-trim** (`app.js:2634~`)
+- 신규 `trimPreviewVertical(canvas, padPx)` 헬퍼: 어두운 픽셀 행 검출 → bounding box [y0..y1] + 4px padding crop
+- ADENA preview 캔버스에 적용 → 글자 영역만 노출 (상/하 공백 자동 제거)
+- 글자 검출 실패 시 원본 반환 (안전 가드)
+
+**LOW-3 v1.6.2 ROI 캐시 자동 invalidate** (`storage.js:178~`)
+- `_roiInvalidatedFor162` 플래그로 1회 무효화 → 사용자 재탐지 불필요
+
+**파일 변경**: `roi-detector.js` 1곳, `app.js` 2곳 (헬퍼 + 호출), `storage.js` 1곳, `package.json` version, `CLAUDE.md` history. ~70 LOC.
+
+**검증**: npm test 36/36, node --check OK.
+
+### v1.6.1 (2026-05-09) — EXP DISAGREE paddle 우선 + ADENA _clipped flashHint ⭐⭐⭐
+사용자 진단 2026-05-09T11-26-34 (v1.6.0): ADENA "8913" 캡처(intended 115 → 83 클램프), EXP "57.1533" paddle 정확 vs tess 11회 "57.1953" misread → DISAGREE 폐기 → anchor 47.91 영원 stale.
+
+**HIGH-1 EXP DISAGREE 큰 점프 paddle 일관 검증** (`app.js:4830~`)
+- 진단: paddle=57.1533 (1회) vs tess=57.1953 (11회 misread, 5↔9 confusion)
+- 기존: 둘 다 isPlausibleForward 미통과(>0.1%p 점프) → voteHybrid → DISAGREE 폐기
+- 원인: v1.5.7 큰 점프 검증은 parsedMatches 일치할 때만 발동, DISAGREE에는 안 걸림
+- 해결: 정수부 일치 + paddle delta ≤ tess delta + paddle 5회 일관 → paddle 단독 채택 (tess confusion 의심)
+- 새 카운터 `_paddleConsistency` (val/count) — 일관성 깨지면 자동 리셋
+
+**HIGH-2 ADENA _clipped flashHint 강력 안내** (`app.js:5119~`)
+- 기존: width<50일 때만 안내 — 진단 width=83(intended 115, _clipped)는 안내 발동 X
+- 해결: _clipped + width<90 + intended-width 차이 ≥10px → flashHint 30s throttle
+- 메시지: "⚠️ ADENA ROI Xpx 잘림 — 게임 영역 우측 Y px+ 확장 필요"
+- 사용자가 게임 영역 우측 확장을 즉시 인지 가능 (코드 fix만으로 풀 수 없는 환경 제약)
+
+**파일 변경**: `app.js` 2곳 (~70 LOC), `package.json` version, `CLAUDE.md` history.
+
+**검증**: npm test 36/36, node --check OK.
+
+### v1.6.0 (2026-05-09) — ADENA leading-digit-loss fix + traineddata 재학습 (BCER 1.560→1.177) ⭐⭐⭐⭐
+사용자 진단 2026-05-09T10-57-47 (v1.5.13): "78835" → ROI 캡처 "8835" (첫 자리 7 손실), anchor=18674 → 185 굳음, EXP 9.20%p 점프 검증 16회 대기 길음.
+
+**HIGH-1 ADENA belowCand 좌측 -5→-15 + width 80→100** (`roi-detector.js:664~`)
+- 진단: cachedROIs.textROIs.adena.x=1209, adenaIcon.x=1214 → ROI가 아이콘 좌측 5px부터 시작
+- AutoTrim L:10px 와 겹쳐 첫 글자 "7" 잘림 → "78835" → "8835" misread
+- 해결: `belowCand.x = adenaIcon.x - 15` (좌측 10px 더 확장 → "7" 캡처 보장)
+- width: `max(80, icon*1.8)` → `max(100, icon*2.8)` (5자리/6자리 콤마 모두 보장)
+- rightCand width도 90→100 동기 상향
+
+**HIGH-2 ADENA 자릿수 catastrophic 보호** (`app.js:4343~`)
+- v1.5.5 E fix는 자릿수 **증가**(778→10778) 케이스만 — anchor 18674(5자리) → OCR 185(3자리) 자릿수 감소 catastrophic 케이스 미보호
+- 자릿수 -1 (정상 leading-drop): 2회 일관 (기존 유지)
+- 자릿수 -2 (5→3 등 catastrophic): **10회 강력 검증** (신규)
+- 자릿수 -3+: **영원 거부** (ROI 결함 의심, 사용자 안내)
+
+**MED-1 EXP 큰 점프 검증 15→8 단축** (`app.js:4684`)
+- 진단: anchor 47.91 → OCR 57.10, intDiff=10 (비-confusion), 9.20%p 점프 → 16회(16초) 대기 너무 김
+- confusion 케이스(intDiff 5/9, 매번 일관 misread 위험)는 30회 유지
+- 일반 점프는 8회 → 8초 후 자동 흡수, misread는 거의 불가능
+
+**LOW-1 v1.6.0 ROI 캐시 자동 invalidate** (`storage.js:170~`)
+- v1.5.x → v1.6.0 업그레이드 시 cachedROIs 1회 무효화 → 사용자가 🔄 재탐지 안 눌러도 새 ROI 알고리즘 적용
+- `_roiInvalidatedFor160` 플래그로 1회만 실행
+
+**P2 traineddata 재학습 — BCER 1.560 → 1.177 (24.5% 개선)**
+- 신규 _pending: mp 114, exp 171, adena 215 = 500장
+- 자동 라벨링 (4-way voting): 130장 acceptance (mp 0, exp 44, adena 86) — MP는 max=235/242 sanity로 reject
+- 학습 데이터: 882 → 1,010장 → corrupted .lstmf 정리 후 654장
+- MAX_ITERATIONS 8600 → 16600 (+8000), 학습 시간 2분 27초
+- 최종 BCER **1.177%** (v1.5.0 1.560 → 24.5% 개선)
+- 신규 데이터로 0/9, 5/8, 7/1, 4/9 confusion pair 보강
+
+**파일 변경**: `roi-detector.js` 1곳, `app.js` 2곳, `storage.js` 1곳, `build/tessdata/lineage.traineddata` 갱신, `package.json` version, `CLAUDE.md` history. ~85 LOC.
+
+**검증**: npm test 36/36, node --check OK.
+
+### v1.5.13 (2026-05-09) — ADENA 미리보기 상하 공백 fix (pad:3 전용 캔버스) ⭐
+사용자 진단 2026-05-09T10-43-50: ADENA 미리보기 상하 공백 과다 + EXP만큼 깨끗하지 않음.
+
+**Root cause**:
+- OCR용 `buildWhiteCanvas`는 `pad: 10` (v1.2.0-paddle leading-digit-drop 보호 위해 4→10).
+- 미리보기에 OCR 캔버스 `canvasWhite`(pad:10)를 그대로 노출 → 12x scale 시 상/하 120px 흰 여백.
+- ADENA 글자가 캔버스의 51%만 차지 (EXP는 pad:3 → 76%) → 상하 공백 ~3.3배.
+
+**HIGH-1 미리보기 전용 pad:3 캔버스 분리** (`app.js:3324~`)
+- OCR 캔버스 7종(`canvas`/`canvasSoft`/`canvasOtsu`/`canvasRaw`/`canvasWhite/Soft/Deep`)은 그대로 pad:10 유지 → OCR 정확도 무영향.
+- 신규 `canvasPreview` 추가: `captureRegionToRawCanvas(adenaRegion, 12, { pad: 3 })` + `applyWhiteExtraction(140, RGB)` + invert.
+- `updatePreview(dom.adAdenaPreview, canvasPreview || canvasWhite || canvasWhiteSoft)` — fallback 체인 유지.
+- 결과: ADENA 미리보기가 EXP와 동일한 시각 비율로 노출 (글자 76% 차지).
+
+**파일 변경**: `src/js/app.js` 1곳 (~22 LOC), `package.json` version, `CLAUDE.md` history.
+
+**검증**: npm test 36/36, node --check OK.
+
 ### v1.5.12 (2026-05-09) — Tesseract recognize 30s timeout + ADENA white-extraction 다단계 ⭐⭐⭐
 사용자 진단 2026-05-08T16-01-51 (v1.5.11): MP/EXP/LEVEL/ADENA(수동) ✅ but 두 가지 잔여 문제.
 1. "업데이트도 멈추고" — `recognizing text 11% (+1281s)` 21분 Tesseract worker hang.

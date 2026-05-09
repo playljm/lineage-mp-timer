@@ -146,6 +146,9 @@
     trainLabelLevel: $('train-label-level'),
     trainLabelAdena: $('train-label-adena'),
     btnTrainCaptureToggle: $('btn-train-capture-toggle'),
+    btnLearnAdenaTemplate: $('btn-learn-adena-template'),
+    btnClearAdenaTemplate: $('btn-clear-adena-template'),
+    userTemplateStatus: $('user-template-status'),
     selTrainCaptureInterval: $('sel-train-capture-interval'),
     trainCaptureStatus: $('train-capture-status'),
     btnTrainLabelStart: $('btn-train-label-start'),
@@ -1548,11 +1551,65 @@
     }
     _trainRefreshStats();
   }
+  // [v1.8.0] User template status UI 갱신
+  function updateUserTemplateStatus() {
+    if (!dom.userTemplateStatus) return;
+    if (!window.TemplateMatcher || !window.TemplateMatcher.userTemplateStats) {
+      dom.userTemplateStatus.textContent = '미등록';
+      return;
+    }
+    const stats = window.TemplateMatcher.userTemplateStats();
+    const adena = stats.adena || { total: 0, digits: {} };
+    const uniqueDigits = Object.keys(adena.digits).length;
+    if (adena.total === 0) {
+      dom.userTemplateStatus.textContent = '미등록';
+      dom.userTemplateStatus.style.color = 'var(--text-dim, #888)';
+    } else {
+      dom.userTemplateStatus.textContent = '✅ ADENA ' + uniqueDigits + '/10 자릿수, 총 ' + adena.total + '개 sig';
+      dom.userTemplateStatus.style.color = uniqueDigits >= 8 ? 'var(--neon, #0f0)' : 'var(--neon-dim, #aa0)';
+    }
+  }
+
   function setupTrainingControls() {
     // 자동 캡처 토글
     if (dom.btnTrainCaptureToggle) {
       dom.btnTrainCaptureToggle.addEventListener('click', () => toggleTrainCapture());
     }
+    // [v1.8.0] 사용자 폰트 즉시 학습 (template matching)
+    if (dom.btnLearnAdenaTemplate) {
+      dom.btnLearnAdenaTemplate.addEventListener('click', () => {
+        const label = String(dom.trkAdenaNow.value || '').trim();
+        if (!label || !/^\d+$/.test(label)) {
+          flashHint('⚠️ 트래커 NOW에 정확한 ADENA 숫자를 먼저 입력하세요');
+          return;
+        }
+        const canvas = latestCaptureCanvas.adena;
+        if (!canvas) {
+          flashHint('⚠️ ADENA 캡처 미리보기가 없습니다 — OCR 한 번 돌려 주세요');
+          return;
+        }
+        if (!window.TemplateMatcher || !window.TemplateMatcher.registerUserTemplate) {
+          flashHint('⚠️ TemplateMatcher 모듈 미로드');
+          return;
+        }
+        const r = window.TemplateMatcher.registerUserTemplate(canvas, label, 'adena');
+        if (r.ok) {
+          flashHint('✅ ADENA template 학습 (' + r.message + ')');
+          updateUserTemplateStatus();
+        } else {
+          flashHint('❌ 학습 실패: ' + r.message);
+        }
+      });
+    }
+    if (dom.btnClearAdenaTemplate) {
+      dom.btnClearAdenaTemplate.addEventListener('click', () => {
+        if (!window.TemplateMatcher || !window.TemplateMatcher.clearUserTemplates) return;
+        window.TemplateMatcher.clearUserTemplates('adena');
+        flashHint('🗑️ ADENA template 초기화');
+        updateUserTemplateStatus();
+      });
+    }
+    updateUserTemplateStatus();
     // 라벨링 시작/종료/확정/스킵/삭제
     if (dom.btnTrainLabelStart) {
       dom.btnTrainLabelStart.addEventListener('click', () => startLabeling());
@@ -2632,6 +2689,49 @@
     } catch (_) { /* ignore */ }
   }
 
+  // [v1.6.2] 미리보기 vertical content-trim — 검은 글자(white-extracted invert 결과) 행만 남기고 잘라냄.
+  //   사용자 진단 2026-05-09T11-42-02: ADENA 미리보기 상/하 공백 과다.
+  //   동작: 어두운 픽셀(gray<128)이 있는 행 검출 → bounding box [y0..y1] + padPx 패딩으로 crop.
+  //   글자 행이 없거나 너무 작으면 원본 반환 (안전).
+  function trimPreviewVertical(canvas, padPx) {
+    if (!canvas || !canvas.width || !canvas.height) return canvas;
+    const w = canvas.width, h = canvas.height;
+    let ctx, img, px;
+    try {
+      ctx = canvas.getContext('2d');
+      img = ctx.getImageData(0, 0, w, h);
+      px = img.data;
+    } catch (_) { return canvas; }
+    let y0 = -1, y1 = -1;
+    for (let y = 0; y < h; y++) {
+      let hasDark = false;
+      const row = y * w * 4;
+      for (let x = 0; x < w; x++) {
+        const i = row + x * 4;
+        const gray = (px[i] + px[i + 1] + px[i + 2]) / 3;
+        if (gray < 128) { hasDark = true; break; }
+      }
+      if (hasDark) {
+        if (y0 < 0) y0 = y;
+        y1 = y + 1;
+      }
+    }
+    if (y0 < 0 || y1 - y0 < 4) return canvas;  // 글자 없음 또는 너무 작음 — 원본 유지
+    const pad = Math.max(0, padPx || 4);
+    const ny0 = Math.max(0, y0 - pad);
+    const ny1 = Math.min(h, y1 + pad);
+    const nh = ny1 - ny0;
+    if (nh >= h) return canvas;  // trim 효과 없음 — 원본 유지
+    try {
+      const out = document.createElement('canvas');
+      out.width = w;
+      out.height = nh;
+      const octx = out.getContext('2d');
+      octx.drawImage(canvas, 0, ny0, w, nh, 0, 0, w, nh);
+      return out;
+    } catch (_) { return canvas; }
+  }
+
   // ==========================================================================
   // MP 바 픽셀 분석 — OCR 완전 우회. 게임의 컬러 MP 바(파란색)에서
   //   채워진 비율을 측정해서 (사용자 입력 max) × ratio = cur 계산.
@@ -3324,9 +3424,41 @@
     try { canvasWhite = buildWhiteCanvas(140, false); } catch (_) {}      // R/G/B mode, 흰글자 정밀
     try { canvasWhiteSoft = buildWhiteCanvas(120, true); } catch (_) {}   // 휘도 mode, 베이지 글자
     try { canvasWhiteDeep = buildWhiteCanvas(70, true); } catch (_) {}    // 휘도 매우 관대, 어두운 영역
-    // 미리보기 — 가장 깨끗한 white 캔버스 우선 (EXP 와 동일)
-    if (canvasWhite || canvasWhiteSoft) {
-      updatePreview(dom.adAdenaPreview, canvasWhite || canvasWhiteSoft);
+    // [v1.5.13] 미리보기 전용 pad:3 캔버스 — EXP와 시각 일관성 확보.
+    //   사용자 진단 (2026-05-09T10-43-50): 아데나 미리보기 상하 공백 과다 + 글자 작아 보임.
+    //   원인: OCR용 buildWhiteCanvas는 pad:10 (leading-digit-drop 보호 / v1.2.0-paddle).
+    //         pad:10 × 12x scale = 상/하 120px 흰 여백 → 글자가 캔버스 51%만 차지 (EXP 76%).
+    //   해결: OCR 캔버스 7종은 pad:10 유지, 미리보기만 pad:3로 별도 빌드 → EXP와 동일 비율.
+    let canvasPreview = null;
+    try {
+      const cwBase = captureRegionToRawCanvas(autoDetect.adenaRegion, 12, { pad: 3 });
+      if (cwBase) {
+        applyWhiteExtraction(cwBase, 140, { luminance: false });
+        const ctx = cwBase.getContext('2d');
+        const img = ctx.getImageData(0, 0, cwBase.width, cwBase.height);
+        const d = img.data;
+        for (let i = 0; i < d.length; i += 4) {
+          d[i] = 255 - d[i];
+          d[i + 1] = 255 - d[i + 1];
+          d[i + 2] = 255 - d[i + 2];
+        }
+        ctx.putImageData(img, 0, 0);
+        canvasPreview = cwBase;
+      }
+    } catch (_) {}
+    // [v1.6.2] 미리보기 vertical content-trim — 글자 영역만 남기고 상/하 공백 제거.
+    //   사용자 진단 2026-05-09T11-42-02: ADENA 미리보기 상/하 공백 여전히 존재.
+    //   원인: ROI height 22 + pad 3 × 12 = 348px 캔버스 중 글자는 ~14px×12=168px만 차지 (48%).
+    //   해결: white-extracted (검은 글자) 캔버스에서 글자 행만 검출 → bounding box + 4px 패딩으로 잘라내기.
+    if (canvasPreview) {
+      try {
+        const trimmed = trimPreviewVertical(canvasPreview, 4);
+        if (trimmed) canvasPreview = trimmed;
+      } catch (_) {}
+    }
+    // 미리보기 — pad:3 우선, 없으면 OCR 캔버스 fallback (EXP 와 동일 깨끗함)
+    if (canvasPreview || canvasWhite || canvasWhiteSoft) {
+      updatePreview(dom.adAdenaPreview, canvasPreview || canvasWhite || canvasWhiteSoft);
     }
 
     const psmModes = ['7', '8', '13'];
@@ -4263,6 +4395,45 @@
     return voteHybrid('LEVEL', pr, tr, (a, b) => a.level === b.level);
   }
   async function ocrAdenaRegionHybrid() {
+    // [v1.8.0] User template matching 우선 — 사용자 폰트로 학습됐으면 ML OCR 우회
+    //   사용자가 트래커 NOW에 정확값 입력 후 [📌 학습] 클릭하면 0~9 픽셀 패턴 등록
+    //   이후 매 사이클 픽셀 비교로 매칭 → 100% 정확도 (단일 폰트 전제)
+    if (window.TemplateMatcher && autoDetect.adenaRegion && window.TemplateMatcher.userTemplateStats) {
+      const stats = window.TemplateMatcher.userTemplateStats();
+      const uniqueDigits = stats.adena ? Object.keys(stats.adena.digits).length : 0;
+      if (stats.adena && stats.adena.total >= 5 && uniqueDigits >= 5) {
+        try {
+          const utCanvas = captureRegionToRawCanvas(autoDetect.adenaRegion, 12, { pad: 3 });
+          if (utCanvas) {
+            applyWhiteExtraction(utCanvas, 140, { luminance: false });
+            const utCtx = utCanvas.getContext('2d');
+            const utImg = utCtx.getImageData(0, 0, utCanvas.width, utCanvas.height);
+            const utD = utImg.data;
+            for (let i = 0; i < utD.length; i += 4) { utD[i] = 255 - utD[i]; utD[i+1] = 255 - utD[i+1]; utD[i+2] = 255 - utD[i+2]; }
+            utCtx.putImageData(utImg, 0, 0);
+            // variable length 3~7 시도, best confidence 채택
+            let best = { conf: 0, len: 0, text: null };
+            for (let len = 3; len <= 7; len++) {
+              const r = window.TemplateMatcher.matchUser(utCanvas, len, 'adena', '0123456789');
+              if (r && r.text && r.confidence > best.conf) {
+                best = { conf: r.confidence, len, text: r.text };
+              }
+            }
+            if (best.conf >= 0.85 && best.text) {
+              const adenaVal = parseInt(best.text, 10);
+              if (Number.isFinite(adenaVal) && adenaVal >= 0 && adenaVal <= 99999999) {
+                pushHybridLog('🎯 ADENA user template 채택 (' + (best.conf * 100).toFixed(0) + '%, ' + best.len + '자리): ' + adenaVal.toLocaleString());
+                return {
+                  text: 'user-template:' + best.text,
+                  confidence: best.conf * 100,
+                  parsed: { adena: adenaVal, agreementCount: 1, totalAttempts: 1, userTemplate: true }
+                };
+              }
+            }
+          }
+        } catch (e) { console.warn('[ADENA user template] failed:', e); }
+      }
+    }
     let [pr, tr] = await Promise.all([ocrAdenaRegionPaddle(), ocrAdenaRegionTesseract()]);
 
     // [v1.5.5 E fix] anchor 자릿수 부족 자동 복구 — anchor가 OCR보다 자릿수 +2 이상 작으면 stale 의심
@@ -4317,12 +4488,58 @@
     if (pr.parsed.adena === tr.parsed.adena) {
       const anchorAd = parseInt(dom.trkAdenaNow.value, 10) || 0;
       const valBoth = pr.parsed.adena;
+      // [v1.6.6] anchor=0 (트래커 첫 시작) + val<100 1~2자리 결과는 5회 일관 검증 필수
+      //   사용자 스크린샷 (2026-05-09 21:19): 미리보기 "30093" 깨끗, OCR "3" misread → anchor=3 굳음
+      //   원인: anchor=0이라 catastrophic 거부 가드 통과 → 첫 misread가 anchor 갱신
+      //   해결: 1~2자리는 정상 ADENA에서 드물어, 매 사이클 misread 다양 → 5회 일관 어려움
+      if (anchorAd === 0 && valBoth < 100) {
+        if (!ocrAdenaRegionHybrid._initVerify) ocrAdenaRegionHybrid._initVerify = { val: 0, count: 0 };
+        const iv = ocrAdenaRegionHybrid._initVerify;
+        if (iv.val === valBoth) iv.count++;
+        else { iv.val = valBoth; iv.count = 1; }
+        if (iv.count < 5) {
+          pushHybridLog('ADENA ⏳ 초기 1~2자리 검증 (' + iv.count + '/5) ' + valBoth + ' — 정상 ADENA 보통 3자리+');
+          return { text: 'verifying-init ' + valBoth, confidence: 0, parsed: null };
+        }
+        // 5회 일관 통과 시 정상 처리 (1~2자리 진짜 초기 ADENA 케이스)
+        iv.count = 0; iv.val = 0;
+      }
+      // [v1.6.6] anchor ≥100 + val<100 catastrophic 거부 (v1.6.0 자릿수 ≥3 차이 거부 보강)
+      //   anchor=8913(4자리) → val=3(1자리) 같은 케이스는 v1.6.0 fix로 처리되지만,
+      //   anchor=99(2자리) → val=3 (1자리) 처럼 자릿수 차이 1~2지만 catastrophic인 케이스도 차단
+      if (anchorAd >= 100 && valBoth < 100) {
+        pushHybridLog('🚫 ADENA catastrophic 거부 (anchor ' + anchorAd + ' ≥100 vs val ' + valBoth + ' <100) — misread 의심');
+        return { text: 'rejected ' + valBoth, confidence: 0, parsed: null };
+      }
       if (anchorAd > 0) {
         // [v1.3.13] anchor 자릿수 > OCR 자릿수면 anchor가 잘못 큰 값으로 굳었을 가능성
         //   사용자 케이스: anchor "238571" (6자리) vs OCR "24258" (5자리, 일관)
         //   2회 연속 같은 값 → anchor 자동 복구 (cached anchor 복구 패턴)
         const anchorDig = String(anchorAd).length;
         const valDig = String(valBoth).length;
+        // [v1.6.0] 자릿수 차이 ≥3 자리 catastrophic — ROI 캡처 결함 의심 → 영원 거부
+        //   사용자 진단 (2026-05-09T10-57-47): anchor 18674(5자리) → OCR 185(3자리) anchor 굳음
+        //   원인: ROI 좌측 시작점 결함 (P1-1로 fix)으로 첫 자리들 잘림 → 매번 잘못된 자릿수
+        //   해결: 자릿수 ≥3 작아지면 절대 갱신 안 함 (사용자 인지용 hybridLog 안내만)
+        if (anchorDig - valDig >= 3 && valDig >= 1) {
+          pushHybridLog('🚫 ADENA 자릿수 catastrophic (' + valDig + '<<' + anchorDig + ') ' + valBoth + ' 거부 — ROI 캡처 결함 가능성, 게임 영역 재탐지 권장');
+          return { text: 'rejected ' + valBoth, confidence: 0, parsed: null };
+        }
+        // 자릿수 2 작음 (5자리 → 3자리 등): 강력 보호 (10회 일관)
+        if (anchorDig - valDig === 2 && valDig >= 3) {
+          if (!ocrAdenaRegionHybrid._matchRecover) ocrAdenaRegionHybrid._matchRecover = { lastVal: 0, count: 0 };
+          const mr = ocrAdenaRegionHybrid._matchRecover;
+          if (mr.lastVal === valBoth) mr.count++;
+          else { mr.lastVal = valBoth; mr.count = 1; }
+          if (mr.count >= 10) {
+            pushHybridLog('🔓 ADENA anchor 자동 복구 (자릿수 ' + valDig + '<<' + anchorDig + ', 10회 일관 강력검증): ' + anchorAd.toLocaleString() + ' → ' + valBoth.toLocaleString());
+            mr.count = 0; mr.lastVal = 0;
+            return voteHybrid('ADENA', pr, tr, (a, b) => a.adena === b.adena);
+          }
+          pushHybridLog('ADENA ⏳ anchor 자릿수 -2 강력검증 (' + mr.count + '/10) ' + valBoth.toLocaleString() + ' (anchor=' + anchorAd.toLocaleString() + ')');
+          return { text: 'verifying ' + valBoth, confidence: 0, parsed: null };
+        }
+        // 자릿수 1 작음 (정상 leading-digit drop): 기존 2회 일관
         if (anchorDig > valDig && valDig >= 4) {
           if (!ocrAdenaRegionHybrid._matchRecover) ocrAdenaRegionHybrid._matchRecover = { lastVal: 0, count: 0 };
           const mr = ocrAdenaRegionHybrid._matchRecover;
@@ -4336,11 +4553,22 @@
           pushHybridLog('ADENA ⏳ anchor 복구 검증 (' + (mr.count + 1) + '/3) ' + valBoth.toLocaleString() + ' (anchor=' + anchorAd.toLocaleString() + ', 자릿수 ' + valDig + '<' + anchorDig + ')');
           return { text: 'verifying ' + valBoth, confidence: 0, parsed: null };
         }
+        // [v1.6.5] 자릿수 +1 자연 증가 즉시 신뢰 — 정상 사냥 progress 빠른 흡수
+        //   사용자 스크린샷 (2026-05-09 21:08): anchor 8913(4자리) → OCR 28674(5자리), |Δ|=19761
+        //   "검증 4/5" 5초 대기 → 사용자 체감 "인식 못함". 자릿수 자연 +1 증가는 정상 progress.
+        //   조건: anchor>0 + valDigits === anchorDigits+1 + valBoth >= anchor*0.5 (오버플로 misread 방어)
+        if (anchorDig > 0 && valDig === anchorDig + 1 && valBoth >= anchorAd * 0.5) {
+          pushHybridLog('ADENA 🟢 자릿수 +1 자연 증가 즉시 채택 (' + anchorDig + '→' + valDig + '자리): ' + anchorAd.toLocaleString() + ' → ' + valBoth.toLocaleString());
+          if (ocrAdenaRegionHybrid._verifyQueue) { ocrAdenaRegionHybrid._verifyQueue.val = null; ocrAdenaRegionHybrid._verifyQueue.count = 0; }
+          return voteHybrid('ADENA', pr, tr, (a, b) => a.adena === b.adena);
+        }
         const delta = Math.abs(valBoth - anchorAd);
         const ABS_JUMP = 1000;
         if (delta >= ABS_JUMP) {
-          // 동적 횟수: 1k~5k=2회 / 5k~30k=3회 / 30k~100k=5회 / 100k+=10회
-          const requiredCount = delta < 5000 ? 2 : delta < 30000 ? 3 : delta < 100000 ? 5 : 10;
+          // [v1.6.5] 검증 횟수 완화: 1k~5k=2 / 5k~30k=3→2 / 30k~100k=5→3 / 100k+=10→5
+          //   사용자 진단: |Δ|=19761 (5k~30k 범위) 5회 검증 → 5초 대기 답답.
+          //   misread 방어와 사용자 체감 사이 균형 — 횟수 절반 감소.
+          const requiredCount = delta < 5000 ? 2 : delta < 30000 ? 2 : delta < 100000 ? 3 : 5;
           if (!ocrAdenaRegionHybrid._verifyQueue) ocrAdenaRegionHybrid._verifyQueue = { val: null, count: 0 };
           const vq = ocrAdenaRegionHybrid._verifyQueue;
           if (vq.val !== null && vq.val === valBoth) {
@@ -4516,7 +4744,10 @@
       //   misread는 절대 20회 일관 못 함 — 진짜 신뢰 결과만 통과.
       if (!ocrExpRegionHybrid._digitVerifyP) ocrExpRegionHybrid._digitVerifyP = { val: null, count: 0 };
       if (!ocrExpRegionHybrid._digitVerifyT) ocrExpRegionHybrid._digitVerifyT = { val: null, count: 0 };
-      const requiredDigitMismatchCount = 20;
+      // [v1.7.1] EXP 자릿수 mismatch 검증 8→3 추가 단축 (사용자 진단 2026-05-09T14-22-11)
+      //   "3.0878%"가 매번 OCR로 정확히 인식되는데 9회 검증(8+1) 9초 대기는 너무 길다
+      //   3회(3초) 일관이면 misread는 거의 불가 — 사망/리셋 즉시 흡수
+      const requiredDigitMismatchCount = 3;
       const digitTol = 0.005;
 
       if (pr && pr.parsed && Number.isFinite(pr.parsed.exp)) {
@@ -4636,7 +4867,10 @@
           const valInt = Math.floor(valBoth);
           const intDiff = Math.abs(valInt - anchorInt);
           const isConfusionJump = (intDiff === 9 || intDiff === 5) && Math.abs(absDelta - intDiff) < 0.5;
-          const requiredJumpCount = isConfusionJump ? 30 : 15;
+          // [v1.6.0] 일반 케이스 15→8 단축 (사용자 진단 2026-05-09T10-57-47).
+          //   anchor 47.91 → OCR 57.10 (intDiff=10, 비-confusion) 같은 케이스에서 15초 대기는 길다.
+          //   8회(8초) 일관이면 misread는 거의 불가능 — confusion 케이스(intDiff 5/9)만 30회 유지.
+          const requiredJumpCount = isConfusionJump ? 30 : 8;
           if (vqJump.val !== null && Math.abs(vqJump.val - valBoth) < tolJump) {
             vqJump.count++;
             if (vqJump.count >= requiredJumpCount) {
@@ -4782,6 +5016,40 @@
       pushHybridLog('EXP 🟡 paddle 채택 (default primary): ' + pr.parsed.exp);
       return pr;
     }
+    // [v1.6.1] DISAGREE 큰 점프 — paddle/tess 정수부 일치 + paddle 5회 일관 → paddle 단독 채택
+    //   사용자 진단 (2026-05-09T11-26-34): paddle=57.1533 (1회, 정확) vs tess=57.1953 (11회 misread, 5↔9 confusion)
+    //   기존: 둘 다 isPlausibleForward 미통과(>0.1%p 점프) → voteHybrid('EXP') → DISAGREE 폐기 → anchor 영원 47.91 stale
+    //   원인: 큰 점프 검증(v1.5.7)은 parsedMatches 일치할 때만 발동, DISAGREE에는 안 걸림
+    //   해결: 정수부 일치 + paddle delta < tess delta + paddle 5회 일관 → paddle 단독 채택 (tess confusion 의심)
+    if (!pp && !tp && pr && pr.parsed && tr && tr.parsed
+        && Number.isFinite(pr.parsed.exp) && Number.isFinite(tr.parsed.exp)
+        && pr.parsed.exp !== tr.parsed.exp) {
+      const pInt = Math.floor(pr.parsed.exp);
+      const tInt = Math.floor(tr.parsed.exp);
+      if (pInt === tInt && pInt >= 0 && pInt <= 100) {
+        const pDelta = anchor > 0 ? Math.abs(pr.parsed.exp - anchor) : 0;
+        const tDelta = anchor > 0 ? Math.abs(tr.parsed.exp - anchor) : 0;
+        if (anchor === 0 || pDelta <= tDelta) {
+          if (!ocrExpRegionHybrid._paddleConsistency) ocrExpRegionHybrid._paddleConsistency = { val: null, count: 0 };
+          const pc = ocrExpRegionHybrid._paddleConsistency;
+          if (pc.val !== null && Math.abs(pc.val - pr.parsed.exp) < 0.001) {
+            pc.count++;
+            if (pc.count >= 5) {
+              pushHybridLog('EXP 🟢 paddle 단독 채택 (DISAGREE 정수부 일치, paddle 5회 일관 — tess confusion 의심): ' + pr.parsed.exp);
+              pc.count = 0; pc.val = null;
+              return pr;
+            }
+            pushHybridLog('EXP ⏳ paddle 일관검증 (' + pc.count + '/5, DISAGREE 정수부=' + pInt + '): p=' + pr.parsed.exp + ' t=' + tr.parsed.exp);
+            return { text: 'verifying-paddle ' + pr.parsed.exp, confidence: 0, parsed: null };
+          }
+          pc.val = pr.parsed.exp; pc.count = 1;
+          pushHybridLog('EXP ⏳ paddle 일관검증 시작 (1/5, DISAGREE 정수부=' + pInt + '): p=' + pr.parsed.exp + ' t=' + tr.parsed.exp);
+          return { text: 'verifying-paddle ' + pr.parsed.exp, confidence: 0, parsed: null };
+        }
+      }
+    }
+    // paddle 일관성 깨지면 카운터 리셋
+    if (ocrExpRegionHybrid._paddleConsistency) ocrExpRegionHybrid._paddleConsistency.count = 0;
     return voteHybrid('EXP', pr, tr, matcher);
   }
 
@@ -5068,6 +5336,25 @@
     //   사용자 진단 (2026-05-07T11-46-28): ADENA invalid가 전체 OCR을 막던 회귀 해결.
     //   다른 ROI(MP/EXP/LEVEL)는 정상 사용. ADENA만 사용자가 게임 영역을 우측으로 확장해야 함.
     // [v1.5.11] 임계 80→50 완화 (콤마없음 5자리 39517 환경 OCR 가능). _clipped 플래그 명시 메시지 유지.
+    // [v1.6.1] _clipped + width<90 (5자리+ 잘림 의심) — flashHint 강력 안내 추가.
+    //   사용자 진단 2026-05-09T11-26-34: ROI width=83 (intended 115, _clipped) → 5자리 ADENA "8913" 손실
+    //   width 50 미만은 OCR 차단 (기존), 50~89는 OCR 진행 + 사용자 안내 강화
+    const adenaIsClippedSmall = textROIs.adena
+      && textROIs.adena._clipped
+      && textROIs.adena.width < 90
+      && textROIs.adena._intendedWidth
+      && (textROIs.adena._intendedWidth - textROIs.adena.width) >= 10;
+    if (adenaIsClippedSmall) {
+      const nowMs = Date.now();
+      const warnKey = `ADENA-clip-${textROIs.adena.width}/${textROIs.adena._intendedWidth}`;
+      if (!ensureAutoModeROIs._lastAdenaClipWarn || ensureAutoModeROIs._lastAdenaClipWarn.text !== warnKey
+          || (nowMs - ensureAutoModeROIs._lastAdenaClipWarn.at) > 30000) {
+        const need = textROIs.adena._intendedWidth - textROIs.adena.width + 10;
+        pushHybridLog('⚠️ ADENA ROI 우측 클램프 (의도 ' + textROIs.adena._intendedWidth + 'px → ' + textROIs.adena.width + 'px) — 게임 영역을 우측으로 ' + need + 'px 확장 권장 (5자리+ ADENA 정확도↑)');
+        try { flashHint('⚠️ ADENA ROI ' + (textROIs.adena._intendedWidth - textROIs.adena.width) + 'px 잘림 — 게임 영역 우측 ' + need + 'px+ 확장 필요'); } catch (_) {}
+        ensureAutoModeROIs._lastAdenaClipWarn = { text: warnKey, at: nowMs };
+      }
+    }
     if (textROIs.adena && textROIs.adena.width < 50) {
       const nowMs = Date.now();
       const warnKey = `ADENA-${textROIs.adena.width}px${textROIs.adena._clipped ? '-clip' : ''}`;

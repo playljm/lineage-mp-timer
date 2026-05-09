@@ -166,6 +166,32 @@
       stored._engineMigratedToHybrid = true;
       console.log('[storage] ocrEngine paddle → hybrid 자동 마이그레이션 (MP 검출 실패 보완)');
     }
+    // [v1.6.0] ADENA belowCand 알고리즘 변경 (좌측 -5→-15px, width 80→100px)
+    //   사용자 진단 (2026-05-09T10-57-47): "78835" → ROI 캡처 "8835" 첫 자리 7 손실
+    //   기존 캐시는 좌측 5px 시프트라 새 알고리즘 효과 못 봄 → 1회 자동 무효화 → 다음 사이클 재탐지
+    if (stored.cachedROIs && !stored._roiInvalidatedFor160) {
+      stored.cachedROIs = null;
+      stored._roiInvalidatedFor160 = true;
+      console.log('[storage] v1.6.0: cachedROIs 1회 자동 무효화 (ADENA ROI 알고리즘 개선) — 다음 사이클 재탐지');
+    }
+    // [v1.6.2] ADENA belowCand x -15→-20, y/height 미세 조정 (사용자 진단 2026-05-09T11-42-02)
+    if (stored.cachedROIs && !stored._roiInvalidatedFor162) {
+      stored.cachedROIs = null;
+      stored._roiInvalidatedFor162 = true;
+      console.log('[storage] v1.6.2: cachedROIs 1회 자동 무효화 (ADENA 좌측 -20 시프트 + height 축소) — 다음 사이클 재탐지');
+    }
+    // [v1.6.3] ADENA belowCand y/height 재조정 (윗쪽 잘림 fix, 사용자 진단 2026-05-09T11-53-46)
+    if (stored.cachedROIs && !stored._roiInvalidatedFor163) {
+      stored.cachedROIs = null;
+      stored._roiInvalidatedFor163 = true;
+      console.log('[storage] v1.6.3: cachedROIs 1회 자동 무효화 (ADENA y *0.88 + height *0.75) — 다음 사이클 재탐지');
+    }
+    // [v1.6.4] ADENA belowCand height 축소 (다음 UI 라인 제외, 사용자 스크린샷 2026-05-09 20:59)
+    if (stored.cachedROIs && !stored._roiInvalidatedFor164) {
+      stored.cachedROIs = null;
+      stored._roiInvalidatedFor164 = true;
+      console.log('[storage] v1.6.4: cachedROIs 1회 자동 무효화 (ADENA y *0.83 + height *0.55, 글자 한 줄만) — 다음 사이클 재탐지');
+    }
     // mpBarMaxX 의미 변경 (col index → filledCount). refColor 없으면 reset해서 재보정 유도.
     if (stored.mpBarMaxX > 0 && !stored.mpBarRefColor) {
       console.log('[storage] mpBarMaxX 의미 변경됨 — refColor 없어서 재보정 필요. 기존 보정값 reset.');

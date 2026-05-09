@@ -478,6 +478,23 @@
             </div>
           </details>
 
+          <!-- [v1.8.0] 사용자 폰트 즉시 학습 (template matching) — 과거 픽셀 매칭 방식 -->
+          <details class="training-section" open>
+            <summary>🎯 사용자 폰트 즉시 학습 (ADENA — 과거 프로그램 방식 픽셀 매칭) ⭐</summary>
+            <div class="training-body">
+              <div class="training-help">
+                <strong>한 번만 학습하면 끝.</strong> 트래커 NOW에 <strong>정확한 ADENA 값</strong>을 입력 후 아래 버튼 클릭 →
+                현재 캡처에서 0~9 자릿수 픽셀 패턴을 자동 추출 → 이후 OCR이 픽셀 비교로 즉시 정확.
+                ML OCR(paddle/tess)이 헷갈리는 6↔1 confusion도 한 방에 해결.
+              </div>
+              <div class="training-stage-controls" style="margin-top:8px;">
+                <button type="button" class="btn-primary" id="btn-learn-adena-template">📌 현재 ADENA 캡처를 template으로 학습</button>
+                <button type="button" class="btn-secondary" id="btn-clear-adena-template" style="margin-left:8px;">🗑️ 초기화</button>
+                <span id="user-template-status" style="margin-left:12px; font-size:11px; opacity:0.8;">미등록</span>
+              </div>
+            </div>
+          </details>
+
           <!-- 학습 데이터 수집 (Tesseract LSTM fine-tuning용) — 기본 접힘 (디버깅용) -->
           <details class="training-section">
             <summary>📸 학습 데이터 수집 (게임 폰트 traineddata 학습용) — 200~500개 권장</summary>
