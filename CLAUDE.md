@@ -140,6 +140,34 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
+### v2.0.0-P1 (2026-05-10, 진행 중) — Bayesian Temporal Tracker (dry-run mode) ⭐⭐⭐⭐⭐
+
+**OCR 정확도 극한 99.9%+ Initiative 시작**. SPEC: `.omc/plans/v2.0.0-master-execution-plan.md`. /ultraplan ultrathink로 작성된 8주 4-Phase 계획.
+
+**완료된 P1 작업 (Phase 1: Bayesian Temporal Tracker)**:
+- `src/js/bayesian-tracker.js` 신규 (+520 LOC) — 4종 Tracker (Mp/Exp/Level/Adena) + adaptive rate EMA + Kalman smoothing + Adena 한글 단위 조기 감지(2회) + EXP confusion-aware (0↔8/5↔8/6↔1)
+- `src/js/app.js` (+85 LOC) — voteHybrid 4 dispatcher (`ocrMpRegion`/`Level`/`Adena`/`Exp`) hook + setAnchor 통합 (markUserEdit, onInputChanged)
+- `src/index.html` (+1 LOC) — bayesian-tracker.js script tag
+- `test/bayesian.test.js` 신규 (+400 LOC) — 31 케이스 (MP9/EXP7/Lv6/Adena9), 모두 통과
+
+**dry-run mode 활성** (`_bayesian.DRY_RUN = true`):
+- voteHybrid 결과 → tracker.observe() 통과 → `🔬 BAYESIAN-DRYRUN` 로그만
+- 실제 anchor 갱신은 기존 로직 그대로 (회귀 위험 0)
+- 1주 사용자 검증 후 P2 진입 직전에 fully replace 활성화
+
+**검증**:
+- `node test/bayesian.test.js` → 31/31
+- `node test/engine.test.js` → 36/36 (회귀 0)
+- `npm run build` → `dist/LineageMPTimer-v1.8.4.zip` (P1 작업물 포함)
+
+**발견/수정한 버그**:
+- BUG-1: T1.3에서 `_rateScore()` 도입으로 posterior 공식 변경 (의도된 — `posterior = sqrt(prior * temporal * rate) * ocr`)
+- BUG-2: `_isConsistentRecent` off-by-one (slice(-(n-1)) → slice(-n)) — 진짜 N회 일관 보장
+
+**다음 (Phase 2)**: cloudflare web-app에 lineage-hub 백엔드 (D1 + R2 + Workers AI Vision) — 진행 중
+
+---
+
 ### v1.8.4 (2026-05-10) — ADENA 한글 단위 generic 검출 (paddle ≠ tess 케이스 포함) ⭐⭐
 v1.8.3 한계 발견: catastrophic 안 한글 단위 의심 안내가 `paddle === tess` 일치 케이스만 발동. 사용자 진단 2026-05-09T16-18-21 실제는 paddle "11" vs tess "1" → voting disagree → catastrophic 분기 진입 안 함 → 안내 0회 발동.
 

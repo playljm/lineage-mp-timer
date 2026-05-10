@@ -244,6 +244,43 @@
   let captureTarget = null;
   const expDebounce = { trkExpStart: null, trkExpNow: null };
 
+  // [v2.0.0 P1.T1.4] Bayesian Temporal Trackers — voteHybrid 결과를 시계열 + 도메인 prior로 검증.
+  //   현재 dry-run 모드 (DRY_RUN=true): tracker.observe() 호출은 하되 결과는 로그만 남기고
+  //   기존 anchor 갱신 로직은 그대로 보존. 1주 사용자 검증 후 P2 진입 직전에 dry-run 해제 예정.
+  //   회귀 위험 0 — anchor 채택 결정에 영향 없음.
+  const _bayesian = (typeof window !== 'undefined' && window.BayesianTrackers) ? {
+    DRY_RUN: true,
+    mp: new window.BayesianTrackers.MpTracker({ maxAnchor: null }),
+    exp: new window.BayesianTrackers.ExpTracker(),
+    level: new window.BayesianTrackers.LevelTracker(),
+    adena: new window.BayesianTrackers.AdenaTracker()
+  } : null;
+
+  // [v2.0.0 P1.T1.4] voteHybrid 결과를 region tracker에 통과시켜 trustedValue 평가 (dry-run).
+  //   region: 'mp' | 'exp' | 'level' | 'adena'
+  //   value: number (exp/level/adena) 또는 {cur, max} (mp)
+  //   r: 원본 voteHybrid 결과 객체 (confidence/parsed 포함). 그대로 반환 — 호출처 동작 변경 없음.
+  function _bayesianObserve(region, value, r) {
+    if (!_bayesian || !_bayesian[region]) return r;
+    try {
+      const conf = (r && typeof r.confidence === 'number') ? Math.min(1, r.confidence) : 0.7;
+      const tracker = _bayesian[region];
+      const result = tracker.observe(value, Date.now(), conf);
+      const label = region.toUpperCase();
+      if (result.anomaly) {
+        const reason = result.reason || result.source || 'unknown';
+        const post = (typeof result.posterior === 'number') ? result.posterior.toFixed(2) : 'NA';
+        pushHybridLog('🛡️ ' + label + ' Bayesian dry-run reject (' + reason + ', post=' + post + ') — anchor 갱신 보류 권고 (현재 무시)');
+      } else if (result.source === 'init_consistency' || result.source === 'anomaly_consistency') {
+        pushHybridLog('🛡️ ' + label + ' Bayesian dry-run accept (' + result.source + ', post=' + (result.posterior || 0).toFixed(2) + ')');
+      }
+    } catch (e) {
+      // tracker observe 자체 실패는 절대 OCR 흐름 깨면 안 됨 — silent
+      try { console.warn('[Bayesian] observe error', region, e && e.message); } catch (_) {}
+    }
+    return r;
+  }
+
   // OCR / Capture state
   let ocrWorker = null;
   let ocrInitPromise = null;
@@ -294,6 +331,30 @@
       if (autoDetect && autoDetect.mode === 'auto') {
         autoDetect.cachedROIs = null;
         autoDetect._consecutiveRoiFailures = 0;
+      }
+      // [v2.0.0 P1.T1.4] Bayesian tracker anchor 강제 갱신 — 사용자 직접 입력 = 진실 (force=true 의도).
+      //   markUserEdit 시점에 입력 필드 값을 읽어 tracker.setAnchor() 호출.
+      //   값이 비어있거나 invalid면 skip (다음 OCR 사이클에서 자연 학습).
+      if (_bayesian) {
+        try {
+          if (key === 'level' && _bayesian.level && dom.trkLevelNow) {
+            const v = parseInt(dom.trkLevelNow.value, 10);
+            if (Number.isFinite(v) && v >= 1 && v <= 99) _bayesian.level.setAnchor(v);
+          } else if (key === 'adena' && _bayesian.adena && dom.trkAdenaNow) {
+            const v = parseInt(dom.trkAdenaNow.value, 10);
+            if (Number.isFinite(v) && v >= 0) _bayesian.adena.setAnchor(v);
+          } else if (key === 'exp' && _bayesian.exp && dom.trkExpNow) {
+            const v = (typeof parseExpPct === 'function') ? parseExpPct(dom.trkExpNow.value) : parseFloat(dom.trkExpNow.value);
+            if (Number.isFinite(v) && v >= 0 && v < 100) _bayesian.exp.setAnchor(v);
+          } else if (key === 'mp' && _bayesian.mp && dom.inCurMp && dom.inMaxMp) {
+            const cur = parseInt(dom.inCurMp.value, 10);
+            const max = parseInt(dom.inMaxMp.value, 10);
+            if (Number.isFinite(cur) && Number.isFinite(max) && max > 0 && cur >= 0 && cur <= max) {
+              _bayesian.mp.setAnchor({ cur, max });
+              _bayesian.mp.setMaxAnchor(max);
+            }
+          }
+        } catch (_) { /* tracker 사용 안전 가드 */ }
       }
     } catch (_) { /* 함수 호이스팅 전 호출 안전 가드 */ }
   }
@@ -4205,6 +4266,8 @@
     else r = await ocrMpRegionTesseract();
     if (r && r.parsed && Number.isFinite(r.parsed.cur) && Number.isFinite(r.parsed.max)) {
       recentOcrResults.mp = r.parsed.cur + '/' + r.parsed.max;
+      // [v2.0.0 P1.T1.4] Bayesian dry-run observe — 채택 결정 영향 0
+      _bayesianObserve('mp', { cur: r.parsed.cur, max: r.parsed.max }, r);
     }
     return r;
   }
@@ -4220,6 +4283,8 @@
     }
     if (r && r.parsed && Number.isFinite(r.parsed.level)) {
       recentOcrResults.level = String(r.parsed.level);
+      // [v2.0.0 P1.T1.4] Bayesian dry-run observe
+      _bayesianObserve('level', r.parsed.level, r);
     }
     return r;
   }
@@ -4235,6 +4300,8 @@
     }
     if (r && r.parsed && Number.isFinite(r.parsed.adena)) {
       recentOcrResults.adena = String(r.parsed.adena);
+      // [v2.0.0 P1.T1.4] Bayesian dry-run observe
+      _bayesianObserve('adena', r.parsed.adena, r);
     }
     return r;
   }
@@ -4252,6 +4319,8 @@
     }
     if (r && r.parsed && Number.isFinite(r.parsed.exp)) {
       recentOcrResults.exp = r.parsed.exp.toFixed(4);
+      // [v2.0.0 P1.T1.4] Bayesian dry-run observe
+      _bayesianObserve('exp', r.parsed.exp, r);
     }
     return r;
   }
@@ -6670,6 +6739,23 @@
     else renderAll();
     saveLast();
     if (k === 'inTargetPct') updateQuickPctActive();
+    // [v2.0.0 P1.T1.4] userMaxMp 변경 시 Bayesian MP tracker max anchor 동기화 +
+    //   inCurMp 변경 시 mp tracker setAnchor (사용자 직접 입력 = 진실)
+    if (_bayesian && _bayesian.mp) {
+      try {
+        if (k === 'inMaxMp') {
+          const max = parseInt(dom.inMaxMp.value, 10);
+          if (Number.isFinite(max) && max > 0) _bayesian.mp.setMaxAnchor(max);
+        }
+        if (k === 'inCurMp' || k === 'inMaxMp') {
+          const cur = parseInt(dom.inCurMp.value, 10);
+          const max = parseInt(dom.inMaxMp.value, 10);
+          if (Number.isFinite(cur) && Number.isFinite(max) && max > 0 && cur >= 0 && cur <= max) {
+            _bayesian.mp.setAnchor({ cur, max });
+          }
+        }
+      } catch (_) {}
+    }
     pushUndo();
   }
 
