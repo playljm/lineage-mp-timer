@@ -140,7 +140,82 @@ onAlwaysOnTopChanged (event callback)
 
 ## 📜 버전 히스토리
 
-### v2.0.0-P1 (2026-05-10, 진행 중) — Bayesian Temporal Tracker (dry-run mode) ⭐⭐⭐⭐⭐
+### v2.0.0 (2026-05-10) — OCR 정확도 극한 99.9%+ Initiative + Cloud Hub 통합 ⭐⭐⭐⭐⭐
+
+**8주 4-Phase SPEC을 한 세션에 압축 완료** (P1~P4 + Cloud Hub 백엔드 + 클라이언트 통합 + Production deploy + 진단 패널).
+
+**Phase 1 — Bayesian Temporal Tracker (dry-run mode)**:
+- `src/js/bayesian-tracker.js` (+520 LOC) — 4종 Tracker (Mp/Exp/Level/Adena) + adaptive rate EMA + Kalman smoothing + Adena 한글 단위 조기 감지(2회) + EXP confusion-aware (0↔8/5↔8/6↔1)
+- `src/js/app.js` (+85 LOC, dry-run) — 4 dispatcher hook + setAnchor 통합. `_bayesian.DRY_RUN=true` (회귀 위험 0). 1주 사용자 검증 후 fully replace 활성화.
+- `test/bayesian.test.js` (+400 LOC) — 31 케이스 (MP9/EXP7/LV6/ADENA9), 모두 통과
+- BUG fix 2개: posterior 공식 (`sqrt(prior*temporal*rate)*ocr`), `_isConsistentRecent` off-by-one
+
+**Phase 2A — Cloud Hub 백엔드 (Cloudflare web-app 통합, 별도 패키지 X)**:
+- `cloudflare/packages/web-app/migrations/0045_lineage_hub.sql` — D1 신규 3 테이블 (lineage_samples/model_versions/vision_calls)
+- `functions/api/lineage-hub/_middleware.js` — 기존 KV_SESSIONS 인증 재활용
+- `functions/api/lineage-hub/{samples,traineddata,vision,stats,debug-log}.js` — 5 endpoints
+- `functions/api/lineage-hub/_lib/{voting,rate-limit,vision-prompt}.js` — 3 helpers
+- wrangler.toml: `[[r2_buckets]] lineage_samples` + `[ai] AI` (Workers AI Llama 3.2 11B Vision)
+
+**Phase 2B+P3 — 클라이언트 cloud-sync + Vision (lineage-mp-timer)**:
+- `src/js/cloud-auth.js` (+178 LOC) — Electron BrowserWindow modal 로그인, XOR obfuscation
+- `src/js/cloud-sync.js` (+341 LOC) — sample 자동 업로드 + traineddata auto-rollback + ring buffer 200
+- `src/js/vision-cross-check.js` (+173 LOC) — Workers AI Llama 3.2 Vision 호출 (posterior < 0.85)
+- `src/js/app.js` (+257 LOC) — Bayesian + Vision + 사용자 정정 우선 업로드 통합
+- `electron/main.js` (+178 LOC) — 4 IPC (cloud-login-popup / clear-cookies / write-traineddata / rollback)
+- 진단 패널 (UI) — 4 buttons (🔍 진단 / 🧪 테스트 업로드 / 📋 복사 / 📤 AI에게 보내기) + ring buffer dump + 5초 자동 status line
+
+**Phase 2C — 대시보드** (https://ramin-5gt.pages.dev/lineage-hub/):
+- `cloudflare/packages/web-app/public/lineage-hub/index.html` — 단순 zero-dep dashboard (이전 복잡 버전 무한 로딩 → 전면 rewrite)
+- 4개 stat 카드 + Region별 분포 + 최근 sample 10개 + 시스템 정보
+
+**Phase 4 — 자동 재학습 워크플로**:
+- `functions/api/lineage-hub/_scheduled.js` — handler (Cloudflare Pages는 [triggers] 미지원이라 수동/GitHub Actions schedule)
+- `functions/api/lineage-hub/admin/training-callback.js` — HMAC 검증 + BCER gate auto-rollback
+- `.github/workflows/retrain-lineage.yml` — repository_dispatch + WSL self-hosted runner
+
+**여러 critical hotfix**:
+- vision.js LEVEL region 추가 + case-insensitive normalize
+- samples.js LEVEL region + label optional ('auto_ocr' default)
+- cloud-sync.js quota는 fetch 200 OK 후만 차감 (실패 fetch 차감 버그 fix)
+- ring buffer 50 → 200 (실패 사유 보존)
+- Llama 3.2 Vision ToS 자동 동의 (`ensureAiAgreed` + KV 캐시)
+- MP 게이지 파란 배경 chroma key (`applyWhiteExtraction({ blueMask: true })`)
+- wrangler.toml [triggers] 제거 (Pages 미지원으로 모든 deploy silent fail이던 critical 버그)
+- lineage-hub 페이지 무한 로딩 → 단순 dashboard rewrite (외부 의존성 0)
+- Cloudflare Pages SPA fallback → `_redirects` + 디렉토리 구조
+
+**Production 배포 완료**:
+- R2 bucket `lineage-samples` 생성
+- D1 마이그레이션 0045 적용 (0039 충돌 우회 직접 실행)
+- Cloudflare Pages production: ramin-5gt.pages.dev / ramin.co.kr
+- 클라이언트 v1.8.4 → **v2.0.0**, dist/LineageMPTimer-v2.0.0.zip (127MB) 친구 배포 가능
+
+**검증**:
+- engine.test.js → 36/36
+- bayesian.test.js → 31/31 (회귀 0)
+- D1 lineage_samples 58건 도착 확인 (samples fix 후)
+- D1 lineage_vision_calls 120건 (Llama Vision 정상 작동)
+
+**알려진 한계 (사용자 환경)**:
+- ADENA가 게임창 우측 끝에 잘림 (width=53px → OCR 어려움)
+  → 사용자가 게임창을 좌측으로 이동해야 근본 해결
+
+**다음 단계 (내일 작업)**:
+- 1주 사용자 검증 (메트릭 게이트: anchor stale 회복 < 3s, DISAGREE 채택 > 70%)
+- 게이트 통과 시 dry-run mode 종료 + Bayesian fully replace
+- T1.5 ad-hoc 카운터 제거 (P3 우선순위)
+- 자동 재학습 secrets 등록 (선택, 매주 자동화)
+- AI 자동 분석/알림 시스템 (선택, 16시간 작업)
+
+**Plan 문서**:
+- `.omc/plans/v2.0.0-master-execution-plan.md` (마스터 실행 계획, 8개 답변 반영)
+- `.omc/plans/v2.0.0-extreme-accuracy-spec.md` (7-Layer 아키텍처)
+- `cloudflare/.omc/plans/lineage-hub-spec.md` (백엔드 SPEC, web-app 통합 SUPERSEDED)
+
+---
+
+### v2.0.0-P1 (이전 버전 — 위 v2.0.0으로 통합됨) — Bayesian Temporal Tracker (dry-run mode) ⭐⭐⭐⭐⭐
 
 **OCR 정확도 극한 99.9%+ Initiative 시작**. SPEC: `.omc/plans/v2.0.0-master-execution-plan.md`. /ultraplan ultrathink로 작성된 8주 4-Phase 계획.
 
