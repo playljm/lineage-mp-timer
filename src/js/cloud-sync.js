@@ -42,7 +42,7 @@
   // ─────────────────────────────────────────────────────────────────
   // [v2.0.0 P3+] Ring buffer 진단용 — 최근 50개 action 기록
   // ─────────────────────────────────────────────────────────────────
-  const _ACTION_LOG_MAX = 50;
+  const _ACTION_LOG_MAX = 200;  // [v2.0.0 fix] 50 → 200, 실패 사유 보존
   const _actionLog = [];
   function _log(entry) {
     try {
@@ -123,14 +123,29 @@
     };
   }
 
-  function _checkAndIncQuota(byteSize) {
+  // [v2.0.0 fix] capacity 체크만 수행 — 실제 quota 증가는 fetch 200 OK 후 _commitQuota()
+  function _checkQuota(byteSize) {
     const q = _loadQuota();
     if (q.count + 1 > DAILY_SAMPLE_CAP) return { ok: false, reason: 'daily_count_cap' };
     if (q.bytes + byteSize > DAILY_BYTE_CAP) return { ok: false, reason: 'daily_byte_cap' };
+    return { ok: true, quota: q };
+  }
+
+  // upload 성공 시에만 호출 (실패한 fetch는 quota 차감 안 함)
+  function _commitQuota(byteSize) {
+    const q = _loadQuota();
     q.count += 1;
     q.bytes += byteSize;
     _saveQuota(q);
-    return { ok: true, quota: q };
+    return q;
+  }
+
+  // 사용자/관리자 직접 reset (진단 패널 버튼)
+  function resetDayQuota() {
+    const q = { date: _todayKey(), count: 0, bytes: 0 };
+    _saveQuota(q);
+    _log({ action: 'quota_reset', timestamp: Date.now() });
+    return q;
   }
 
   // ─────────────────────────────────────────────────────────────────
@@ -215,8 +230,8 @@
       return { ok: false, error: 'invalid_dataUrl' };
     }
 
-    // 미리 quota 체크 (post-fail은 quota 차감 안 됨)
-    const quotaCheck = _checkAndIncQuota(blob.size);
+    // [v2.0.0 fix] capacity 체크만 (실제 차감은 fetch 200 OK 후 _commitQuota)
+    const quotaCheck = _checkQuota(blob.size);
     if (!quotaCheck.ok) {
       _log({ action: 'upload_skip', region, reason: quotaCheck.reason });
       return { ok: false, skipped: true, reason: quotaCheck.reason };
@@ -251,6 +266,8 @@
       }
       const json = await res.json().catch(() => ({}));
       _markUploadAt(region, now);
+      // [v2.0.0 fix] 응답 200 OK 시점에 quota 차감 (실패한 fetch는 차감 안 함)
+      _commitQuota(blob.size);
       _log({ action: 'upload_success', region, status: res.status, id: json.id, deduped: !!json.deduped, label: isUserCorrection ? 'user_correction' : null, byteSize: blob.size });
       return {
         ok: true,
@@ -408,7 +425,7 @@
         modelVersion: getModelVersion(),
         traineddataCheckedAt: _traineddataCheckedAt()
       },
-      actionLog: _actionLog.slice(-30),
+      actionLog: _actionLog.slice(-100),
       ts: Date.now()
     };
   }
@@ -421,6 +438,7 @@
     isSyncEnabled,
     setSyncEnabled,
     getDayQuota,
+    resetDayQuota,
     getDebugInfo,
     // constants exposed for UI
     REGION_THROTTLE_MS,
