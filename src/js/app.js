@@ -2372,8 +2372,18 @@
     //     → R/G/B mode에서 T=110도 B 채널 fail로 글자 손실. 휘도 평균=147은 T=140 통과 가능
     //   luminance mode는 베이지/크림 글자에 최적, 막대 갈색(휘도≈87)은 여전히 차단
     const useLuminance = !!(opts && opts.luminance);
+    // [v2.0.0 fix] opts.blueMask — MP 게이지 파란 배경 (B > R+30) 강제 검정 처리
+    //   사용자 요청 "MP 뒷배경 좀 날려달라". MP 영역은 게이지 파란색 위 흰글자.
+    //   파란색은 R 낮고 B 높음 (예: R=80, G=120, B=200) → B > R+30 검출
+    //   흰글자(R=G=B≈250)는 통과, 파란 배경은 차단
+    const useBlueMask = !!(opts && opts.blueMask);
     for (let i = 0; i < d.length; i += 4) {
       const r = d[i], g = d[i + 1], b = d[i + 2];
+      // 파란 배경 강제 차단 (글자 판정 전에)
+      if (useBlueMask && b > r + 30 && b > g + 10) {
+        d[i] = 0; d[i + 1] = 0; d[i + 2] = 0;
+        continue;
+      }
       const pass = useLuminance
         ? ((r + g + b) / 3 >= T)
         : (r >= T && g >= T && b >= T);
@@ -3450,7 +3460,8 @@
     try {
       const cwBase = captureRegionToRawCanvas(autoDetect.mpRegion, 12, { pad: 0 });
       if (cwBase) {
-        applyWhiteExtraction(cwBase, 140);
+        // [v2.0.0] blueMask: MP 게이지 파란 배경 강제 차단 (사용자 요청)
+        applyWhiteExtraction(cwBase, 140, { blueMask: true });
         const cwCtx = cwBase.getContext('2d');
         const wImg = cwCtx.getImageData(0, 0, cwBase.width, cwBase.height);
         const wd = wImg.data;
