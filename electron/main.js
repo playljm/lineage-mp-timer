@@ -880,3 +880,162 @@ ipcMain.handle('app:clear-all-pending', () => {
     return { ok: false, error: String(e && e.message || e) };
   }
 });
+
+// ========== [v2.0.0 P3] Cloud Sync — ramin.co.kr Lineage Hub ==========
+//   - cloud-login-popup: BrowserWindow modal로 ramin.co.kr/login 띄움 → cookie 추출
+//   - cloud-clear-cookies: 다음 로그인 시 fresh state 보장
+//   - cloud-write-traineddata: 다운로드된 traineddata를 build/tessdata에 atomic 교체
+//                              (이전 버전은 .previous로 보존 → BCER 검증 후 rollback 가능)
+
+const CLOUD_LOGIN_URL_DEFAULT = 'https://ramin-5gt.pages.dev/login.html';
+const CLOUD_BASE_HOST_DEFAULT = 'ramin-5gt.pages.dev';
+
+let cloudLoginWindow = null;
+
+ipcMain.handle('app:cloud-login-popup', async (_, opts) => {
+  if (cloudLoginWindow && !cloudLoginWindow.isDestroyed()) {
+    try { cloudLoginWindow.focus(); } catch (_) {}
+    return { ok: false, error: 'already_open' };
+  }
+  const loginUrl = (opts && opts.loginUrl) || CLOUD_LOGIN_URL_DEFAULT;
+  const baseHost = (opts && opts.baseHost) || CLOUD_BASE_HOST_DEFAULT;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (val) => {
+      if (settled) return;
+      settled = true;
+      try { if (cloudLoginWindow && !cloudLoginWindow.isDestroyed()) cloudLoginWindow.close(); } catch (_) {}
+      cloudLoginWindow = null;
+      resolve(val);
+    };
+
+    cloudLoginWindow = new BrowserWindow({
+      width: 480,
+      height: 640,
+      title: 'ramin.co.kr 로그인',
+      parent: mainWindow || undefined,
+      modal: !!mainWindow,
+      backgroundColor: '#0a0f0a',
+      autoHideMenuBar: true,
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        partition: 'persist:cloud-login'
+      }
+    });
+
+    cloudLoginWindow.setMenu(null);
+    cloudLoginWindow.loadURL(loginUrl);
+
+    // 페이지 이동마다 cookie + url 스니프 — login 성공 패턴 자동 감지
+    const ses = cloudLoginWindow.webContents.session;
+    const tryExtractToken = async () => {
+      try {
+        const cookies = await ses.cookies.get({ domain: baseHost });
+        const tokenCookie = cookies.find((c) => c.name === 'session_token' || c.name === 'auth_token' || c.name === 'token');
+        if (tokenCookie && tokenCookie.value) {
+          // 이메일은 별도 cookie (또는 페이지에서 추출 시도)
+          let email = '';
+          const emailCookie = cookies.find((c) => c.name === 'user_email' || c.name === 'email');
+          if (emailCookie) email = emailCookie.value;
+          settle({ ok: true, token: tokenCookie.value, email });
+          return true;
+        }
+      } catch (e) { /* ignore, try again on next nav */ }
+      return false;
+    };
+
+    cloudLoginWindow.webContents.on('did-navigate', () => { tryExtractToken(); });
+    cloudLoginWindow.webContents.on('did-navigate-in-page', () => { tryExtractToken(); });
+    cloudLoginWindow.webContents.on('did-finish-load', () => { tryExtractToken(); });
+
+    cloudLoginWindow.on('closed', () => {
+      cloudLoginWindow = null;
+      if (!settled) settle({ ok: false, cancelled: true });
+    });
+  });
+});
+
+ipcMain.handle('app:cloud-clear-cookies', async (_, opts) => {
+  const baseHost = (opts && opts.baseHost) || CLOUD_BASE_HOST_DEFAULT;
+  try {
+    const { session } = require('electron');
+    const ses = session.fromPartition('persist:cloud-login');
+    const cookies = await ses.cookies.get({ domain: baseHost });
+    for (const c of cookies) {
+      const url = (c.secure ? 'https://' : 'http://') + (c.domain.replace(/^\./, '')) + (c.path || '/');
+      try { await ses.cookies.remove(url, c.name); } catch (_) {}
+    }
+    return { ok: true, removed: cookies.length };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message || e) };
+  }
+});
+
+ipcMain.handle('app:cloud-write-traineddata', async (_, payload) => {
+  try {
+    const { bytes, version, filename } = payload || {};
+    if (!bytes || !bytes.byteLength || bytes.byteLength < 1024) {
+      return { ok: false, error: 'invalid_bytes' };
+    }
+    const buf = Buffer.from(bytes);
+    // 대상: build/tessdata/lineage.traineddata (개발/패키지 양쪽 모두 build/ 경로)
+    const projectRoot = app.getAppPath();
+    const destDir = path.join(projectRoot, 'build', 'tessdata');
+    try { fs.mkdirSync(destDir, { recursive: true }); } catch (_) {}
+    const targetName = filename || 'lineage.traineddata';
+    const targetPath = path.join(destDir, targetName);
+    const previousPath = path.join(destDir, 'lineage.previous.traineddata');
+    const tmpPath = targetPath + '.tmp';
+
+    // atomic write: tmp → rename + 이전 버전 보존
+    fs.writeFileSync(tmpPath, buf);
+    if (fs.existsSync(targetPath)) {
+      try {
+        if (fs.existsSync(previousPath)) fs.unlinkSync(previousPath);
+        fs.renameSync(targetPath, previousPath);
+      } catch (e) {
+        // rename 실패해도 새 파일 쓰기는 진행 (rollback 불가능 상태로 fallback)
+        console.warn('[cloud-write-traineddata] previous backup failed:', e && e.message);
+      }
+    }
+    fs.renameSync(tmpPath, targetPath);
+
+    // 메타 정보도 같이 기록
+    const metaPath = path.join(destDir, 'lineage.meta.json');
+    try {
+      fs.writeFileSync(metaPath, JSON.stringify({
+        version: version || null,
+        size: buf.length,
+        installedAt: new Date().toISOString()
+      }, null, 2), 'utf-8');
+    } catch (_) { /* ignore */ }
+
+    return { ok: true, path: targetPath, size: buf.length, version: version || null };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message || e) };
+  }
+});
+
+ipcMain.handle('app:cloud-rollback-traineddata', async () => {
+  try {
+    const projectRoot = app.getAppPath();
+    const destDir = path.join(projectRoot, 'build', 'tessdata');
+    const targetPath = path.join(destDir, 'lineage.traineddata');
+    const previousPath = path.join(destDir, 'lineage.previous.traineddata');
+    if (!fs.existsSync(previousPath)) return { ok: false, error: 'no_previous' };
+    if (fs.existsSync(targetPath)) {
+      const failedPath = path.join(destDir, 'lineage.failed.traineddata');
+      try {
+        if (fs.existsSync(failedPath)) fs.unlinkSync(failedPath);
+        fs.renameSync(targetPath, failedPath);
+      } catch (_) {}
+    }
+    fs.renameSync(previousPath, targetPath);
+    return { ok: true, path: targetPath };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message || e) };
+  }
+});

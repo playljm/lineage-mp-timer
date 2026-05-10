@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta http-equiv="Content-Security-Policy"
-      content="default-src 'self' file:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self' 'unsafe-eval' blob: file: https://cdn.jsdelivr.net; worker-src 'self' blob: file: https://cdn.jsdelivr.net; connect-src 'self' blob: data: file: https://tessdata.projectnaptha.com https://cdn.jsdelivr.net https://paddlejs.bj.bcebos.com https://paddleocr.bj.bcebos.com; img-src 'self' blob: data: file:; media-src 'self' blob: mediastream:;" />
+      content="default-src 'self' file:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self' 'unsafe-eval' blob: file: https://cdn.jsdelivr.net; worker-src 'self' blob: file: https://cdn.jsdelivr.net; connect-src 'self' blob: data: file: https://tessdata.projectnaptha.com https://cdn.jsdelivr.net https://paddlejs.bj.bcebos.com https://paddleocr.bj.bcebos.com https://ramin.co.kr https://ramin-5gt.pages.dev https://*.pages.dev; img-src 'self' blob: data: file:; media-src 'self' blob: mediastream:;" />
     <title>Lineage MP Timer</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -734,6 +734,49 @@
           </div>
         </section>
 
+        <!-- ☁️ ramin.co.kr 클라우드 학습 공유 (v2.0.0 P3) -->
+        <section class="panel cloud-sync" id="cloud-sync-panel">
+          <h3 class="panel-title">☁️ ramin.co.kr 클라우드 학습 공유</h3>
+          <p class="panel-help muted small">
+            게임 폰트 OCR 데이터를 익명으로 공유해 모든 사용자의 인식 정확도를 함께 끌어올립니다.
+            업로드는 ROI(숫자 영역)만 포함되며 게임 전체 화면은 절대 전송되지 않습니다.
+          </p>
+
+          <div class="cloud-row" id="cloud-auth-row">
+            <span class="cloud-status-dot" id="cloud-status-dot" title="로그인 상태">⚪</span>
+            <span class="cloud-status-text" id="cloud-status-text">로그인 안 됨</span>
+            <span class="cloud-email muted small" id="cloud-email"></span>
+            <span style="flex:1"></span>
+            <button id="btn-cloud-login" class="ghost-btn primary-ghost" type="button">🔑 로그인</button>
+            <button id="btn-cloud-logout" class="ghost-btn" type="button" style="display:none;">⎋ 로그아웃</button>
+          </div>
+
+          <label class="chk inline" id="cloud-sync-toggle-row" style="margin-top:8px;">
+            <input type="checkbox" id="chk-cloud-sync" />
+            <span>📤 자동 업로드 (학습 데이터 공유) — 기본 OFF</span>
+          </label>
+
+          <div class="cloud-meta" id="cloud-meta-row">
+            <div class="cloud-meta-item">
+              <span class="cloud-meta-label">📦 모델 버전</span>
+              <span class="cloud-meta-value" id="cloud-model-version">-</span>
+            </div>
+            <div class="cloud-meta-item">
+              <span class="cloud-meta-label">📊 일일 업로드</span>
+              <span class="cloud-meta-value" id="cloud-quota-text">0 / 100</span>
+            </div>
+          </div>
+          <div class="cloud-quota-bar" aria-hidden="true">
+            <div class="cloud-quota-fill" id="cloud-quota-fill"></div>
+          </div>
+
+          <div class="cloud-actions">
+            <button id="btn-cloud-traineddata-check" class="ghost-btn" type="button" title="최신 traineddata 즉시 확인 (24h 자동 외 강제 실행)">📥 traineddata 업데이트 확인</button>
+            <button id="btn-cloud-stats" class="ghost-btn" type="button" title="개인 통계 (최근 7일)">📈 내 통계</button>
+          </div>
+          <div class="cloud-status-line" id="cloud-status-line">대기</div>
+        </section>
+
         <!-- 단축키 -->
         <section class="panel hotkeys">
           <h3 class="panel-title">HOTKEYS</h3>
@@ -822,6 +865,9 @@
     <script src="js/template-matcher.js"></script>
     <script src="js/roi-detector.js"></script>
     <script src="js/bayesian-tracker.js"></script>
+    <script src="js/cloud-auth.js"></script>
+    <script src="js/cloud-sync.js"></script>
+    <script src="js/vision-cross-check.js"></script>
     <script src="js/app.js"></script>
   </body>
 </html>

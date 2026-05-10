@@ -274,11 +274,96 @@
       } else if (result.source === 'init_consistency' || result.source === 'anomaly_consistency') {
         pushHybridLog('🛡️ ' + label + ' Bayesian dry-run accept (' + result.source + ', post=' + (result.posterior || 0).toFixed(2) + ')');
       }
+      // [v2.0.0 P3] posterior < 0.85 + non-init → Vision LLM cross-check 비동기 호출.
+      //   결과는 tracker에 다시 observe(force=false)로 fed-back — 이중 검증.
+      //   에러/throttle/auth 미충족은 모두 silent (OCR 흐름 절대 차단 X).
+      if (result && typeof result.posterior === 'number'
+          && result.posterior < 0.85
+          && result.source !== 'init_pending'
+          && result.source !== 'init_consistency') {
+        _maybeRequestVisionCheck(region, value, r, result);
+      }
+      // [v2.0.0 P3] 클라우드 업로드 (opt-in, throttle/quota는 cloud-sync 내부 처리)
+      _maybeCloudUpload(region, r);
     } catch (e) {
       // tracker observe 자체 실패는 절대 OCR 흐름 깨면 안 됨 — silent
       try { console.warn('[Bayesian] observe error', region, e && e.message); } catch (_) {}
     }
     return r;
+  }
+
+  // [v2.0.0 P3] Vision LLM cross-check 트리거 (Bayesian posterior < 0.85 시).
+  function _maybeRequestVisionCheck(region, suspectValue, voteResult, bayesianResult) {
+    if (!window.VisionCrossCheck || typeof window.VisionCrossCheck.requestVisionCheck !== 'function') return;
+    if (!window.CloudAuth || !window.CloudAuth.isCloudAuthed || !window.CloudAuth.isCloudAuthed()) return;
+    const canvas = latestCaptureCanvas[region];
+    if (!canvas) return;
+    const tracker = _bayesian[region];
+    const anchor = tracker && tracker.lastTrusted != null ? (
+      // mp는 cur만, 나머지는 값 자체
+      typeof tracker.lastTrusted === 'object' && 'cur' in tracker.lastTrusted ? tracker.lastTrusted.cur : tracker.lastTrusted
+    ) : null;
+    // 후보값: paddle/tess/lineage 추정 (voteResult 기반 단순화)
+    const candidates = [];
+    if (voteResult && voteResult.parsed) {
+      if (region === 'mp' && voteResult.parsed.cur != null) candidates.push(voteResult.parsed.cur + '/' + voteResult.parsed.max);
+      else if (region === 'exp' && voteResult.parsed.exp != null) candidates.push(voteResult.parsed.exp);
+      else if (region === 'level' && voteResult.parsed.level != null) candidates.push(voteResult.parsed.level);
+      else if (region === 'adena' && voteResult.parsed.adena != null) candidates.push(voteResult.parsed.adena);
+    }
+    window.VisionCrossCheck.requestVisionCheck(region, canvas, candidates, anchor)
+      .then((vr) => {
+        if (!vr || !vr.ok) {
+          if (vr && vr.skipped) return; // throttle/inflight — silent
+          pushHybridLog('👁 ' + region.toUpperCase() + ' vision skip (' + (vr && (vr.error || vr.reason) || 'no_response') + ')');
+          return;
+        }
+        const parsed = window.VisionCrossCheck.parseVisionValue(region, vr.value);
+        if (parsed == null) {
+          pushHybridLog('👁 ' + region.toUpperCase() + ' vision unparsable: ' + vr.value);
+          return;
+        }
+        pushHybridLog('👁 ' + region.toUpperCase() + ' vision=' + vr.value + ' (conf=' + (vr.confidence || 0).toFixed(2) + ', ' + vr.model + ', ' + vr.latencyMs + 'ms)');
+        // tracker fed-back observe — vision은 강한 신호이지만 force는 아님 (정상 검증 통과해야 anchor 갱신).
+        // mp 케이스는 cur만 받으므로 lastTrusted.max 재사용.
+        try {
+          if (region === 'mp' && tracker && tracker.lastTrusted && tracker.lastTrusted.max) {
+            tracker.observe({ cur: parsed, max: tracker.lastTrusted.max }, Date.now(), vr.confidence || 0.9, { source: 'vision' });
+          } else {
+            tracker.observe(parsed, Date.now(), vr.confidence || 0.9, { source: 'vision' });
+          }
+        } catch (_) { /* silent */ }
+      })
+      .catch((e) => {
+        try { console.warn('[Vision] requestVisionCheck error', region, e && e.message); } catch (_) {}
+      });
+  }
+
+  // [v2.0.0 P3] 클라우드 자동 업로드 — opt-in + 토글 ON일 때만.
+  //   사용자 정정 (markUserEdit 직후) 케이스는 _maybeCloudUploadCorrection 별도 흐름 사용.
+  function _maybeCloudUpload(region, voteResult) {
+    if (!window.CloudSync || typeof window.CloudSync.uploadSample !== 'function') return;
+    if (!window.CloudSync.isSyncEnabled()) return;
+    if (!window.CloudAuth || !window.CloudAuth.isCloudAuthed || !window.CloudAuth.isCloudAuthed()) return;
+    const canvas = latestCaptureCanvas[region];
+    if (!canvas) return;
+    let dataUrl;
+    try { dataUrl = canvas.toDataURL('image/png'); } catch (_) { return; }
+    // OCR 후보: voteResult.parsed에서 추출 (간단화 — 단일 값으로 paddle/tess 동일 처리)
+    const ocrText = recentOcrResults[region] || '';
+    const ocrCandidates = { paddle: ocrText, tess: ocrText };
+    const conf = voteResult && typeof voteResult.confidence === 'number' ? voteResult.confidence : 0.7;
+    // label 없음 (voting 결과만) — 서버에서 voting 라벨링 파이프라인 처리
+    window.CloudSync.uploadSample(region, dataUrl, ocrCandidates, null, conf)
+      .then((res) => {
+        if (res && res.ok) {
+          _cloudSetStatus('☁ ' + region.toUpperCase() + ' uploaded (id=' + res.id + (res.deduped ? ', dedup' : '') + ')', 'success');
+          _cloudRefreshQuota();
+        } else if (res && res.error === 'auth_expired') {
+          _cloudSetStatus('☁ 인증 만료 — 다시 로그인 필요', 'error');
+        }
+      })
+      .catch((e) => { try { console.warn('[CloudSync] upload error', region, e && e.message); } catch (_) {} });
   }
 
   // OCR / Capture state
@@ -356,7 +441,42 @@
           }
         } catch (_) { /* tracker 사용 안전 가드 */ }
       }
+      // [v2.0.0 P3] 사용자 정정 = 정확한 ground truth → 우선 클라우드 업로드 (throttle bypass).
+      try { _maybeCloudUploadCorrection(key); } catch (_) {}
     } catch (_) { /* 함수 호이스팅 전 호출 안전 가드 */ }
+  }
+
+  // [v2.0.0 P3] 사용자 직접 정정 → 우선 업로드 (label 포함).
+  //   throttle bypass + label='user_correction' → 서버에서 가중치 ↑.
+  function _maybeCloudUploadCorrection(key) {
+    if (!window.CloudSync || typeof window.CloudSync.uploadSample !== 'function') return;
+    if (!window.CloudSync.isSyncEnabled()) return;
+    if (!window.CloudAuth || !window.CloudAuth.isCloudAuthed || !window.CloudAuth.isCloudAuthed()) return;
+    const canvas = latestCaptureCanvas[key];
+    if (!canvas) return;
+    // 사용자가 입력한 정확한 값 추출
+    let label = '';
+    try {
+      if (key === 'level' && dom.trkLevelNow) label = String(dom.trkLevelNow.value || '').trim();
+      else if (key === 'adena' && dom.trkAdenaNow) label = String(dom.trkAdenaNow.value || '').trim();
+      else if (key === 'exp' && dom.trkExpNow) label = String(dom.trkExpNow.value || '').trim();
+      else if (key === 'mp' && dom.inCurMp && dom.inMaxMp) {
+        label = String(dom.inCurMp.value || '').trim() + '/' + String(dom.inMaxMp.value || '').trim();
+      }
+    } catch (_) {}
+    if (!label) return;
+    let dataUrl;
+    try { dataUrl = canvas.toDataURL('image/png'); } catch (_) { return; }
+    const ocrText = recentOcrResults[key] || '';
+    const ocrCandidates = { paddle: ocrText, tess: ocrText };
+    window.CloudSync.uploadSample(key, dataUrl, ocrCandidates, label, 1.0)
+      .then((res) => {
+        if (res && res.ok) {
+          _cloudSetStatus('☁ ' + key.toUpperCase() + ' 정정값 업로드 (label="' + label + '")', 'success');
+          _cloudRefreshQuota();
+        }
+      })
+      .catch(() => { /* silent */ });
   }
   function isUserEditing(key) { return Date.now() < (userEditUntil[key] || 0); }
   // 트래커 자동 시작이 in-flight 일 때 중복 트리거 방지 (RESET 후 재시작 포함)
@@ -7686,6 +7806,178 @@
     }
   }
 
+  // ========== [v2.0.0 P3] Cloud Sync UI ==========
+  const cloudDom = {
+    statusDot: $('cloud-status-dot'),
+    statusText: $('cloud-status-text'),
+    email: $('cloud-email'),
+    btnLogin: $('btn-cloud-login'),
+    btnLogout: $('btn-cloud-logout'),
+    chkSync: $('chk-cloud-sync'),
+    modelVersion: $('cloud-model-version'),
+    quotaText: $('cloud-quota-text'),
+    quotaFill: $('cloud-quota-fill'),
+    btnTraineddataCheck: $('btn-cloud-traineddata-check'),
+    btnStats: $('btn-cloud-stats'),
+    statusLine: $('cloud-status-line')
+  };
+
+  function _cloudSetStatus(msg, kind) {
+    if (!cloudDom.statusLine) return;
+    cloudDom.statusLine.textContent = msg || '';
+    cloudDom.statusLine.classList.remove('success', 'error');
+    if (kind === 'success') cloudDom.statusLine.classList.add('success');
+    else if (kind === 'error') cloudDom.statusLine.classList.add('error');
+  }
+
+  function _cloudRefreshAuthUI() {
+    if (!window.CloudAuth) return;
+    const authed = window.CloudAuth.isCloudAuthed();
+    const email = window.CloudAuth.getCloudEmail() || '';
+    if (cloudDom.statusDot) {
+      cloudDom.statusDot.textContent = authed ? '🟢' : '⚪';
+      cloudDom.statusDot.classList.toggle('authed', authed);
+    }
+    if (cloudDom.statusText) {
+      cloudDom.statusText.textContent = authed ? '로그인 됨' : '로그인 안 됨';
+      cloudDom.statusText.classList.toggle('authed', authed);
+    }
+    if (cloudDom.email) cloudDom.email.textContent = email ? '(' + email + ')' : '';
+    if (cloudDom.btnLogin) cloudDom.btnLogin.style.display = authed ? 'none' : '';
+    if (cloudDom.btnLogout) cloudDom.btnLogout.style.display = authed ? '' : 'none';
+    if (cloudDom.chkSync) cloudDom.chkSync.disabled = !authed;
+  }
+
+  function _cloudRefreshQuota() {
+    if (!window.CloudSync) return;
+    const q = window.CloudSync.getDayQuota();
+    if (cloudDom.quotaText) {
+      cloudDom.quotaText.textContent = q.count + ' / ' + q.capCount;
+    }
+    if (cloudDom.quotaFill) {
+      const pct = Math.min(100, Math.round((q.count / Math.max(1, q.capCount)) * 100));
+      cloudDom.quotaFill.style.width = pct + '%';
+    }
+  }
+
+  function _cloudRefreshModelVersion() {
+    if (!window.CloudSync || !cloudDom.modelVersion) return;
+    const v = window.CloudSync.getModelVersion();
+    cloudDom.modelVersion.textContent = v ? v : '-';
+  }
+
+  async function _cloudHandleLogin() {
+    if (!window.CloudAuth) return;
+    _cloudSetStatus('☁ 로그인 진행 중...');
+    try {
+      const r = await window.CloudAuth.cloudLogin();
+      if (r && r.ok) {
+        _cloudSetStatus('☁ 로그인 성공' + (r.email ? ' (' + r.email + ')' : ''), 'success');
+        _cloudRefreshAuthUI();
+        // 로그인 직후 traineddata 체크 (24h 자동 외 즉시 1회)
+        _cloudCheckTraineddata({ force: false }).catch(() => {});
+      } else {
+        _cloudSetStatus('☁ 로그인 실패: ' + (r && (r.error || 'unknown')), 'error');
+      }
+    } catch (e) {
+      _cloudSetStatus('☁ 로그인 예외: ' + (e && e.message), 'error');
+    }
+  }
+
+  async function _cloudHandleLogout() {
+    if (!window.CloudAuth) return;
+    try {
+      await window.CloudAuth.cloudLogout();
+      _cloudSetStatus('☁ 로그아웃 완료', 'success');
+      _cloudRefreshAuthUI();
+    } catch (e) {
+      _cloudSetStatus('☁ 로그아웃 실패: ' + (e && e.message), 'error');
+    }
+  }
+
+  async function _cloudCheckTraineddata(opts) {
+    if (!window.CloudSync) return;
+    if (!window.CloudAuth || !window.CloudAuth.isCloudAuthed()) {
+      _cloudSetStatus('☁ traineddata 다운로드: 먼저 로그인하세요', 'error');
+      return;
+    }
+    _cloudSetStatus('☁ traineddata 확인 중...');
+    try {
+      const r = await window.CloudSync.downloadLatestTraineddata(opts || {});
+      if (r && r.ok) {
+        if (r.skipped) {
+          _cloudSetStatus('☁ traineddata: ' + r.reason, 'success');
+        } else {
+          _cloudSetStatus('☁ traineddata 업데이트 완료 (' + (r.version || 'unknown') + ', ' + Math.round((r.size || 0) / 1024) + 'KB)', 'success');
+          _cloudRefreshModelVersion();
+        }
+      } else if (r && r.skipped) {
+        _cloudSetStatus('☁ traineddata: ' + r.reason);
+      } else {
+        _cloudSetStatus('☁ traineddata 실패: ' + (r && (r.error || 'unknown')), 'error');
+      }
+    } catch (e) {
+      _cloudSetStatus('☁ traineddata 예외: ' + (e && e.message), 'error');
+    }
+  }
+
+  async function _cloudHandleStats() {
+    if (!window.CloudSync) return;
+    if (!window.CloudAuth || !window.CloudAuth.isCloudAuthed()) {
+      _cloudSetStatus('☁ 통계: 먼저 로그인하세요', 'error');
+      return;
+    }
+    _cloudSetStatus('☁ 통계 조회 중...');
+    try {
+      const r = await window.CloudSync.getStats('7d');
+      if (r && r.ok) {
+        const s = r.stats || {};
+        const summary = '☁ 통계 (7d) — sample=' + (s.sample_count || 0)
+          + ', exp/h=' + (s.exp_per_hour != null ? s.exp_per_hour : '-')
+          + ', adena/h=' + (s.adena_per_hour != null ? s.adena_per_hour : '-');
+        _cloudSetStatus(summary, 'success');
+      } else {
+        _cloudSetStatus('☁ 통계 실패: ' + (r && (r.error || 'unknown')), 'error');
+      }
+    } catch (e) {
+      _cloudSetStatus('☁ 통계 예외: ' + (e && e.message), 'error');
+    }
+  }
+
+  function bindCloudSyncEvents() {
+    if (cloudDom.btnLogin) cloudDom.btnLogin.addEventListener('click', _cloudHandleLogin);
+    if (cloudDom.btnLogout) cloudDom.btnLogout.addEventListener('click', _cloudHandleLogout);
+    if (cloudDom.btnTraineddataCheck) {
+      cloudDom.btnTraineddataCheck.addEventListener('click', () => _cloudCheckTraineddata({ force: true }));
+    }
+    if (cloudDom.btnStats) cloudDom.btnStats.addEventListener('click', _cloudHandleStats);
+    if (cloudDom.chkSync && window.CloudSync) {
+      cloudDom.chkSync.checked = window.CloudSync.isSyncEnabled();
+      cloudDom.chkSync.addEventListener('change', () => {
+        const enabled = !!cloudDom.chkSync.checked;
+        window.CloudSync.setSyncEnabled(enabled);
+        _cloudSetStatus('☁ 자동 업로드 ' + (enabled ? 'ON' : 'OFF'), enabled ? 'success' : '');
+      });
+    }
+  }
+
+  function _cloudInit() {
+    bindCloudSyncEvents();
+    _cloudRefreshAuthUI();
+    _cloudRefreshQuota();
+    _cloudRefreshModelVersion();
+    _cloudSetStatus('대기');
+    // 1분마다 quota 갱신 (다른 탭/세션에서 업로드 시 동기화)
+    setInterval(() => {
+      _cloudRefreshQuota();
+      _cloudRefreshModelVersion();
+    }, 60 * 1000);
+    // 앱 시작 시 traineddata 자동 체크 (24h 내면 자동 skip)
+    if (window.CloudAuth && window.CloudAuth.isCloudAuthed()) {
+      setTimeout(() => _cloudCheckTraineddata({ force: false }).catch(() => {}), 5000);
+    }
+  }
+
   // ========== Init ==========
   function init() {
     restoreSettings();
@@ -7727,6 +8019,8 @@
     window.addEventListener('drop', (e) => e.preventDefault());
     bindTabs();
     updateSummaryBar();
+    // [v2.0.0 P3] Cloud Sync UI 초기화
+    try { _cloudInit(); } catch (e) { console.warn('[CloudSync] init failed', e && e.message); }
     setInterval(() => {
       if (!mpState.running) renderAll();
       renderTracker();

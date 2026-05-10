@@ -2237,3 +2237,100 @@ body.compact-mode .titlebar .app-version {
   justify-content: flex-end;
   margin-top: 16px;
 }
+
+/* ============================================
+ * v2.0.0 P3 — Cloud Sync (ramin.co.kr)
+ * ============================================ */
+.panel.cloud-sync {
+  border-color: var(--border-strong);
+  background: linear-gradient(180deg, var(--bg-panel) 0%, var(--bg-panel-alt) 100%);
+}
+.cloud-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-top: 8px;
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 12px;
+}
+.cloud-status-dot {
+  font-size: 14px;
+  line-height: 1;
+}
+.cloud-status-dot.authed { color: var(--neon); text-shadow: var(--shadow-neon); }
+.cloud-status-text {
+  font-weight: 600;
+  color: var(--text);
+}
+.cloud-status-text.authed { color: var(--neon); }
+.cloud-email {
+  font-variant-numeric: tabular-nums;
+}
+.cloud-meta {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.cloud-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 120px;
+  padding: 6px 10px;
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.cloud-meta-label {
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.cloud-meta-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--neon);
+  font-variant-numeric: tabular-nums;
+}
+.cloud-quota-bar {
+  position: relative;
+  height: 6px;
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  margin-top: 6px;
+  overflow: hidden;
+}
+.cloud-quota-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0%;
+  background: linear-gradient(90deg, var(--neon-dim), var(--neon));
+  box-shadow: 0 0 8px var(--neon-soft);
+  transition: width 240ms ease;
+}
+.cloud-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.cloud-status-line {
+  margin-top: 6px;
+  padding: 6px 10px;
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  min-height: 22px;
+  word-break: break-all;
+}
+.cloud-status-line.success { color: var(--neon); border-color: var(--neon-dim); }
+.cloud-status-line.error { color: var(--red); border-color: var(--red); }

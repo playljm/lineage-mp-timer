@@ -24,6 +24,11 @@ contextBridge.exposeInMainWorld('api', {
   deletePendingSample: (payload) => ipcRenderer.invoke('app:delete-pending-sample', payload),
   clearAllPending: () => ipcRenderer.invoke('app:clear-all-pending'),
   saveDiagnosticReport: (payload) => ipcRenderer.invoke('app:save-diagnostic-report', payload),
+  // [v2.0.0 P3] Cloud Sync IPC
+  cloudLoginPopup: (opts) => ipcRenderer.invoke('app:cloud-login-popup', opts || {}),
+  cloudClearCookies: (opts) => ipcRenderer.invoke('app:cloud-clear-cookies', opts || {}),
+  cloudWriteTraineddata: (payload) => ipcRenderer.invoke('app:cloud-write-traineddata', payload),
+  cloudRollbackTraineddata: () => ipcRenderer.invoke('app:cloud-rollback-traineddata'),
   quit: () => ipcRenderer.invoke('app:quit'),
   onAlwaysOnTopChanged: (cb) => {
     ipcRenderer.on('always-on-top-changed', (_, value) => {

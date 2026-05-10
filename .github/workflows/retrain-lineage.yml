@@ -1,0 +1,273 @@
+name: Lineage Tesseract Retrain
+
+# Cloudflare Workers Cron Trigger 가 repository_dispatch 를 호출하면 실행.
+# 수동 트리거도 지원 (workflow_dispatch).
+on:
+  repository_dispatch:
+    types: [lineage-retrain]
+  workflow_dispatch:
+    inputs:
+      archive_meta_key:
+        description: 'R2 manifest key (exports/YYYYMMDD/manifest.json)'
+        required: false
+        default: ''
+      sample_count:
+        description: 'Expected sample count (informational)'
+        required: false
+        default: '0'
+      max_iterations:
+        description: 'Tesseract MAX_ITERATIONS'
+        required: false
+        default: '24600'
+
+jobs:
+  retrain:
+    # WSL 자체 호스팅 러너 필요.
+    # 등록 방법: GitHub repo Settings → Actions → Runners → New self-hosted runner
+    # 러너 레이블: [self-hosted, wsl]
+    runs-on: [self-hosted, wsl]
+
+    env:
+      # Secrets: GitHub repo Settings → Secrets and variables → Actions 에 등록
+      R2_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_ENDPOINT:          ${{ secrets.R2_ENDPOINT }}
+      R2_BUCKET:            lineage-samples
+      CALLBACK_URL:         ${{ secrets.LINEAGE_CALLBACK_URL }}
+      CALLBACK_SECRET:      ${{ secrets.TRAINING_CALLBACK_SECRET }}
+      TESSTRAIN_DIR:        /root/tesstrain
+      GROUND_TRUTH_DIR:     /root/tesstrain/data/lineage-ground-truth
+      TESSDATA_DIR:         /root/tesstrain/tessdata_best
+      MODEL_NAME:           lineage
+      START_MODEL:          lineage_checkpoint
+
+    steps:
+      # ── 1) 이벤트 payload 파싱 ────────────────────────────────────────────
+      - name: Parse dispatch payload
+        id: payload
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            META_KEY="${{ github.event.client_payload.archive_meta_key }}"
+            SAMPLE_COUNT="${{ github.event.client_payload.sample_count }}"
+            MAX_ITER="${{ github.event.client_payload.max_iterations }}"
+            RUN_DATE="${{ github.event.client_payload.run_date }}"
+          else
+            META_KEY="${{ github.event.inputs.archive_meta_key }}"
+            SAMPLE_COUNT="${{ github.event.inputs.sample_count }}"
+            MAX_ITER="${{ github.event.inputs.max_iterations }}"
+            RUN_DATE=$(date -u +%Y%m%d)
+          fi
+          echo "meta_key=${META_KEY}" >> "$GITHUB_OUTPUT"
+          echo "sample_count=${SAMPLE_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "max_iterations=${MAX_ITER:-24600}" >> "$GITHUB_OUTPUT"
+          echo "run_date=${RUN_DATE:-$(date -u +%Y%m%d)}" >> "$GITHUB_OUTPUT"
+          echo "version=lineage-${RUN_DATE:-$(date -u +%Y%m%d)}-$(date -u +%H%M)" >> "$GITHUB_OUTPUT"
+
+      # ── 2) R2에서 manifest 다운로드 → 샘플 PNG sync ──────────────────────
+      - name: Download manifest and sync samples
+        run: |
+          set -e
+          MANIFEST_KEY="${{ steps.payload.outputs.meta_key }}"
+
+          # rclone 또는 aws cli로 R2 접근
+          # aws cli + R2 endpoint 방식 사용
+          if ! command -v aws &>/dev/null; then
+            echo "ERROR: aws cli not found. Install: pip3 install awscli" >&2
+            exit 1
+          fi
+
+          MANIFEST_FILE="/tmp/lineage-manifest-${{ steps.payload.outputs.run_date }}.json"
+
+          aws s3 cp \
+            "s3://${R2_BUCKET}/${MANIFEST_KEY}" \
+            "${MANIFEST_FILE}" \
+            --endpoint-url "${R2_ENDPOINT}" \
+            --region auto
+
+          echo "Manifest downloaded: ${MANIFEST_FILE}"
+          ACTUAL_COUNT=$(python3 -c "import json; d=json.load(open('${MANIFEST_FILE}')); print(len(d['samples']))")
+          echo "Samples in manifest: ${ACTUAL_COUNT}"
+
+          # manifest에서 png_key 목록 추출 → R2에서 ground-truth 폴더로 다운로드
+          mkdir -p "${GROUND_TRUTH_DIR}"
+
+          python3 - <<'PYEOF'
+          import json, subprocess, sys, os
+
+          manifest_file = os.environ['MANIFEST_FILE']
+          bucket = os.environ['R2_BUCKET']
+          endpoint = os.environ['R2_ENDPOINT']
+          gt_dir = os.environ['GROUND_TRUTH_DIR']
+
+          with open(manifest_file) as f:
+              data = json.load(f)
+
+          downloaded = 0
+          errors = 0
+          for s in data['samples']:
+              r2_key = s['r2_key']
+              label = s.get('label', '')
+              # basename without extension
+              base = os.path.splitext(os.path.basename(r2_key))[0]
+              png_dest = os.path.join(gt_dir, f"{base}.png")
+              gt_dest  = os.path.join(gt_dir, f"{base}.gt.txt")
+
+              # Download PNG
+              result = subprocess.run(
+                  ['aws', 's3', 'cp',
+                   f"s3://{bucket}/{r2_key}", png_dest,
+                   '--endpoint-url', endpoint, '--region', 'auto'],
+                  capture_output=True
+              )
+              if result.returncode == 0:
+                  # Write ground truth
+                  with open(gt_dest, 'w') as g:
+                      g.write(label)
+                  downloaded += 1
+              else:
+                  errors += 1
+                  if errors <= 5:
+                      print(f"WARN: failed to download {r2_key}", file=sys.stderr)
+
+          print(f"Downloaded {downloaded} samples, {errors} errors")
+          if downloaded == 0:
+              print("ERROR: no samples downloaded", file=sys.stderr)
+              sys.exit(1)
+          PYEOF
+        env:
+          MANIFEST_FILE: /tmp/lineage-manifest-${{ steps.payload.outputs.run_date }}.json
+
+      # ── 3) Tesseract 학습 ────────────────────────────────────────────────
+      - name: Run Tesseract training
+        id: training
+        run: |
+          set -e
+          cd "${TESSTRAIN_DIR}"
+
+          MAX_ITER="${{ steps.payload.outputs.max_iterations }}"
+          echo "Starting training: MODEL=${MODEL_NAME} MAX_ITER=${MAX_ITER}"
+
+          # list 갱신
+          find "${GROUND_TRUTH_DIR}" -name "*.png" | sort > /tmp/lineage-files.txt
+          TOTAL=$(wc -l < /tmp/lineage-files.txt)
+          echo "Total ground truth files: ${TOTAL}"
+
+          # sed로 list.train / list.eval 갱신 (tesstrain Makefile 캐시 우회)
+          EVAL_COUNT=$(( TOTAL / 10 ))
+          [ "${EVAL_COUNT}" -lt 1 ] && EVAL_COUNT=1
+          TRAIN_COUNT=$(( TOTAL - EVAL_COUNT ))
+
+          head -n "${TRAIN_COUNT}" /tmp/lineage-files.txt | \
+            sed 's|\.png$|.lstmf|' > "${TESSTRAIN_DIR}/data/lineage/list.train"
+          tail -n "${EVAL_COUNT}" /tmp/lineage-files.txt | \
+            sed 's|\.png$|.lstmf|' > "${TESSTRAIN_DIR}/data/lineage/list.eval"
+
+          # 학습 실행
+          make training \
+            MODEL_NAME="${MODEL_NAME}" \
+            START_MODEL="${START_MODEL}" \
+            TESSDATA="${TESSDATA_DIR}" \
+            MAX_ITERATIONS="${MAX_ITER}" \
+            PSM=7 \
+            2>&1 | tee /tmp/lineage-train.log
+
+          echo "Training log saved to /tmp/lineage-train.log"
+
+      # ── 4) BCER 추출 ─────────────────────────────────────────────────────
+      - name: Extract BCER from training log
+        id: bcer
+        run: |
+          LOG="/tmp/lineage-train.log"
+          # 마지막 "BCER train=X.XXX, BCER eval=X.XXX" 라인에서 eval BCER 추출
+          BCER=$(grep -oE 'BCER eval=[0-9]+\.[0-9]+' "${LOG}" | tail -1 | grep -oE '[0-9]+\.[0-9]+' || echo "")
+
+          if [ -z "${BCER}" ]; then
+            # "Best model written" 라인에서도 시도
+            BCER=$(grep -oE '[0-9]+\.[0-9]+' "${LOG}" | tail -5 | head -1 || echo "9.999")
+          fi
+
+          echo "Extracted BCER: ${BCER}"
+          echo "bcer=${BCER}" >> "$GITHUB_OUTPUT"
+
+      # ── 5) 결과물 R2 업로드 ──────────────────────────────────────────────
+      - name: Upload traineddata to R2
+        id: upload
+        run: |
+          set -e
+          VERSION="${{ steps.payload.outputs.version }}"
+          TRAINED_FILE="${TESSTRAIN_DIR}/data/${MODEL_NAME}.traineddata"
+
+          if [ ! -f "${TRAINED_FILE}" ]; then
+            echo "ERROR: traineddata not found at ${TRAINED_FILE}" >&2
+            exit 1
+          fi
+
+          R2_KEY="traineddata/${VERSION}.traineddata"
+
+          aws s3 cp \
+            "${TRAINED_FILE}" \
+            "s3://${R2_BUCKET}/${R2_KEY}" \
+            --endpoint-url "${R2_ENDPOINT}" \
+            --region auto \
+            --content-type application/octet-stream
+
+          echo "Uploaded to R2: ${R2_KEY}"
+          echo "r2_key=${R2_KEY}" >> "$GITHUB_OUTPUT"
+
+          # SHA-256 계산
+          SHA256=$(sha256sum "${TRAINED_FILE}" | cut -d' ' -f1)
+          echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
+
+      # ── 6) callback POST ──────────────────────────────────────────────────
+      - name: Send training callback
+        if: always()
+        run: |
+          VERSION="${{ steps.payload.outputs.version }}"
+          BCER="${{ steps.bcer.outputs.bcer }}"
+          R2_KEY="${{ steps.upload.outputs.r2_key }}"
+          SHA256="${{ steps.upload.outputs.sha256 }}"
+          SAMPLE_COUNT="${{ steps.payload.outputs.sample_count }}"
+
+          # 학습/업로드 실패 시 status=failed 로 callback
+          if [ "${{ steps.training.outcome }}" != "success" ] || \
+             [ "${{ steps.upload.outcome }}" != "success" ]; then
+            STATUS="failed"
+            BCER="${BCER:-9.999}"
+            R2_KEY="${R2_KEY:-}"
+            SHA256="${SHA256:-$(printf '%064d' 0)}"
+          else
+            STATUS="success"
+          fi
+
+          BODY=$(python3 -c "
+          import json, sys
+          d = {
+              'status':       '${STATUS}',
+              'version':      '${VERSION}',
+              'bcer':         float('${BCER:-9.999}'),
+              'sample_count': int('${SAMPLE_COUNT:-0}'),
+              'r2_key':       '${R2_KEY}',
+              'sha256':       '${SHA256}',
+              'region':       'global'
+          }
+          print(json.dumps(d))
+          ")
+
+          # HMAC-SHA256 서명 생성
+          SIG=$(python3 -c "
+          import hmac, hashlib, sys
+          secret = '${CALLBACK_SECRET}'.encode()
+          body = sys.stdin.read().strip().encode()
+          sig = hmac.new(secret, body, hashlib.sha256).hexdigest()
+          print('sha256=' + sig)
+          " <<< "${BODY}")
+
+          echo "Sending callback to ${CALLBACK_URL}"
+          curl -sf \
+            -X POST \
+            -H 'Content-Type: application/json' \
+            -H "X-Hub-Signature-256: ${SIG}" \
+            -d "${BODY}" \
+            "${CALLBACK_URL}/api/lineage-hub/admin/training-callback"
+
+          echo "Callback sent: status=${STATUS} bcer=${BCER} version=${VERSION}"
