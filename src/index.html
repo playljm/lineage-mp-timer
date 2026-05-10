@@ -775,6 +775,27 @@
             <button id="btn-cloud-stats" class="ghost-btn" type="button" title="개인 통계 (최근 7일)">📈 내 통계</button>
           </div>
           <div class="cloud-status-line" id="cloud-status-line">대기</div>
+
+          <!-- [v2.0.0+] 진단 패널 — sync 동작 가시화 + AI 분석용 dump -->
+          <div class="cloud-diag-panel">
+            <div class="cloud-diag-summary">
+              <span id="cloud-diag-status-icon" class="cloud-diag-status-icon">⏳</span>
+              <span id="cloud-diag-status-text" class="cloud-diag-status-text">상태 확인 중...</span>
+              <span id="cloud-diag-stats-counter" class="cloud-diag-stats-counter">— / 100 sample</span>
+            </div>
+            <div class="cloud-diag-actions">
+              <button id="cloud-diag-btn" class="ghost-btn" type="button" title="진단 실행 (현재 cloud sync 상태 dump)">🔍 진단</button>
+              <button id="cloud-test-upload-btn" class="ghost-btn" type="button" title="ADENA OCR 결과 강제 업로드 시도 (throttle 무시)">🧪 테스트 업로드</button>
+            </div>
+            <details class="cloud-diag-details" id="cloud-diag-details">
+              <summary>진단 결과</summary>
+              <pre id="cloud-diag-output" class="cloud-diag-output">진단 버튼을 눌러주세요.</pre>
+              <div class="cloud-diag-actions">
+                <button id="cloud-diag-copy-btn" class="ghost-btn" type="button" title="클립보드로 복사">📋 복사</button>
+                <button id="cloud-diag-send-btn" class="ghost-btn" type="button" title="백엔드 debug-log endpoint로 전송 (AI 검토용)">📤 AI에게 보내기</button>
+              </div>
+            </details>
+          </div>
         </section>
 
         <!-- 단축키 -->

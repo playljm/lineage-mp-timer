@@ -164,10 +164,30 @@
     return Number.isFinite(n) ? n : null;
   }
 
+  // ─────────────────────────────────────────────────────────────────
+  // [v2.0.0 P3+] getDebugInfo — Vision 호출 throttle/inflight 상태
+  // ─────────────────────────────────────────────────────────────────
+  function getDebugInfo() {
+    const remaining = {};
+    const lastCallTs = {};
+    ['mp', 'exp', 'level', 'adena'].forEach((r) => {
+      const calls = _loadCalls(r);
+      remaining[r] = Math.max(0, HOURLY_CAP_PER_REGION - calls.length);
+      lastCallTs[r] = calls.length ? calls[calls.length - 1] : 0;
+    });
+    return {
+      hourlyCapPerRegion: HOURLY_CAP_PER_REGION,
+      remainingByRegion: remaining,
+      inflight: Object.assign({}, _inflight),
+      lastCallTsByRegion: lastCallTs
+    };
+  }
+
   global.VisionCrossCheck = {
     requestVisionCheck,
     parseVisionValue,
     getRemainingCalls,
+    getDebugInfo,
     HOURLY_CAP_PER_REGION
   };
 })(typeof window !== 'undefined' ? window : this);

@@ -162,8 +162,44 @@
     return { 'Authorization': 'Bearer ' + t };
   }
 
+  // ─────────────────────────────────────────────────────────────────
+  // [v2.0.0 P3+] getDebugInfo — 진단 패널/AI 분석용 토큰/세션 상태
+  //   ⚠ 평문 토큰 노출 X — length만 표시
+  // ─────────────────────────────────────────────────────────────────
+  const LAST_LOGIN_RESULT_KEY = 'lmp.cloudAuth.lastResult';
+  function _recordLoginResult(result) {
+    try { localStorage.setItem(LAST_LOGIN_RESULT_KEY, String(result || '')); } catch (_) {}
+  }
+  function getDebugInfo() {
+    const t = getCloudToken();
+    let lastResult = null;
+    try { lastResult = localStorage.getItem(LAST_LOGIN_RESULT_KEY) || null; } catch (_) {}
+    return {
+      isAuthed: isCloudAuthed(),
+      hasToken: !!t,
+      tokenLength: (typeof t === 'string') ? t.length : 0,
+      userEmail: getCloudEmail(),
+      profile: getCloudProfile(),
+      cookieDomain: 'ramin.co.kr (Electron BrowserWindow modal)',
+      lastLoginAttemptResult: lastResult
+    };
+  }
+
+  // wrap cloudLogin/cloudLogout to record lastResult (진단용 history)
+  const _origCloudLogin = cloudLogin;
+  async function cloudLoginWithRecord() {
+    try {
+      const r = await _origCloudLogin();
+      _recordLoginResult(r && r.ok ? 'ok' : ('fail:' + (r && r.error || 'unknown')));
+      return r;
+    } catch (e) {
+      _recordLoginResult('exception:' + (e && e.message || 'unknown'));
+      throw e;
+    }
+  }
+
   global.CloudAuth = {
-    cloudLogin,
+    cloudLogin: cloudLoginWithRecord,
     cloudLoginManual,
     cloudLogout,
     getCloudToken,
@@ -172,6 +208,7 @@
     setCloudProfile,
     isCloudAuthed,
     buildAuthHeaders,
+    getDebugInfo,
     // exposed for testing / debug
     _setToken: setToken
   };

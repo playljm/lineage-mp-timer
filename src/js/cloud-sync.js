@@ -39,6 +39,30 @@
   const DAILY_BYTE_CAP = 10 * 1024 * 1024;    // 10MB / day
   const TRAINEDDATA_INTERVAL_MS = 24 * 3600 * 1000; // 24h
 
+  // ─────────────────────────────────────────────────────────────────
+  // [v2.0.0 P3+] Ring buffer 진단용 — 최근 50개 action 기록
+  // ─────────────────────────────────────────────────────────────────
+  const _ACTION_LOG_MAX = 50;
+  const _actionLog = [];
+  function _log(entry) {
+    try {
+      const e = Object.assign({ timestamp: Date.now() }, entry || {});
+      _actionLog.push(e);
+      if (_actionLog.length > _ACTION_LOG_MAX) _actionLog.splice(0, _actionLog.length - _ACTION_LOG_MAX);
+    } catch (_) { /* never throw */ }
+  }
+  function _getLastUploadByRegion() {
+    const out = {};
+    ['mp', 'exp', 'level', 'adena'].forEach((r) => {
+      try {
+        const raw = localStorage.getItem(LAST_UPLOAD_KEY_PREFIX + r);
+        const n = raw ? parseInt(raw, 10) : 0;
+        out[r] = Number.isFinite(n) ? n : 0;
+      } catch (_) { out[r] = 0; }
+    });
+    return out;
+  }
+
   function _baseUrl() {
     try {
       const override = localStorage.getItem(BASE_URL_KEY);
@@ -161,10 +185,19 @@
    * @returns {Promise<{ok, id?, deduped?, skipped?, reason?}>}
    */
   async function uploadSample(region, dataUrl, ocrCandidates, label, confidence) {
-    if (!isSyncEnabled()) return { ok: false, skipped: true, reason: 'sync_disabled' };
-    if (!_isAuthed()) return { ok: false, skipped: true, reason: 'not_authed' };
+    if (!isSyncEnabled()) {
+      _log({ action: 'upload_skip', region, reason: 'sync_disabled' });
+      return { ok: false, skipped: true, reason: 'sync_disabled' };
+    }
+    if (!_isAuthed()) {
+      _log({ action: 'upload_skip', region, reason: 'not_authed' });
+      return { ok: false, skipped: true, reason: 'not_authed' };
+    }
     const validRegions = ['mp', 'exp', 'level', 'adena'];
-    if (!validRegions.includes(region)) return { ok: false, error: 'invalid_region' };
+    if (!validRegions.includes(region)) {
+      _log({ action: 'upload_skip', region, reason: 'invalid_region' });
+      return { ok: false, error: 'invalid_region' };
+    }
 
     const isUserCorrection = !!(label && String(label).trim());
     const now = Date.now();
@@ -172,15 +205,22 @@
     // Throttle: 사용자 정정은 priority — throttle 무시. 일반 OCR은 30s + 더 큰 throttle (60s)
     const minGap = isUserCorrection ? 0 : (REGION_THROTTLE_MS * 2); // 60s for OCR, 0 for correction
     if (!isUserCorrection && (now - last) < minGap) {
+      _log({ action: 'upload_skip', region, reason: 'throttled', nextInMs: last + minGap - now });
       return { ok: false, skipped: true, reason: 'throttled', nextAtMs: last + minGap };
     }
 
     const blob = _dataUrlToBlob(dataUrl);
-    if (!blob) return { ok: false, error: 'invalid_dataUrl' };
+    if (!blob) {
+      _log({ action: 'upload_skip', region, reason: 'invalid_dataUrl' });
+      return { ok: false, error: 'invalid_dataUrl' };
+    }
 
     // 미리 quota 체크 (post-fail은 quota 차감 안 됨)
     const quotaCheck = _checkAndIncQuota(blob.size);
-    if (!quotaCheck.ok) return { ok: false, skipped: true, reason: quotaCheck.reason };
+    if (!quotaCheck.ok) {
+      _log({ action: 'upload_skip', region, reason: quotaCheck.reason });
+      return { ok: false, skipped: true, reason: quotaCheck.reason };
+    }
 
     try {
       const fd = new FormData();
@@ -203,12 +243,15 @@
       if (!res.ok) {
         // 401/403: token 만료
         if (res.status === 401 || res.status === 403) {
+          _log({ action: 'upload_failed', region, status: res.status, error: 'auth_expired' });
           return { ok: false, error: 'auth_expired', status: res.status };
         }
+        _log({ action: 'upload_failed', region, status: res.status, error: 'http_' + res.status });
         return { ok: false, error: 'http_' + res.status };
       }
       const json = await res.json().catch(() => ({}));
       _markUploadAt(region, now);
+      _log({ action: 'upload_success', region, status: res.status, id: json.id, deduped: !!json.deduped, label: isUserCorrection ? 'user_correction' : null, byteSize: blob.size });
       return {
         ok: true,
         id: json.id,
@@ -216,6 +259,7 @@
         rateRemaining: json.rate_remaining
       };
     } catch (e) {
+      _log({ action: 'upload_failed', region, error: e && e.message || 'fetch_failed' });
       return { ok: false, error: e && e.message || 'fetch_failed' };
     }
   }
@@ -229,12 +273,16 @@
    */
   async function downloadLatestTraineddata(opts) {
     opts = opts || {};
-    if (!_isAuthed()) return { ok: false, skipped: true, reason: 'not_authed' };
+    if (!_isAuthed()) {
+      _log({ action: 'traineddata_skip', reason: 'not_authed' });
+      return { ok: false, skipped: true, reason: 'not_authed' };
+    }
 
     if (!opts.force) {
       try {
         const last = parseInt(localStorage.getItem(TRAINEDDATA_LAST_CHECK_KEY) || '0', 10);
         if (Number.isFinite(last) && (Date.now() - last) < TRAINEDDATA_INTERVAL_MS) {
+          _log({ action: 'traineddata_skip', reason: 'within_interval' });
           return { ok: false, skipped: true, reason: 'within_interval' };
         }
       } catch (_) {}
@@ -252,10 +300,15 @@
       });
       try { localStorage.setItem(TRAINEDDATA_LAST_CHECK_KEY, String(Date.now())); } catch (_) {}
       if (res.status === 304) {
+        _log({ action: 'traineddata_skip', status: 304, reason: 'etag_match' });
         return { ok: true, status: 304, skipped: true, reason: 'etag_match' };
       }
       if (!res.ok) {
-        if (res.status === 401 || res.status === 403) return { ok: false, error: 'auth_expired', status: res.status };
+        if (res.status === 401 || res.status === 403) {
+          _log({ action: 'traineddata_failed', status: res.status, error: 'auth_expired' });
+          return { ok: false, error: 'auth_expired', status: res.status };
+        }
+        _log({ action: 'traineddata_failed', status: res.status, error: 'http_' + res.status });
         return { ok: false, error: 'http_' + res.status };
       }
 
@@ -263,12 +316,14 @@
       const versionHdr = res.headers.get('X-Model-Version') || '';
       const buf = await res.arrayBuffer();
       if (!buf || buf.byteLength < 1024) {
+        _log({ action: 'traineddata_failed', error: 'invalid_payload', size: buf && buf.byteLength });
         return { ok: false, error: 'invalid_payload', size: buf && buf.byteLength };
       }
 
       // main process로 파일 쓰기 위임
       const api = global.api || null;
       if (!api || typeof api.cloudWriteTraineddata !== 'function') {
+        _log({ action: 'traineddata_failed', error: 'ipc_unavailable' });
         return { ok: false, error: 'ipc_unavailable' };
       }
       const writeRes = await api.cloudWriteTraineddata({
@@ -276,6 +331,7 @@
         version: versionHdr || null
       });
       if (!writeRes || !writeRes.ok) {
+        _log({ action: 'traineddata_failed', error: (writeRes && writeRes.error) || 'write_failed' });
         return { ok: false, error: (writeRes && writeRes.error) || 'write_failed' };
       }
 
@@ -284,6 +340,7 @@
         if (versionHdr) localStorage.setItem(MODEL_VERSION_KEY, versionHdr);
       } catch (_) {}
 
+      _log({ action: 'traineddata_success', status: 200, version: versionHdr || null, size: buf.byteLength });
       return {
         ok: true,
         status: 200,
@@ -293,6 +350,7 @@
         size: buf.byteLength
       };
     } catch (e) {
+      _log({ action: 'traineddata_failed', error: e && e.message || 'fetch_failed' });
       return { ok: false, error: e && e.message || 'fetch_failed' };
     }
   }
@@ -323,6 +381,38 @@
     try { return localStorage.getItem(MODEL_VERSION_KEY) || null; } catch (_) { return null; }
   }
 
+  function _traineddataCheckedAt() {
+    try {
+      const n = parseInt(localStorage.getItem(TRAINEDDATA_LAST_CHECK_KEY) || '0', 10);
+      return Number.isFinite(n) ? n : 0;
+    } catch (_) { return 0; }
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // [v2.0.0 P3+] getDebugInfo — 진단 패널/AI 분석용 스냅샷
+  // ─────────────────────────────────────────────────────────────────
+  function getDebugInfo() {
+    return {
+      config: {
+        baseUrl: _baseUrl(),
+        syncEnabled: isSyncEnabled(),
+        dailyCapCount: DAILY_SAMPLE_CAP,
+        dailyCapBytes: DAILY_BYTE_CAP,
+        regionThrottleMs: REGION_THROTTLE_MS,
+        traineddataIntervalMs: TRAINEDDATA_INTERVAL_MS
+      },
+      state: {
+        isAuthed: _isAuthed(),
+        dailyQuota: getDayQuota(),
+        lastUploadByRegion: _getLastUploadByRegion(),
+        modelVersion: getModelVersion(),
+        traineddataCheckedAt: _traineddataCheckedAt()
+      },
+      actionLog: _actionLog.slice(-30),
+      ts: Date.now()
+    };
+  }
+
   global.CloudSync = {
     uploadSample,
     downloadLatestTraineddata,
@@ -331,11 +421,13 @@
     isSyncEnabled,
     setSyncEnabled,
     getDayQuota,
+    getDebugInfo,
     // constants exposed for UI
     REGION_THROTTLE_MS,
     DAILY_SAMPLE_CAP,
     DAILY_BYTE_CAP,
     TRAINEDDATA_INTERVAL_MS,
-    _baseUrl
+    _baseUrl,
+    _log
   };
 })(typeof window !== 'undefined' ? window : this);

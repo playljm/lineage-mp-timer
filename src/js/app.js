@@ -7963,19 +7963,240 @@
 
   function _cloudInit() {
     bindCloudSyncEvents();
+    bindCloudDiagEvents();
     _cloudRefreshAuthUI();
     _cloudRefreshQuota();
     _cloudRefreshModelVersion();
     _cloudSetStatus('대기');
+    _cloudDiagRefreshSummary();
     // 1분마다 quota 갱신 (다른 탭/세션에서 업로드 시 동기화)
     setInterval(() => {
       _cloudRefreshQuota();
       _cloudRefreshModelVersion();
     }, 60 * 1000);
+    // [v2.0.0+] 5초마다 diag summary line 갱신 (sync 동작 가시화)
+    setInterval(_cloudDiagRefreshSummary, 5000);
     // 앱 시작 시 traineddata 자동 체크 (24h 내면 자동 skip)
     if (window.CloudAuth && window.CloudAuth.isCloudAuthed()) {
       setTimeout(() => _cloudCheckTraineddata({ force: false }).catch(() => {}), 5000);
     }
+  }
+
+  // ========== [v2.0.0+] Cloud Diagnostics Panel ==========
+  const cloudDiagDom = {
+    statusIcon: $('cloud-diag-status-icon'),
+    statusText: $('cloud-diag-status-text'),
+    statsCounter: $('cloud-diag-stats-counter'),
+    btnDiag: $('cloud-diag-btn'),
+    btnTestUpload: $('cloud-test-upload-btn'),
+    details: $('cloud-diag-details'),
+    output: $('cloud-diag-output'),
+    btnCopy: $('cloud-diag-copy-btn'),
+    btnSend: $('cloud-diag-send-btn')
+  };
+
+  // diag summary 표시 — sync 진행 가시화 (5초 주기 + 이벤트 시 즉시)
+  function _cloudDiagRefreshSummary() {
+    if (!cloudDiagDom.statusIcon || !cloudDiagDom.statusText) return;
+    let icon = '⏳', label = '상태 확인 중...', cls = '';
+    try {
+      const authed = !!(window.CloudAuth && window.CloudAuth.isCloudAuthed && window.CloudAuth.isCloudAuthed());
+      const syncOn = !!(window.CloudSync && window.CloudSync.isSyncEnabled && window.CloudSync.isSyncEnabled());
+      if (!authed) { icon = '⚠'; label = '로그인 안 됨 — 클라우드 sync 비활성'; cls = 'warn'; }
+      else if (!syncOn) { icon = '⚠'; label = '로그인 OK — 자동 업로드 토글 OFF'; cls = 'warn'; }
+      else {
+        // 최근 actionLog 분석 — 마지막 upload 결과로 ✅/⚠/❌ 분기
+        const dbg = (window.CloudSync && window.CloudSync.getDebugInfo) ? window.CloudSync.getDebugInfo() : null;
+        const log = (dbg && dbg.actionLog) || [];
+        const lastUpload = log.slice().reverse().find((e) => e && /^upload_/.test(e.action || ''));
+        if (!lastUpload) { icon = '💤'; label = '로그인 OK — 아직 업로드 시도 없음'; cls = 'warn'; }
+        else if (lastUpload.action === 'upload_success') {
+          icon = '✅'; cls = 'ok';
+          const ago = Math.max(0, Math.round((Date.now() - lastUpload.timestamp) / 1000));
+          label = '✅ ' + (lastUpload.region || '?').toUpperCase() + ' 업로드 성공 (' + ago + 's 전)';
+        } else if (lastUpload.action === 'upload_skip') {
+          icon = '⚠'; cls = 'warn';
+          label = '⚠ 마지막 ' + (lastUpload.region || '?').toUpperCase() + ' skip: ' + (lastUpload.reason || 'unknown');
+        } else if (lastUpload.action === 'upload_failed') {
+          icon = '❌'; cls = 'err';
+          label = '❌ 마지막 ' + (lastUpload.region || '?').toUpperCase() + ' 실패: ' + (lastUpload.error || lastUpload.status || 'unknown');
+        }
+      }
+    } catch (_) { /* never throw */ }
+    cloudDiagDom.statusIcon.textContent = icon;
+    cloudDiagDom.statusIcon.classList.remove('ok', 'warn', 'err');
+    if (cls) cloudDiagDom.statusIcon.classList.add(cls);
+    cloudDiagDom.statusText.textContent = label;
+    cloudDiagDom.statusText.classList.remove('ok', 'warn', 'err');
+    if (cls) cloudDiagDom.statusText.classList.add(cls);
+    if (cloudDiagDom.statsCounter && window.CloudSync && window.CloudSync.getDayQuota) {
+      const q = window.CloudSync.getDayQuota();
+      cloudDiagDom.statsCounter.textContent = q.count + ' / ' + q.capCount + ' sample';
+    }
+  }
+
+  function _cloudDiagCollect() {
+    const out = {
+      ts: Date.now(),
+      tsIso: new Date().toISOString(),
+      app: { version: (dom.appVersion && dom.appVersion.textContent) || 'unknown' }
+    };
+    try { out.cloudSync = window.CloudSync && window.CloudSync.getDebugInfo ? window.CloudSync.getDebugInfo() : { error: 'cloudSync_unavailable' }; }
+    catch (e) { out.cloudSync = { error: 'cloudSync_throw: ' + (e && e.message) }; }
+    try { out.cloudAuth = window.CloudAuth && window.CloudAuth.getDebugInfo ? window.CloudAuth.getDebugInfo() : { error: 'cloudAuth_unavailable' }; }
+    catch (e) { out.cloudAuth = { error: 'cloudAuth_throw: ' + (e && e.message) }; }
+    try { out.vision = window.VisionCrossCheck && window.VisionCrossCheck.getDebugInfo ? window.VisionCrossCheck.getDebugInfo() : { error: 'vision_unavailable' }; }
+    catch (e) { out.vision = { error: 'vision_throw: ' + (e && e.message) }; }
+    try {
+      out.captureState = {
+        hasMpCanvas: !!(typeof latestCaptureCanvas !== 'undefined' && latestCaptureCanvas.mp),
+        hasExpCanvas: !!(typeof latestCaptureCanvas !== 'undefined' && latestCaptureCanvas.exp),
+        hasLevelCanvas: !!(typeof latestCaptureCanvas !== 'undefined' && latestCaptureCanvas.level),
+        hasAdenaCanvas: !!(typeof latestCaptureCanvas !== 'undefined' && latestCaptureCanvas.adena),
+        recentOcr: (typeof recentOcrResults !== 'undefined') ? Object.assign({}, recentOcrResults) : null
+      };
+    } catch (_) { out.captureState = { error: 'captureState_unavailable' }; }
+    return out;
+  }
+
+  function _cloudDiagSetOutput(text) {
+    if (!cloudDiagDom.output) return;
+    cloudDiagDom.output.textContent = String(text || '');
+  }
+
+  function _cloudDiagOpen() {
+    if (cloudDiagDom.details && !cloudDiagDom.details.open) cloudDiagDom.details.open = true;
+  }
+
+  async function _cloudDiagHandleRun() {
+    _cloudDiagOpen();
+    _cloudDiagSetOutput('진단 수집 중...');
+    try {
+      const snap = _cloudDiagCollect();
+      _cloudDiagSetOutput(JSON.stringify(snap, null, 2));
+      _cloudSetStatus('🔍 진단 결과 dump 완료', 'success');
+    } catch (e) {
+      _cloudDiagSetOutput('진단 수집 예외: ' + (e && e.message));
+      _cloudSetStatus('🔍 진단 예외: ' + (e && e.message), 'error');
+    }
+    _cloudDiagRefreshSummary();
+  }
+
+  async function _cloudDiagHandleTestUpload() {
+    _cloudDiagOpen();
+    if (!window.CloudAuth || !window.CloudAuth.isCloudAuthed()) {
+      _cloudDiagSetOutput('❌ 테스트 업로드 실패: 먼저 로그인하세요 (not_authed)');
+      _cloudSetStatus('🧪 테스트 업로드: 로그인 필요', 'error');
+      return;
+    }
+    if (!window.CloudSync || !window.CloudSync.isSyncEnabled()) {
+      _cloudDiagSetOutput('❌ 테스트 업로드 실패: 자동 업로드 토글 OFF (sync_disabled)\n\n토글을 켜고 다시 시도하세요.');
+      _cloudSetStatus('🧪 테스트 업로드: sync 토글 OFF', 'error');
+      return;
+    }
+    let canvas = null;
+    try { canvas = (typeof latestCaptureCanvas !== 'undefined') ? latestCaptureCanvas.adena : null; } catch (_) {}
+    if (!canvas) {
+      _cloudDiagSetOutput('❌ 테스트 업로드 실패: ADENA 캡처 캔버스 없음.\n\n트래커 시작 후 ADENA 영역이 한 번 이상 OCR된 후 다시 시도하세요.');
+      _cloudSetStatus('🧪 테스트 업로드: ADENA 캡처 없음', 'error');
+      return;
+    }
+    let dataUrl;
+    try { dataUrl = canvas.toDataURL('image/png'); } catch (e) {
+      _cloudDiagSetOutput('❌ canvas.toDataURL 실패: ' + (e && e.message));
+      return;
+    }
+    const ocrText = (typeof recentOcrResults !== 'undefined' && recentOcrResults.adena) || '';
+    const ocrCandidates = { paddle: ocrText, tess: ocrText };
+    _cloudDiagSetOutput('🧪 ADENA 테스트 업로드 진행 중... (label="test_upload")');
+    _cloudSetStatus('🧪 ADENA 테스트 업로드 진행 중...', '');
+    try {
+      // throttle bypass: label 전달 → cloud-sync.js가 priority 처리
+      const res = await window.CloudSync.uploadSample('adena', dataUrl, ocrCandidates, 'test_upload', 1.0);
+      const lines = ['🧪 테스트 업로드 결과:', JSON.stringify(res, null, 2)];
+      if (res && res.ok) {
+        _cloudSetStatus('🧪 테스트 업로드 성공 (id=' + (res.id || '?') + ')', 'success');
+        lines.unshift('✅ 업로드 성공');
+      } else {
+        const reason = (res && (res.error || res.reason)) || 'unknown';
+        _cloudSetStatus('🧪 테스트 업로드 실패: ' + reason, 'error');
+        lines.unshift('❌ 업로드 실패: ' + reason);
+      }
+      _cloudDiagSetOutput(lines.join('\n'));
+      _cloudRefreshQuota();
+    } catch (e) {
+      _cloudDiagSetOutput('❌ 테스트 업로드 예외: ' + (e && e.message));
+      _cloudSetStatus('🧪 테스트 업로드 예외: ' + (e && e.message), 'error');
+    }
+    _cloudDiagRefreshSummary();
+  }
+
+  async function _cloudDiagHandleCopy() {
+    if (!cloudDiagDom.output) return;
+    const text = cloudDiagDom.output.textContent || '';
+    if (!text || text === '진단 버튼을 눌러주세요.') {
+      _cloudSetStatus('📋 복사 실패: 먼저 진단을 실행하세요', 'error');
+      return;
+    }
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        // fallback
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } finally { document.body.removeChild(ta); }
+      }
+      _cloudSetStatus('📋 클립보드 복사 완료 (' + text.length + ' chars)', 'success');
+    } catch (e) {
+      _cloudSetStatus('📋 복사 실패: ' + (e && e.message), 'error');
+    }
+  }
+
+  async function _cloudDiagHandleSend() {
+    if (!cloudDiagDom.output) return;
+    let text = cloudDiagDom.output.textContent || '';
+    if (!text || text === '진단 버튼을 눌러주세요.') {
+      // 자동으로 진단 dump 한 번 생성
+      try { text = JSON.stringify(_cloudDiagCollect(), null, 2); _cloudDiagSetOutput(text); }
+      catch (_) { _cloudSetStatus('📤 전송 실패: 진단 수집 불가', 'error'); return; }
+    }
+    if (!window.CloudAuth || !window.CloudAuth.isCloudAuthed()) {
+      _cloudSetStatus('📤 전송 실패: 먼저 로그인하세요', 'error');
+      return;
+    }
+    let payload;
+    try { payload = JSON.parse(text); } catch (_) { payload = { rawText: text }; }
+    payload._meta = { source: 'lineage-mp-timer client diag', sentAt: new Date().toISOString() };
+    _cloudSetStatus('📤 백엔드 debug-log 전송 중...', '');
+    try {
+      const baseUrl = (window.CloudSync && window.CloudSync._baseUrl) ? window.CloudSync._baseUrl() : 'https://ramin-5gt.pages.dev/api/lineage-hub';
+      const headers = Object.assign({
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      }, (window.CloudAuth && window.CloudAuth.buildAuthHeaders) ? window.CloudAuth.buildAuthHeaders() : {});
+      const res = await fetch(baseUrl + '/debug-log', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        _cloudSetStatus('📤 ✅ 전송 완료. AI가 확인합니다. (status=' + res.status + ')', 'success');
+      } else {
+        _cloudSetStatus('📤 전송 실패: HTTP ' + res.status, 'error');
+      }
+    } catch (e) {
+      _cloudSetStatus('📤 전송 예외: ' + (e && e.message), 'error');
+    }
+  }
+
+  function bindCloudDiagEvents() {
+    if (cloudDiagDom.btnDiag) cloudDiagDom.btnDiag.addEventListener('click', _cloudDiagHandleRun);
+    if (cloudDiagDom.btnTestUpload) cloudDiagDom.btnTestUpload.addEventListener('click', _cloudDiagHandleTestUpload);
+    if (cloudDiagDom.btnCopy) cloudDiagDom.btnCopy.addEventListener('click', _cloudDiagHandleCopy);
+    if (cloudDiagDom.btnSend) cloudDiagDom.btnSend.addEventListener('click', _cloudDiagHandleSend);
   }
 
   // ========== Init ==========
