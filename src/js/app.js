@@ -4434,7 +4434,7 @@
     //   사용자 케이스: anchor 보정 후 60초 내 진단 리포트 생성 시 EXP OCR 호출 안 됨 → 검증 불가
     //   해결: OCR은 호출하되 parsed=null로 anchor 갱신만 차단
     if (r && isUserEditing('exp')) {
-      pushHybridLog('EXP 🔒 사용자 잠금 (60s): ' + (r.parsed && r.parsed.exp));
+      pushHybridLog('EXP 🔒 사용자 잠금 (180s): ' + (r.parsed && r.parsed.exp));
       return { ...r, parsed: null };
     }
     if (r && r.parsed && Number.isFinite(r.parsed.exp)) {
