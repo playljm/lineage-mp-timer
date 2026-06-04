@@ -1,0 +1,192 @@
+/* App shell layout — built on the design-system tokens. */
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* --- titlebar (drag region) --- */
+.titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-4);
+  -webkit-app-region: drag;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+}
+.titlebar__title {
+  font-size: var(--text-sm);
+  color: var(--text-dim);
+}
+.titlebar__title small {
+  color: var(--accent);
+  margin-left: var(--space-1);
+}
+.titlebar__actions {
+  display: flex;
+  gap: var(--space-1);
+  -webkit-app-region: no-drag;
+}
+
+/* --- summary bar --- */
+.summary-bar {
+  display: flex;
+  gap: var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+/* --- tabs + panes --- */
+.tabs {
+  padding: 0 var(--space-3);
+  background: var(--bg-elevated);
+}
+.panes {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-4);
+}
+.tab-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.tab-pane[hidden] {
+  display: none;
+}
+
+/* --- monitor --- */
+.hero-card {
+  text-align: center;
+}
+.hero-countdown {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-hero);
+  font-weight: 700;
+  color: var(--accent);
+  text-shadow: var(--glow);
+  line-height: 1.05;
+  margin: var(--space-2) 0;
+}
+.hero-sub {
+  font-size: var(--text-sm);
+  color: var(--muted);
+  margin-bottom: var(--space-4);
+}
+.gauge {
+  position: relative;
+  height: 26px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+.gauge__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  background: linear-gradient(90deg, var(--neon-dim), var(--accent));
+  transition: width var(--dur) var(--ease);
+}
+.gauge__text {
+  position: relative;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 26px;
+  color: var(--text);
+  mix-blend-mode: difference;
+}
+.controls {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: center;
+  margin: var(--space-4) 0 var(--space-2);
+}
+.tick-info {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: center;
+  margin-top: var(--space-3);
+}
+
+.tracker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: var(--space-3);
+}
+
+/* --- compact HUD --- */
+body:not(.compact-mode) #compact-hud {
+  display: none;
+}
+body.compact-mode .app-shell {
+  display: none;
+}
+.compact {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  -webkit-app-region: drag;
+  background: var(--bg);
+}
+.compact__heroWrap {
+  text-align: center;
+}
+.compact__l {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  display: block;
+}
+.compact__hero {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  color: var(--accent);
+  text-shadow: var(--glow);
+}
+.compact__grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-2);
+}
+.compact__cell {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  text-align: center;
+}
+.compact__v {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-md);
+  color: var(--text);
+}
+
+/* --- forms shared --- */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-3);
+}
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}

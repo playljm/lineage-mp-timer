@@ -1,0 +1,12 @@
+/** OCR core public surface. Canvas/DOM-free — usable in renderer, worker, or tests. */
+export * from './types'
+export * from './imaging'
+export * from './segmentation'
+export * from './template-matcher'
+export * from './parser'
+export * from './text-recognizer'
+export * from './bar-fill'
+export * from './recognizer'
+export * from './tracker'
+export * from './roi-detector'
+export * from './learn'

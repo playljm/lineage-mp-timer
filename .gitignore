@@ -1,6 +1,9 @@
 node_modules/
 dist/
+out/
 *.log
+*.tsbuildinfo
+.vite/
 .omc/state/
 .omc/research/
 .omc/logs/
@@ -13,4 +16,3 @@ Thumbs.db
 .omc/sessions/
 .omc/plans/
 .omc/project-memory.json
-v1.8.2.patch

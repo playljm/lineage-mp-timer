@@ -1,0 +1,419 @@
+/* =============================================================================
+   Lineage MP Timer v3.0 — Design System
+   Single source of truth for tokens, themes, and component primitives.
+   Fixes the v2.x issues: undefined --accent, no token scale, 3 disjoint visual
+   languages. Every component is driven by tokens so the 6 neon themes (and the
+   overlay/picker) stay consistent.
+   ============================================================================= */
+
+:root {
+  /* --- spacing scale (4px base) --- */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* --- radius --- */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+
+  /* --- type scale --- */
+  --text-xs: 11px;
+  --text-sm: 13px;
+  --text-md: 15px;
+  --text-lg: 19px;
+  --text-xl: 26px;
+  --text-2xl: 38px;
+  --text-hero: 56px;
+
+  --font-ui: 'Noto Sans KR', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Share Tech Mono', ui-monospace, monospace;
+
+  /* --- elevation --- */
+  --elevation-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --elevation-2: 0 6px 18px rgba(0, 0, 0, 0.5);
+
+  /* --- motion --- */
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-fast: 120ms;
+  --dur: 220ms;
+
+  /* --- base palette (dark) --- */
+  --bg: #05080a;
+  --bg-elevated: #0b1014;
+  --panel: #0e151a;
+  --panel-2: #131c22;
+  --border: #1d2a32;
+  --text: #e7f3ef;
+  --text-dim: #9fb4ad;
+  --muted: #8aa39b; /* raised from v2.x #6d8379 for contrast */
+
+  /* --- semantic status --- */
+  --color-success: #46e6a0;
+  --color-warn: #ffcf5c;
+  --color-danger: #ff6b73;
+  --color-info: #57c7ff;
+
+  /* --- THEME accent (overridden per theme) --- */
+  --neon: #00ffaa;
+  --neon-soft: #5cf0b3;
+  --neon-dim: #0c3a2c;
+  --accent: var(--neon); /* the variable v2.x left undefined everywhere */
+  --accent-contrast: #04130d;
+  --glow: 0 0 8px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* --- 6 neon themes: only the accent triad changes; everything else is tokens --- */
+body.theme-emerald {
+  --neon: #00ffaa;
+  --neon-soft: #5cf0b3;
+  --neon-dim: #0c3a2c;
+  --accent-contrast: #04130d;
+}
+body.theme-cyan {
+  --neon: #2fe6ff;
+  --neon-soft: #8af1ff;
+  --neon-dim: #0a3540;
+  --accent-contrast: #03161b;
+}
+body.theme-violet {
+  --neon: #b388ff;
+  --neon-soft: #d4baff;
+  --neon-dim: #2a1f47;
+  --accent-contrast: #140a24;
+}
+body.theme-amber {
+  --neon: #ffc24d;
+  --neon-soft: #ffd98a;
+  --neon-dim: #43340f;
+  --accent-contrast: #1b1304;
+}
+body.theme-rose {
+  --neon: #ff6fa5;
+  --neon-soft: #ffa9c8;
+  --neon-dim: #44182b;
+  --accent-contrast: #1c0712;
+}
+body.theme-lime {
+  --neon: #b6ff3c;
+  --neon-soft: #d4ff85;
+  --neon-dim: #2c3f0c;
+  --accent-contrast: #0f1603;
+}
+body.theme-mono {
+  --neon: #d7e6e0;
+  --neon-soft: #eef6f3;
+  --neon-dim: #28332f;
+  --accent-contrast: #0a0f0d;
+}
+body {
+  --accent: var(--neon);
+  --glow: 0 0 8px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* --- reset / base --- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+html,
+body {
+  height: 100%;
+}
+body {
+  font-family: var(--font-ui);
+  font-size: var(--text-md);
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+button,
+input,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* --- component: Button --- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+.btn:hover {
+  border-color: var(--accent);
+  background: var(--bg-elevated);
+}
+.btn:active {
+  transform: translateY(1px);
+}
+.btn--primary {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: transparent;
+  font-weight: 600;
+  box-shadow: var(--glow);
+}
+.btn--primary:hover {
+  background: var(--neon-soft);
+}
+.btn--ghost {
+  background: transparent;
+}
+.btn--sm {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-sm);
+}
+.btn--icon {
+  padding: var(--space-2);
+  aspect-ratio: 1;
+}
+
+/* --- component: Card / Panel --- */
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  box-shadow: var(--elevation-1);
+}
+.card__title {
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: var(--space-3);
+}
+
+/* --- component: StatChip (shared by summary bar + compact HUD) --- */
+.stat-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.stat-chip__label {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+.stat-chip__value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  font-size: var(--text-md);
+}
+.stat-chip__value--accent {
+  color: var(--accent);
+}
+
+/* --- component: Field --- */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.field label {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.field input,
+.field select {
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.field input:focus,
+.field select:focus {
+  border-color: var(--accent);
+}
+
+/* --- component: Toggle --- */
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  /* These are <button> elements — reset the UA chrome (was rendering as a white
+     box with invisible light-on-white label text). */
+  background: none;
+  border: none;
+  padding: var(--space-1) 0;
+  margin: 0;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+}
+.toggle__track {
+  width: 38px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  position: relative;
+  transition: background var(--dur) var(--ease);
+}
+.toggle__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition:
+    transform var(--dur) var(--ease),
+    background var(--dur) var(--ease);
+}
+.toggle[aria-checked='true'] .toggle__track {
+  background: var(--neon-dim);
+  border-color: var(--accent);
+}
+.toggle[aria-checked='true'] .toggle__thumb {
+  transform: translateX(16px);
+  background: var(--accent);
+}
+
+/* --- component: Tabs --- */
+.tabs {
+  display: flex;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--border);
+}
+.tab {
+  padding: var(--space-3) var(--space-4);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease);
+}
+.tab[aria-selected='true'] {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* --- component: Badge --- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  background: var(--neon-dim);
+  color: var(--accent);
+}
+
+/* --- component: Drawer (collapsed diagnostics) --- */
+.drawer > summary {
+  cursor: pointer;
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-dim);
+  font-size: var(--text-sm);
+  list-style: none;
+}
+.drawer > summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: var(--space-2);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.drawer[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+/* --- status dot --- */
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.dot--ok {
+  background: var(--color-success);
+  box-shadow: 0 0 6px var(--color-success);
+}
+.dot--warn {
+  background: var(--color-warn);
+}
+.dot--off {
+  background: var(--muted);
+}
+
+/* --- themed scrollbars (was OS-default light) --- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--bg);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+
+/* --- range input themed to accent --- */
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--panel-2);
+}
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+/* --- accessibility: respect reduced motion (v2.x ignored this) --- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

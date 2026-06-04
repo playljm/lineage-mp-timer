@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MP 영역 선택</title>
+    <link rel="stylesheet" href="./src/overlay.css" />
+  </head>
+  <body>
+    <!-- Crosshair guide lines (follow the cursor before/while selecting) -->
+    <div id="cross-h" class="crosshair"></div>
+    <div id="cross-v" class="crosshair"></div>
+
+    <!-- Hint bar with on-screen Confirm/Cancel buttons for discoverability -->
+    <div id="info" role="status" aria-live="polite">
+      <span id="info-msg">📷 영역을 드래그로 선택하세요</span>
+      <small id="info-hint">
+        <b>L</b> 루페 source 변경 &nbsp;·&nbsp; <b>Esc</b> 취소
+      </small>
+      <div id="actions">
+        <button id="btn-confirm" type="button" disabled>확정 (Enter)</button>
+        <button id="btn-cancel" type="button">취소 (Esc)</button>
+      </div>
+    </div>
+
+    <!-- Drag selection rectangle with corner handles + live coords readout -->
+    <div id="selection" aria-hidden="true">
+      <div id="coords">0×0</div>
+      <div class="handle tl"></div>
+      <div class="handle tr"></div>
+      <div class="handle bl"></div>
+      <div class="handle br"></div>
+    </div>
+
+    <!-- Loupe magnifier: hidden source video feeds the zoomed canvas -->
+    <video id="loupe-video" muted autoplay playsinline></video>
+    <div id="loupe-container" aria-hidden="true">
+      <canvas id="loupe-canvas" width="280" height="200"></canvas>
+      <div id="loupe-info">5x 확대 · 마우스 주변</div>
+    </div>
+
+    <script type="module" src="./src/overlay.ts"></script>
+  </body>
+</html>

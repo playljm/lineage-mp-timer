@@ -1,43 +1,54 @@
 {
   "name": "lineage-mp-timer",
-  "version": "2.0.0",
-  "description": "리니지 클래식 MP 자연회복 완충 시간 계산 + 알림 Electron 앱 (PaddleOCR 빌드)",
-  "main": "electron/main.js",
+  "version": "3.0.0",
+  "description": "리니지 클래식 MP 자연회복 완충 타이머 + EXP/아데나 트래커 (TS/Vite 리뉴얼, 바-픽셀 + 유저 디지트 템플릿 OCR)",
+  "type": "module",
+  "main": "out/main/index.js",
+  "author": "playljm",
+  "license": "MIT",
   "scripts": {
-    "start": "electron .",
-    "dev": "electron . --dev",
-    "build": "electron-builder",
-    "build:portable": "electron-builder --win portable",
-    "dist": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-distribute.ps1",
-    "test": "node test/engine.test.js && node test/bayesian.test.js"
+    "dev": "electron-vite dev",
+    "start": "electron-vite preview",
+    "build": "electron-vite build",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:ocr": "vitest run test/ocr",
+    "dist": "electron-vite build && electron-builder",
+    "dist:portable": "electron-vite build && electron-builder --win portable"
   },
   "keywords": [
     "lineage",
     "lineage-classic",
     "mp-timer",
-    "electron"
+    "electron",
+    "ocr"
   ],
-  "author": "",
-  "license": "MIT",
   "devDependencies": {
-    "electron": "^33.0.0",
+    "@types/node": "^22.10.0",
+    "@types/pngjs": "^6.0.5",
+    "electron": "^33.2.0",
     "electron-builder": "^24.13.3",
-    "pngjs": "^7.0.0"
+    "electron-vite": "^5.0.0",
+    "pngjs": "^7.0.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "vitest": "^3.0.0"
+  },
+  "dependencies": {
+    "tesseract.js": "^7.0.0"
   },
   "build": {
-    "appId": "com.lineage.mptimer.paddle",
-    "productName": "LineageMPTimerPaddle",
+    "appId": "com.lineage.mptimer",
+    "productName": "LineageMPTimer",
     "directories": {
-      "output": "dist"
+      "output": "dist",
+      "buildResources": "build"
     },
     "files": [
-      "electron/**/*",
-      "src/**/*",
-      "node_modules/tesseract.js/**/*",
-      "node_modules/tesseract.js-core/**/*",
-      "node_modules/@paddlejs-models/**/*",
-      "node_modules/@paddlejs/**/*",
-      "node_modules/@paddlejs-mediapipe/**/*",
+      "out/**/*",
       "package.json"
     ],
     "extraResources": [
@@ -58,7 +69,7 @@
         "from": "build/tessdata",
         "to": "tesseract/tessdata",
         "filter": [
-          "*.traineddata*"
+          "eng.traineddata*"
         ]
       }
     ],
@@ -66,8 +77,7 @@
       "target": [
         "nsis",
         "portable"
-      ],
-      "icon": "build/icon.ico"
+      ]
     },
     "nsis": {
       "oneClick": false,
@@ -78,9 +88,5 @@
     "portable": {
       "artifactName": "LineageMPTimer-${version}-portable.exe"
     }
-  },
-  "dependencies": {
-    "@paddlejs-models/ocr": "^1.2.4",
-    "tesseract.js": "^7.0.0"
   }
 }

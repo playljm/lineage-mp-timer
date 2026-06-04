@@ -1,0 +1,31 @@
+{
+  "//": "Node/Electron side: main, preload, shared, DOM-free core, tests, build configs. No DOM lib (enforces core purity).",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "forceConsistentCasingInFileNames": true,
+    "baseUrl": ".",
+    "paths": {
+      "@core/*": ["src/core/*"],
+      "@shared/*": ["src/shared/*"]
+    }
+  },
+  "include": [
+    "src/main",
+    "src/preload",
+    "src/shared",
+    "src/core",
+    "test",
+    "electron.vite.config.ts",
+    "vitest.config.ts"
+  ]
+}
