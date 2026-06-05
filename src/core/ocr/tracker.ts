@@ -680,7 +680,10 @@ export function createRegionTrackers(opts?: {
   // EXP/level/adena pin a manually-typed value for 10 min (auto-ROI can be unreliable).
   const MANUAL_LOCK_MS = 600_000
   return {
-    mp: new MpTracker(opts?.mp),
+    // MP changes fast in combat (a single cast drops it a lot). The bar-pixel source
+    // is high-confidence, so promote a genuinely-changed value after 3 consistent
+    // reads (~3s) instead of the default 5 — the displayed MP tracks reality sooner.
+    mp: new MpTracker({ anomalyConsistencyThreshold: 3, ...opts?.mp }),
     exp: new ExpTracker({ manualLockMs: MANUAL_LOCK_MS, ...opts?.exp }),
     level: new LevelTracker({ manualLockMs: MANUAL_LOCK_MS, ...opts?.level }),
     adena: new AdenaTracker({ manualLockMs: MANUAL_LOCK_MS, ...opts?.adena })

@@ -8,6 +8,22 @@
  *
  * This is the single most reliable signal in the whole system and should be the
  * default for MP whenever a bar ROI is available.
+ *
+ * ROBUSTNESS (v3.0.1) — two field-observed failure modes are now handled:
+ *
+ *  1. SATURATION. When the gauge's empty track is a colour close to the fill
+ *     (e.g. a muddy brown fill over a slightly darker brown track), a single fixed
+ *     colour tolerance counts empty columns as "filled" and the bar reads ~full
+ *     forever even as MP drains. We now sample the empty-track colour from the far
+ *     right of the bar and classify each column *relatively* (closer to fill than to
+ *     track), which separates the two even when they are similar.
+ *
+ *  2. TRANSIENT OCCLUSION. A skill effect / floating combat text / a mob standing in
+ *     front of the gauge punches a hole in the fill. The old left-to-right "stop at
+ *     the first gap" scan truncated at that hole and reported a false near-empty
+ *     value. We now find the boundary by scanning from the RIGHT for the rightmost
+ *     locally-dense fill edge, so an interior hole cannot truncate the measurement
+ *     and isolated stray columns cannot inflate it.
  */
 import type { RgbaImage } from './types'
 
@@ -20,11 +36,18 @@ export interface Rgb {
 export interface BarFillOptions {
   /** Calibrated fill colour. If omitted, it is auto-detected from the left interior. */
   refColor?: Rgb
+  /**
+   * Empty-track colour. If omitted, it is auto-detected from the far-right of the bar
+   * (which is empty whenever MP < ~100%). When present, columns are classified by
+   * relative distance (closer to fill than to track) — this is what defeats
+   * saturation when fill and track colours are similar.
+   */
+  emptyColor?: Rgb
   /** Max RGB euclidean distance to count a pixel as "fill". Default 70. */
   colorTolerance?: number
   /** Fraction of a column's rows that must be fill for the column to count. Default 0.3. */
   minColumnDensity?: number
-  /** Consecutive empty columns tolerated before the fill boundary is final. Default 4. */
+  /** @deprecated No longer used — the boundary is now found by a right-to-left dense-edge scan. */
   maxGap?: number
 }
 
@@ -33,7 +56,15 @@ export interface BarFillResult {
   totalColumns: number
   ratio: number
   fillColor: Rgb | null
+  /** The empty-track colour used for relative classification, or null (absolute mode). */
+  emptyColor: Rgb | null
 }
+
+/**
+ * Minimum fill↔track euclidean contrast (squared) below which the far-right sample is
+ * treated as "this bar is full, no usable empty sample" — falls back to absolute mode.
+ */
+const MIN_FILL_EMPTY_CONTRAST2 = 18 * 18
 
 function dist2(a: Rgb, r: number, g: number, b: number): number {
   const dr = a.r - r
@@ -78,42 +109,103 @@ export function detectFillColor(img: RgbaImage): Rgb | null {
   return { r: r / n, g: g / n, b: b / n }
 }
 
+/**
+ * Auto-detect the empty-track colour from the far-right of the bar. Whenever MP is
+ * below ~100% those columns are the empty gauge track. Returns null when the sample
+ * is basically the fill colour (bar is full → no usable empty reference).
+ */
+export function detectEmptyColor(
+  img: RgbaImage,
+  fillColor: Rgb,
+  sampleFrac = 0.08
+): Rgb | null {
+  const { width, height, data } = img
+  if (width === 0 || height === 0) return null
+  const x0 = Math.max(0, width - Math.max(2, Math.floor(width * sampleFrac)))
+  let r = 0
+  let g = 0
+  let b = 0
+  let n = 0
+  for (let y = 0; y < height; y++) {
+    for (let x = x0; x < width; x++) {
+      const p = (y * width + x) * 4
+      r += data[p]!
+      g += data[p + 1]!
+      b += data[p + 2]!
+      n++
+    }
+  }
+  if (n === 0) return null
+  const mean: Rgb = { r: r / n, g: g / n, b: b / n }
+  if (dist2(mean, fillColor.r, fillColor.g, fillColor.b) < MIN_FILL_EMPTY_CONTRAST2) return null
+  return mean
+}
+
 export function computeBarFill(img: RgbaImage, opts: BarFillOptions = {}): BarFillResult {
   const { width, height, data } = img
   const tolerance = opts.colorTolerance ?? 70
   const minDensity = opts.minColumnDensity ?? 0.3
-  const maxGap = opts.maxGap ?? 4
   const refColor = opts.refColor ?? detectFillColor(img)
 
   if (!refColor || width === 0 || height === 0) {
-    return { filledColumns: 0, totalColumns: width, ratio: 0, fillColor: refColor }
+    return { filledColumns: 0, totalColumns: width, ratio: 0, fillColor: refColor ?? null, emptyColor: null }
   }
 
+  const emptyColor = opts.emptyColor ?? detectEmptyColor(img, refColor)
   const tol2 = tolerance * tolerance
   const need = Math.max(1, Math.floor(height * minDensity))
-  let lastFilled = -1
-  let gap = 0
+
+  // 1) Classify each column as fill / not-fill. With an empty-track reference we use
+  //    relative distance (closer to fill than to track) so a similar-coloured track
+  //    is still rejected; otherwise we fall back to an absolute tolerance.
+  const colFilled: boolean[] = new Array(width)
   for (let x = 0; x < width; x++) {
     let cnt = 0
     for (let y = 0; y < height; y++) {
       const p = (y * width + x) * 4
-      if (dist2(refColor, data[p]!, data[p + 1]!, data[p + 2]!) <= tol2) cnt++
+      const r = data[p]!
+      const g = data[p + 1]!
+      const b = data[p + 2]!
+      const dFill = dist2(refColor, r, g, b)
+      let isFill: boolean
+      if (emptyColor) {
+        const dEmpty = dist2(emptyColor, r, g, b)
+        isFill = dFill < dEmpty && dFill <= tol2
+      } else {
+        isFill = dFill <= tol2
+      }
+      if (isFill) cnt++
     }
-    if (cnt >= need) {
-      lastFilled = x
-      gap = 0
-    } else if (lastFilled >= 0) {
-      gap++
-      if (gap > maxGap) break
+    colFilled[x] = cnt >= need
+  }
+
+  // 2) Boundary = rightmost filled column that has local fill support. Scanning from
+  //    the right means a transient interior occlusion (a hole in an otherwise full
+  //    bar) cannot truncate the measurement, while the local-density gate prevents an
+  //    isolated stray column on the right from inflating it.
+  const win = Math.max(3, Math.round(width * 0.04))
+  let boundary = -1
+  for (let x = width - 1; x >= 0; x--) {
+    if (!colFilled[x]) continue
+    let cnt = 0
+    let tot = 0
+    for (let k = Math.max(0, x - win + 1); k <= x; k++) {
+      tot++
+      if (colFilled[k]) cnt++
+    }
+    if (cnt / tot >= 0.5) {
+      boundary = x
+      break
     }
   }
 
-  const filledColumns = lastFilled + 1
+  const filledColumns = boundary + 1
   return {
     filledColumns,
     totalColumns: width,
     ratio: width > 0 ? filledColumns / width : 0,
-    fillColor: refColor
+    fillColor: refColor,
+    emptyColor: emptyColor ?? null
   }
 }
 
