@@ -52,7 +52,15 @@ export function learnFromCapture(
   }
 
   const mask = prepareRegionMask(image, region)
-  const glyphs = segmentGlyphs(mask)
+  let glyphs = segmentGlyphs(mask)
+  // EXP is rendered "DD.DDDD%" and the trailing "%" segments into extra blobs that
+  // get misread as digits. The numeric glyphs are left-aligned, so when the ROI is
+  // over-segmented we learn the leftmost `chars.length` glyphs (the real number) and
+  // drop the trailing "%" pieces. Other regions stay strict (noise can be on either
+  // side), so a mis-drawn ROI still can't silently contaminate their templates.
+  if (region === 'exp' && glyphs.length > chars.length) {
+    glyphs = glyphs.slice(0, chars.length)
+  }
   if (glyphs.length !== chars.length) {
     return {
       ok: false,

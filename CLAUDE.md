@@ -78,6 +78,10 @@ v2.x 간헐 오인식(0↔8, 4↔9, 6↔8)의 두 근본 원인(등폭 분할 / 
 - **타입 안전 IPC** (`shared/ipc-contract.ts`) — 채널 rename = 컴파일 에러. `window.api` 주요 메서드: `listDisplays`, `startRegionSelect`, `listWindows`, `resolveWindowSource`, `getResourcePaths`, `setAlwaysOnTop`, `minimizeWindow`/`hideWindow`/`closeWindow`, `toggleDevtools`, `setCompact`, `notifyComplete`, `setGlobalHotkeys`, `saveTrainingSample`/`savePendingSample`/`listPendingSamples`, `cloudLoginPopup`/`cloudWriteTraineddata`/`cloudRollbackTraineddata`, `saveDiagnosticReport`. 이벤트: `always-on-top-changed`, `hotkey`. 영역 선택 오버레이는 `window.overlayApi`.
 - **세그먼트 재계산** (`timer/mp-timer.ts`) — 실행 중 버프/위치/상태 변경 시 누적 MP + 현재 구간 진행분으로 정확한 완충 시각 재산출. Pause/Resume/Reset 지원.
 - **캡처 방식 2종** (`autoDetect.captureMode`): `screen`(모니터+수동 영역, 좌표는 디스플레이-로컬 물리px — 오버레이 `toDisplayRect`가 논리→물리 변환, `captureRegion`은 *재곱셈 없이* 1:1 크롭) / `window`(게임 창을 제목으로 캡처, 모니터 무관). 창 모드는 `detection.ts`가 매 시작 시 `resolveWindowSource(title)`로 휘발성 `window:HWND`를 재해결하고, `detectGameUiScaled`로 창 전체에서 ROI를 자동 도출해 **메모리 보관**(스토어 미오염). 검은 프레임/창 소실 시 self-heal 재탐색.
+- **영역 직접 지정(ROI) 편집기** (창 모드, `views/setup.ts`): 창 스냅샷(`detection.captureWindowFrame` → `screen-capture.captureFullDataUrl`)을 네이티브 1:1로 띄워 마우스 드래그로 항목별 ROI를 지정. `autoDetect.windowRoi`(창-프레임 물리px) 오버라이드로 저장 → `ensureWindowRois`가 자동 검출보다 우선 적용(`forceRoiRefresh`로 즉시 반영). 자동 ROI가 빗나가는 클라이언트 대응.
+- **수동 입력 잠금** (`tracker.ts` `manualLockMs`): `force`(수동 입력) 후 EXP/레벨/아데나는 10분간 OCR 무시(`user_locked`)로 입력값 고정. MP는 제외(bar-pixel 정확 + 계속 변함). 보정·학습 「인식:」 힌트는 **실제 사용값** 표시(거부/잠금 시 무시되는 OCR을 `(무시)`로 부가 노출).
+- **전역 단축키 동기화**: main이 시작 시 `DEFAULT_HOTKEYS` 등록하므로, 렌더러가 부팅 시 저장된 enable/disable을 `setGlobalHotkeys`로 동기화(안 그러면 끈 단축키가 재시작 때 부활). 재등록은 main-side `dispatchHotkey`로 일원화(`windows.ts`).
+- **폰트**: `Pretendard`(variable woff2) 번들(빌드 전용 devDependency — Vite가 `out/`에 인라인, exe 영향 +2MB). 폼 컨트롤 전역 테마(`.field` 밖 입력칸도 다크 테마, WCAG AAA).
 - Electron main: `getResourcePaths`(`paths.ts`)가 packaged(`resourcesPath/tesseract`) vs dev(`node_modules` + `build/tessdata`) 레이아웃을 구분, 누락 시 null → 렌더러 CDN 폴백.
 
 ## ⌨️ 단축키

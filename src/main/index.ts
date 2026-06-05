@@ -11,34 +11,13 @@
  */
 
 import { app, BrowserWindow } from 'electron'
-import {
-  createMainWindow,
-  createTray,
-  DEFAULT_HOTKEYS,
-  setQuitting,
-  toggleAlwaysOnTop,
-  toggleHide
-} from './windows'
+import { createMainWindow, createTray, DEFAULT_HOTKEYS, dispatchHotkey, setQuitting } from './windows'
 import { registerIpc } from './ipc'
 import { registerGlobalHotkeys, unregisterAllHotkeys } from './hotkeys'
 
 // Preserve the existing userData folder name so v2.x users keep their settings
 // and captured training data (%APPDATA%/LineageMPTimer).
 app.setName('LineageMPTimer')
-
-/** Map a global-hotkey action name onto its window behaviour. */
-function dispatchHotkey(action: string): void {
-  switch (action) {
-    case 'alwaysOnTop':
-      toggleAlwaysOnTop()
-      break
-    case 'toggleHide':
-      toggleHide()
-      break
-    default:
-      break
-  }
-}
 
 void app.whenReady().then(() => {
   createMainWindow()

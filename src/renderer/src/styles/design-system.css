@@ -32,8 +32,8 @@
   --text-2xl: 38px;
   --text-hero: 56px;
 
-  --font-ui: 'Noto Sans KR', 'Segoe UI', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Share Tech Mono', ui-monospace, monospace;
+  --font-ui: 'Pretendard Variable', Pretendard, 'Segoe UI', 'Apple SD Gothic Neo', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
 
   /* --- elevation --- */
   --elevation-1: 0 1px 2px rgba(0, 0, 0, 0.4);
@@ -149,13 +149,60 @@ select {
   outline-offset: 2px;
 }
 
+/* --- base form controls (themed) ---
+   Inputs NOT wrapped in `.field` (e.g. the 보정·학습 / 아이템 rows) used to fall back
+   to the UA white box, so the inherited light text was invisible (light-on-white).
+   Theme every text control globally; `.field` keeps only layout. */
+input[type='text'],
+input[type='number'],
+input[type='search'],
+input:not([type]),
+select,
+textarea {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  min-width: 0;
+}
+input::placeholder {
+  color: var(--muted);
+  opacity: 1; /* Firefox dims placeholders by default */
+}
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent);
+}
+/* Drop the outline only for pointer focus; keyboard focus keeps the
+   :focus-visible accent ring (a11y). */
+input:focus:not(:focus-visible),
+select:focus:not(:focus-visible),
+textarea:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* --- vertical stack utility (consistent rhythm between block children) --- */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.stack--tight {
+  gap: var(--space-2);
+}
+
 /* --- component: Button --- */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-4);
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  line-height: 1.2;
+  white-space: nowrap;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--panel-2);
@@ -188,7 +235,7 @@ select {
 }
 .btn--sm {
   padding: var(--space-1) var(--space-2);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
 }
 .btn--icon {
   padding: var(--space-2);
@@ -243,17 +290,8 @@ select {
   font-size: var(--text-xs);
   color: var(--muted);
 }
-.field input,
-.field select {
-  padding: var(--space-2) var(--space-3);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-}
-.field input:focus,
-.field select:focus {
-  border-color: var(--accent);
-}
+/* `.field` owns layout only; input/select chrome + focus come from the global
+   form-control rules above (kept here previously, now deduplicated). */
 
 /* --- component: Toggle --- */
 .toggle {

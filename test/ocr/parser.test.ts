@@ -17,6 +17,12 @@ describe('region parsing', () => {
     expect(parseRegionString('exp', '78.47472')).toEqual({ kind: 'exp', pct: 78.4747 })
   })
 
+  it('exp drops multiple phantom trailing glyphs ("%" → several blobs)', () => {
+    // Real user case: a wide auto-ROI captured "79.3390%" and the "%" segmented into
+    // three junk digits → raw "79.3390232". Truncating to 4 decimals recovers 79.3390.
+    expect(parseRegionString('exp', '79.3390232')).toEqual({ kind: 'exp', pct: 79.339 })
+  })
+
   it('level 1..99', () => {
     expect(parseRegionString('level', '32')).toEqual({ kind: 'level', level: 32 })
     expect(parseRegionString('level', '199')).toBeNull()

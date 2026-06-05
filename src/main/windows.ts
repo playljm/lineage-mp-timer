@@ -193,6 +193,25 @@ export function toggleAlwaysOnTop(): boolean {
   return next
 }
 
+/**
+ * Map a global-hotkey action name onto its main-side window behaviour. Shared by
+ * the startup registration and the IPC `setGlobalHotkeys` re-registration so a
+ * re-registered hotkey keeps working (the renderer does not handle these — they
+ * are main-window behaviours).
+ */
+export function dispatchHotkey(action: string): void {
+  switch (action) {
+    case 'alwaysOnTop':
+      toggleAlwaysOnTop()
+      break
+    case 'toggleHide':
+      toggleHide()
+      break
+    default:
+      break
+  }
+}
+
 /** Toggle window visibility. Used by the F2 hotkey. */
 export function toggleHide(): void {
   const win = getMainWindow()

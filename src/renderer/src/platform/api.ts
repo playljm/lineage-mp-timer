@@ -14,6 +14,8 @@ const stub: IpcApi = {
   listDisplays: missing('listDisplays'),
   startRegionSelect: missing('startRegionSelect'),
   getResourcePaths: missing('getResourcePaths'),
+  listWindows: missing('listWindows'),
+  resolveWindowSource: missing('resolveWindowSource'),
   setAlwaysOnTop: missing('setAlwaysOnTop'),
   minimizeWindow: missing('minimizeWindow'),
   hideWindow: missing('hideWindow'),

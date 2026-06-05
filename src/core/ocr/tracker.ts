@@ -46,6 +46,7 @@ export interface ObserveResult<V> {
 /** Why `observe()` returned the verdict it did. */
 export type ObserveReason =
   | 'user_force' // caller forced the value (manual entry / tracker-now)
+  | 'user_locked' // rejected: a manual value is still pinned (within the lock window)
   | 'reject' // failed shape validation
   | 'init_pending' // no anchor yet, awaiting N consistent observations
   | 'init_consistency' // anchor bootstrapped after N consistent observations
@@ -75,6 +76,14 @@ export interface BaseTrackerOptions {
   anomalyConsistencyThreshold?: number
   /** EMA weight on the newest rate sample. Default 0.3. */
   rateEmaAlpha?: number
+  /**
+   * After a manual (`force`) observation, ignore OCR observations for this many ms
+   * so a user-typed value is not immediately overwritten by a (possibly misread)
+   * auto value. 0 = no lock (default). MP uses 0 (its bar-pixel source is accurate
+   * and MP changes constantly); EXP/level/adena use a long lock so a typed value
+   * sticks where auto-ROI is unreliable.
+   */
+  manualLockMs?: number
 }
 
 /** Extra `observe()` controls. */
@@ -112,11 +121,14 @@ export abstract class BaseTracker<V> {
   protected readonly initConsistencyThreshold: number
   protected anomalyConsistencyThreshold: number
   private readonly rateEmaAlpha: number
+  private readonly manualLockMs: number
 
   protected history: HistoryEntry<V>[] = []
   protected lastTrusted: V | null = null
   protected lastTrustedTs = 0
   protected anomalyStreak = 0
+  /** Epoch ms until which OCR observations are ignored (set by a manual force). */
+  protected manualLockUntilMs = 0
 
   private rateEma: number | null = null
   private rateVar: number | null = null
@@ -128,6 +140,7 @@ export abstract class BaseTracker<V> {
     this.initConsistencyThreshold = opts.initConsistencyThreshold ?? 3
     this.anomalyConsistencyThreshold = opts.anomalyConsistencyThreshold ?? 5
     this.rateEmaAlpha = opts.rateEmaAlpha ?? 0.3
+    this.manualLockMs = opts.manualLockMs ?? 0
   }
 
   /** The currently trusted value, or `null` if no anchor has been established. */
@@ -149,12 +162,20 @@ export abstract class BaseTracker<V> {
     nowMs: number,
     opts: ObserveOptions = {}
   ): ObserveResult<V> {
-    // Manual entry bypasses every gate and force-updates the anchor.
+    // Manual entry bypasses every gate, force-updates the anchor, and pins the
+    // value: for the next `manualLockMs` ms, OCR observations are ignored so a
+    // (possibly misread) auto value cannot overwrite what the user just typed.
     if (opts.force) {
       this.updateRateEma(value, nowMs)
       this.commit(value, nowMs, ocrConfidence, true, 1.0)
       this.anomalyStreak = 0
+      this.manualLockUntilMs = this.manualLockMs > 0 ? nowMs + this.manualLockMs : 0
       return { accepted: true, value, posterior: 1.0, reason: 'user_force' }
+    }
+
+    // A freshly-typed value is pinned for the lock window — reject OCR until it expires.
+    if (this.manualLockUntilMs > nowMs) {
+      return { accepted: false, value: this.lastTrusted, posterior: 0, reason: 'user_locked' }
     }
 
     if (value == null || !this.isValueShape(value)) {
@@ -216,6 +237,7 @@ export abstract class BaseTracker<V> {
     this.anomalyStreak = 0
     this.rateEma = null
     this.rateVar = null
+    this.manualLockUntilMs = 0
   }
 
   /** Forget all state. */
@@ -226,6 +248,7 @@ export abstract class BaseTracker<V> {
     this.anomalyStreak = 0
     this.rateEma = null
     this.rateVar = null
+    this.manualLockUntilMs = 0
   }
 
   // ── Adaptive rate EMA ───────────────────────────────────────────────────────
@@ -653,11 +676,14 @@ export function createRegionTrackers(opts?: {
   level?: BaseTrackerOptions
   adena?: AdenaTrackerOptions
 }): RegionTrackers {
+  // MP omits the lock — its bar-pixel source is accurate and MP changes constantly.
+  // EXP/level/adena pin a manually-typed value for 10 min (auto-ROI can be unreliable).
+  const MANUAL_LOCK_MS = 600_000
   return {
     mp: new MpTracker(opts?.mp),
-    exp: new ExpTracker(opts?.exp),
-    level: new LevelTracker(opts?.level),
-    adena: new AdenaTracker(opts?.adena)
+    exp: new ExpTracker({ manualLockMs: MANUAL_LOCK_MS, ...opts?.exp }),
+    level: new LevelTracker({ manualLockMs: MANUAL_LOCK_MS, ...opts?.level }),
+    adena: new AdenaTracker({ manualLockMs: MANUAL_LOCK_MS, ...opts?.adena })
   }
 }
 

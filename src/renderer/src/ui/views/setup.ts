@@ -16,11 +16,15 @@ import type {
   MpConfigState,
   CaptureRegion,
   ItemEntry,
-  AutoDetectState
+  AutoDetectState,
+  CaptureMode,
+  WindowRoiOverrides,
+  WindowRoiBox
 } from '@core/domain/storage-schema'
+import type { WindowInfo } from '@shared/ipc-contract'
 import type { DetectionEvent } from '../../ocr/detection'
 import { logger } from '../../util/logger'
-import { parseRegionString } from '@core/ocr/parser'
+import { parseRegionString, formatParsed } from '@core/ocr/parser'
 import type { ParsedValue } from '@core/ocr/types'
 
 /** The `autoDetect` fields that hold a pickable capture region. */
@@ -116,12 +120,48 @@ function selectField<T extends string>(
 export function createSetupView(ctx: ViewContext): View {
   const { app, actions, detection } = ctx
 
-  // Latest raw OCR string per region + the hint nodes that mirror it live, so the
-  // learn rows can pre-fill the input with what the recognizer actually segmented
-  // (guaranteeing the glyph-count matches at learn time).
+  // Per-region freshest OCR output mirrored into the learn rows: `latestRaw` is the
+  // exact segmented string (used to prefill non-EXP rows so the glyph count matches
+  // at learn time), `latestNorm` is the parsed/normalized value (shown in the hint
+  // and used to prefill EXP, whose trailing "%" the learn path slices off).
   type LRegion = 'mp' | 'exp' | 'level' | 'adena'
   const latestRaw: Partial<Record<LRegion, string | null>> = {}
+  /** Normalized (parsed) value per region — the clean value the user actually wants. */
+  const latestNorm: Partial<Record<LRegion, string | null>> = {}
+  /** Whether the latest OCR observation for the region was ACCEPTED (adopted) or rejected/locked. */
+  const lastAccepted: Partial<Record<LRegion, boolean>> = {}
   const rawHints: Partial<Record<LRegion, HTMLElement>> = {}
+
+  /** The value the app is actually USING for a region (tracker/mpConfig), as a string. */
+  function usedValueFor(region: LRegion): string {
+    const s = app.get().persisted
+    if (region === 'mp') return `${s.mpConfig.curMp}/${s.mpConfig.maxMp}`
+    const t = s.tracker.current
+    if (region === 'exp') return `${t.exp.toFixed(4)}%`
+    if (region === 'level') return String(t.level)
+    return t.adena.toLocaleString('en-US')
+  }
+
+  /**
+   * Compose the learn-row hint to show the value the app actually USES — not the raw
+   * OCR string. When the latest OCR read was rejected/locked (e.g. a manually-typed
+   * value is pinned, or the ROI misreads), also surface the ignored OCR read so the
+   * user can still see what the camera reads while diagnosing.
+   */
+  function updateHint(region: LRegion): void {
+    const hint = rawHints[region]
+    if (!hint) return
+    const used = usedValueFor(region)
+    const raw = latestRaw[region]
+    if (lastAccepted[region]) {
+      hint.textContent = `인식: ${used}` // accepted → used value IS the OCR value
+    } else if (raw != null && raw !== '') {
+      hint.textContent = `사용: ${used} · OCR ${raw}(무시)`
+    } else {
+      hint.textContent = `사용: ${used}`
+    }
+    hint.title = raw == null ? '' : `원본 OCR: ${raw}`
+  }
 
   /** Commit an mpConfig patch and re-anchor the countdown. */
   const patchMp = (patch: Partial<MpConfigState>): void => {
@@ -268,6 +308,328 @@ export function createSetupView(ctx: ViewContext): View {
     regionRows.set(key, { root, dot, coords })
   }
 
+  // --- capture mode: screen region vs game window (auto-detect) ---
+  const captureModeOptions: ReadonlyArray<{ value: CaptureMode; label: string }> = [
+    { value: 'screen', label: '화면 영역 (수동 지정)' },
+    { value: 'window', label: '게임 창 (자동 인식)' }
+  ]
+  const fCaptureMode = selectField<CaptureMode>('캡처 방식', captureModeOptions, (mode) => {
+    app.store.set((prev) => ({
+      persisted: { ...prev.persisted, autoDetect: { ...prev.persisted.autoDetect, captureMode: mode } }
+    }))
+    applyCaptureModeUi(mode)
+    if (mode === 'window') void refreshWindows()
+    maybeRestartDetection()
+  })
+
+  // Game-window picker (window mode only).
+  const windowSelect = h('select', {
+    onchange: () => {
+      const opt = windowSelect.selectedOptions[0]
+      const id = windowSelect.value || null
+      const title = opt ? (opt.dataset.title ?? opt.textContent ?? '') : ''
+      app.store.set((prev) => ({
+        persisted: {
+          ...prev.persisted,
+          autoDetect: { ...prev.persisted.autoDetect, windowId: id, windowTitle: title || null }
+        }
+      }))
+      windowStatus.textContent = title ? `선택됨: ${title}` : ''
+      maybeRestartDetection()
+    }
+  }) as HTMLSelectElement
+  const windowStatus = h('span', { class: 'tick-info' }, '')
+  const btnRefreshWin = h('button', { class: 'btn btn--sm', onclick: () => void refreshWindows() }, '🔄 목록 새로고침')
+  const btnRematchWin = h('button', { class: 'btn btn--sm btn--ghost', onclick: () => void rematchWindow() }, '재매칭')
+
+  const windowSection = h('div', { class: 'tab-pane' },
+    h('div', { class: 'tick-info' }, '게임 창을 한 번 선택하면 제목으로 자동 재매칭됩니다 — 모니터와 무관, 창을 다른 모니터로 옮겨도 OK. 게임은 창/테두리없음 모드로 실행하세요(전체화면 독점은 검은 화면).'),
+    h('div', { class: 'field' }, h('label', {}, '게임 창'), windowSelect),
+    h('div', { class: 'row' }, btnRefreshWin, btnRematchWin, windowStatus)
+  )
+
+  const LINEAGE_RE = /lineage|리니지/i
+
+  function applyCaptureModeUi(mode: CaptureMode): void {
+    const win = mode === 'window'
+    windowSection.style.display = win ? '' : 'none'
+    roiEditor.style.display = win ? '' : 'none'
+    regionGrid.style.display = win ? 'none' : ''
+  }
+
+  async function refreshWindows(): Promise<void> {
+    windowStatus.textContent = '창 목록 불러오는 중…'
+    let wins: WindowInfo[] = []
+    try {
+      wins = await ctx.api.listWindows()
+    } catch {
+      windowStatus.textContent = '창 목록을 불러올 수 없습니다 (Electron 외 환경?)'
+      return
+    }
+    clear(windowSelect)
+    if (wins.length === 0) {
+      windowStatus.textContent = '캡처 가능한 창이 없습니다 (게임 실행 + 창모드 확인)'
+      return
+    }
+    for (const w of wins) {
+      const o = h('option', { value: w.id }, w.title) as HTMLOptionElement
+      o.dataset.title = w.title
+      windowSelect.appendChild(o)
+    }
+    const saved = app.get().persisted.autoDetect.windowTitle
+    const pick =
+      (saved ? wins.find((w) => w.title === saved) : undefined) ??
+      wins.find((w) => LINEAGE_RE.test(w.title)) ??
+      wins[0]
+    if (pick) {
+      windowSelect.value = pick.id
+      const autoMatched = !saved && LINEAGE_RE.test(pick.title)
+      app.store.set((prev) => ({
+        persisted: {
+          ...prev.persisted,
+          autoDetect: { ...prev.persisted.autoDetect, windowId: pick.id, windowTitle: pick.title }
+        }
+      }))
+      windowStatus.textContent = autoMatched ? `자동 매칭: ${pick.title}` : `선택됨: ${pick.title}`
+    }
+  }
+
+  async function rematchWindow(): Promise<void> {
+    const title = app.get().persisted.autoDetect.windowTitle ?? ''
+    windowStatus.textContent = '재매칭 중…'
+    try {
+      const res = await ctx.api.resolveWindowSource(title)
+      if (res) {
+        app.store.set((prev) => ({
+          persisted: {
+            ...prev.persisted,
+            autoDetect: {
+              ...prev.persisted.autoDetect,
+              windowId: res.sourceId,
+              windowTitle: prev.persisted.autoDetect.windowTitle || res.title
+            }
+          }
+        }))
+        windowStatus.textContent = `재매칭 OK: ${res.title}`
+      } else {
+        windowStatus.textContent = '재매칭 실패 — 목록에서 직접 선택하세요'
+      }
+    } catch {
+      windowStatus.textContent = '재매칭 불가 (Electron 외 환경)'
+    }
+  }
+
+  /** Restart the detection loop so a capture-source change takes effect immediately. */
+  function maybeRestartDetection(): void {
+    if (!detection.running) return
+    detection.stop()
+    void detection.start().catch((err) => console.error('[setup.detect.restart]', err))
+  }
+
+  /** One-time auto-load of the window list when the view first renders in window mode. */
+  let windowsInitialized = false
+
+  // --- manual ROI editor (window mode): draw ROI boxes on a window snapshot ----
+  // The snapshot is the window's native-resolution frame, so it is shown at 1:1 in a
+  // scrollable viewport and box coords ARE window-frame physical px (no scaling) —
+  // exactly what captureRegion crops. Overrides win over auto-detection.
+  const ROI_REGIONS: ReadonlyArray<{ value: keyof WindowRoiOverrides; label: string }> = [
+    { value: 'mp', label: 'MP 숫자' },
+    { value: 'mpBar', label: 'MP 바' },
+    { value: 'exp', label: 'EXP' },
+    { value: 'level', label: '레벨' },
+    { value: 'adena', label: '아데나' }
+  ]
+  let roiActiveRegion: keyof WindowRoiOverrides = 'exp'
+  let roiFrame: { width: number; height: number } | null = null
+
+  const fRoiRegion = selectField<keyof WindowRoiOverrides>('지정할 항목', ROI_REGIONS, (v) => {
+    roiActiveRegion = v
+    drawRoiBoxes()
+  })
+  const roiStatus = h('span', { class: 'tick-info' }, '게임 화면을 먼저 불러오세요')
+  const roiOverrideStatus = h('span', { class: 'tick-info' }, '')
+  const btnLoadFrame = h('button', { class: 'btn btn--sm btn--primary', onclick: () => void loadRoiFrame() }, '📷 게임 화면 불러오기')
+  const btnClearRoi = h('button', { class: 'btn btn--sm btn--ghost', onclick: () => clearRoi() }, '선택 영역 자동으로')
+  fRoiRegion.select.value = roiActiveRegion
+
+  const roiImg = h('img', { alt: '게임 화면', draggable: false, style: { display: 'block', maxWidth: 'none', userSelect: 'none' } })
+  const roiBoxLayer = h('div', { style: { position: 'absolute', left: '0', top: '0', width: '100%', height: '100%', pointerEvents: 'none' } })
+  const roiStage = h('div', { style: { position: 'relative', width: 'max-content' } }, roiImg, roiBoxLayer)
+  const roiViewport = h('div', {
+    style: {
+      overflow: 'auto',
+      maxHeight: '380px',
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius-sm)',
+      background: 'var(--bg)',
+      cursor: 'crosshair'
+    }
+  }, roiStage)
+
+  const roiEditor = h('details', { class: 'drawer' },
+    h('summary', {}, '🎯 영역 직접 지정 (정밀)'),
+    h('div', { class: 'stack' },
+      h('div', { class: 'tick-info' }, '게임 화면을 불러온 뒤, 항목을 고르고 이미지 위에서 영역을 드래그하세요. 지정한 영역은 자동 검출 대신 그대로 사용됩니다 (숫자에 딱 맞게, %·여백 제외). 이후 「보정·학습」에서 글자를 가르치면 더 정확해집니다.'),
+      h('div', { class: 'row' }, fRoiRegion.root, btnLoadFrame, btnClearRoi),
+      h('div', { class: 'row' }, roiOverrideStatus),
+      h('div', { class: 'row' }, roiStatus),
+      roiViewport
+    )
+  )
+
+  function updateRoiOverrideStatus(): void {
+    const ov = app.get().persisted.autoDetect.windowRoi
+    const set = ROI_REGIONS.filter((r) => ov[r.value]).map((r) => r.label)
+    roiOverrideStatus.textContent = set.length
+      ? `직접 지정됨: ${set.join(', ')}`
+      : '직접 지정된 영역 없음 (자동 검출 사용)'
+  }
+
+  function labelForRoi(region: keyof WindowRoiOverrides): string {
+    return ROI_REGIONS.find((r) => r.value === region)?.label ?? region
+  }
+
+  async function loadRoiFrame(): Promise<void> {
+    roiStatus.textContent = '불러오는 중…'
+    const frame = await detection.captureWindowFrame().catch(() => null)
+    if (!frame) {
+      roiStatus.textContent = '게임 화면을 불러오지 못했습니다 (게임 창 선택/실행 확인)'
+      return
+    }
+    roiFrame = { width: frame.width, height: frame.height }
+    roiImg.onload = (): void => drawRoiBoxes()
+    roiImg.src = frame.dataUrl
+    roiStatus.textContent = `불러옴 (${frame.width}×${frame.height}). 항목 선택 후 드래그하세요`
+    drawRoiBoxes()
+  }
+
+  function saveRoi(region: keyof WindowRoiOverrides, box: WindowRoiBox | null): void {
+    app.store.set((prev) => ({
+      persisted: {
+        ...prev.persisted,
+        autoDetect: {
+          ...prev.persisted.autoDetect,
+          windowRoi: { ...prev.persisted.autoDetect.windowRoi, [region]: box }
+        }
+      }
+    }))
+    detection.forceRoiRefresh()
+    drawRoiBoxes()
+    updateRoiOverrideStatus()
+  }
+
+  function clearRoi(): void {
+    saveRoi(roiActiveRegion, null)
+    roiStatus.textContent = `${labelForRoi(roiActiveRegion)} 자동 검출로 되돌림`
+  }
+
+  function drawRoiBoxes(): void {
+    clear(roiBoxLayer)
+    if (!roiFrame) return
+    const ov = app.get().persisted.autoDetect.windowRoi
+    for (const { value, label } of ROI_REGIONS) {
+      const b = ov[value]
+      if (!b) continue
+      const active = value === roiActiveRegion
+      const color = active ? 'var(--accent)' : 'var(--color-info)'
+      const box = h('div', {
+        style: {
+          position: 'absolute',
+          left: `${b.x}px`,
+          top: `${b.y}px`,
+          width: `${b.width}px`,
+          height: `${b.height}px`,
+          border: `2px solid ${color}`,
+          background: active ? 'color-mix(in srgb, var(--accent) 18%, transparent)' : 'transparent',
+          boxSizing: 'border-box',
+          pointerEvents: 'none'
+        }
+      }, h('span', {
+        style: {
+          position: 'absolute',
+          top: '-15px',
+          left: '0',
+          fontSize: '10px',
+          lineHeight: '1',
+          color,
+          whiteSpace: 'nowrap',
+          textShadow: '0 0 3px #000'
+        }
+      }, label))
+      roiBoxLayer.appendChild(box)
+    }
+  }
+
+  // Drag-to-draw a rectangle for the active region (coords are frame px @ 1:1).
+  let roiDrawing = false
+  let roiStartX = 0
+  let roiStartY = 0
+  let roiRubber: HTMLElement | null = null
+
+  function roiImgPoint(e: MouseEvent): { x: number; y: number } {
+    const r = roiImg.getBoundingClientRect()
+    const fw = roiFrame?.width ?? r.width
+    const fh = roiFrame?.height ?? r.height
+    return {
+      x: Math.round(Math.max(0, Math.min(fw, e.clientX - r.left))),
+      y: Math.round(Math.max(0, Math.min(fh, e.clientY - r.top)))
+    }
+  }
+
+  const onRoiDown = (e: MouseEvent): void => {
+    if (!roiFrame || e.button !== 0) return
+    e.preventDefault()
+    roiDrawing = true
+    const p = roiImgPoint(e)
+    roiStartX = p.x
+    roiStartY = p.y
+    roiRubber = h('div', {
+      style: {
+        position: 'absolute',
+        left: `${p.x}px`,
+        top: `${p.y}px`,
+        width: '0',
+        height: '0',
+        border: '2px dashed var(--accent)',
+        background: 'color-mix(in srgb, var(--accent) 20%, transparent)',
+        boxSizing: 'border-box',
+        pointerEvents: 'none'
+      }
+    })
+    roiBoxLayer.appendChild(roiRubber)
+  }
+  const onRoiMove = (e: MouseEvent): void => {
+    if (!roiDrawing || !roiRubber) return
+    const p = roiImgPoint(e)
+    const x = Math.min(p.x, roiStartX)
+    const y = Math.min(p.y, roiStartY)
+    roiRubber.style.left = `${x}px`
+    roiRubber.style.top = `${y}px`
+    roiRubber.style.width = `${Math.abs(p.x - roiStartX)}px`
+    roiRubber.style.height = `${Math.abs(p.y - roiStartY)}px`
+  }
+  const onRoiUp = (e: MouseEvent): void => {
+    if (!roiDrawing) return
+    roiDrawing = false
+    const p = roiImgPoint(e)
+    const x = Math.min(p.x, roiStartX)
+    const y = Math.min(p.y, roiStartY)
+    const w = Math.abs(p.x - roiStartX)
+    const hgt = Math.abs(p.y - roiStartY)
+    if (roiRubber) {
+      roiRubber.remove()
+      roiRubber = null
+    }
+    if (w >= 4 && hgt >= 4) {
+      saveRoi(roiActiveRegion, { x, y, width: w, height: hgt })
+      roiStatus.textContent = `${labelForRoi(roiActiveRegion)} 지정됨: ${w}×${hgt} @ (${x}, ${y})`
+    }
+  }
+  roiStage.addEventListener('mousedown', onRoiDown)
+  window.addEventListener('mousemove', onRoiMove)
+  window.addEventListener('mouseup', onRoiUp)
+
   const tUseMpBar = toggleField('MP 바 픽셀 모드', (on) => {
     app.store.set((prev) => ({
       persisted: {
@@ -305,6 +667,9 @@ export function createSetupView(ctx: ViewContext): View {
   const ocrCard = h('section', { class: 'card' },
     h('div', { class: 'card__title' }, '화면 인식 (OCR)'),
     h('div', { class: 'row' }, tDetectMode.root),
+    h('div', { class: 'form-grid' }, fCaptureMode.root),
+    windowSection,
+    roiEditor,
     regionGrid,
     h('div', { class: 'row' }, tUseMpBar.root),
     h('div', { class: 'tick-info' }, 'MP 바 픽셀 모드는 가장 정확한 MP 인식 소스입니다.'),
@@ -441,10 +806,13 @@ export function createSetupView(ctx: ViewContext): View {
     diagRing.push(e)
     if (diagRing.length > DIAG_RING) diagRing.shift()
     renderDiagLog()
-    // Mirror the freshest recognized string into the matching learn-row hint.
+    // Track the freshest OCR output; the hint shows the value the app actually USES
+    // (so a pinned/typed value matches what's displayed), with the ignored OCR read
+    // surfaced for diagnosis. `latestRaw` also feeds the 인식값↩ prefill.
     latestRaw[e.region] = e.raw
-    const hint = rawHints[e.region]
-    if (hint) hint.textContent = e.raw == null ? '인식: —' : `인식: ${e.raw}`
+    latestNorm[e.region] = e.value ? formatParsed(e.value) : null
+    lastAccepted[e.region] = e.accepted
+    updateHint(e.region)
   })
 
   // 0-9 user-learned-digit grid placeholder.
@@ -558,16 +926,24 @@ export function createSetupView(ctx: ViewContext): View {
 
   /** A manual-entry row: applies the value immediately AND learns the user's glyphs. */
   function learnRow(region: LRegion, label: string, placeholder: string): HTMLElement {
-    const input = h('input', { type: 'text', placeholder })
+    const input = h('input', { type: 'text', placeholder, style: { flex: '1', minWidth: '110px' } })
     const status = h('span', { class: 'tick-info' }, '')
-    const hint = h('span', { class: 'tick-info', title: '현재 자동 인식값 — 길이를 맞추려면 이 값을 불러와 틀린 자리만 고치세요' }, '인식: —')
+    const hint = h('span', { class: 'tick-info' }, '인식: —')
     rawHints[region] = hint
     const fillBtn = h('button', {
       class: 'btn btn--sm btn--ghost',
-      title: '현재 인식값을 입력칸에 채웁니다 (길이 일치 보장)',
+      title: '현재 인식값을 입력칸에 채웁니다 (틀린 자리만 고치세요)',
       onclick: () => {
-        const r = latestRaw[region]
-        if (r) input.value = r
+        // EXP: fill the NORMALIZED value — the learn path slices the trailing "%"
+        // blobs (leftmost-N), so a clean "79.3390" still learns correctly.
+        // Other regions: fill the RAW string so its glyph count (incl. separators
+        // like "," / "/") matches segmentation at learn time; normalizing would
+        // strip them and trip the strict learn guard.
+        const v =
+          region === 'exp'
+            ? latestNorm[region] ?? latestRaw[region]
+            : latestRaw[region] ?? latestNorm[region]
+        if (v) input.value = v
       }
     }, '인식값↩')
     const applyBtn = h('button', { class: 'btn btn--sm btn--primary', onclick: apply }, '적용 & 학습')
@@ -582,35 +958,51 @@ export function createSetupView(ctx: ViewContext): View {
       applyToStore(parsed)
       detection.forceValue(region, parsed, Date.now())
       actions.recomputeTimer()
+      // The typed value is now pinned (used) — reflect it in the hint immediately.
+      lastAccepted[region] = false
+      updateHint(region)
       if (region === 'mp') {
         status.textContent = '적용됨 (MP는 바 보정 권장)'
         return
       }
       status.textContent = '학습 중…'
       const res = await detection.learnRegion(region, text)
-      status.textContent = res.ok ? `적용 + 학습됨 (${res.learned}글자)` : `적용됨 · 학습실패: ${res.note ?? ''}`
+      const commaHint = region === 'adena' ? ' (화면에 쉼표가 있으면 쉼표까지: 예 31,525)' : ''
+      if (res.ok) {
+        status.textContent = `적용 + 학습됨 (${res.learned}글자)`
+      } else if (region === 'level') {
+        // Level is hard to auto-localize (the ROI over-segments). The manual value
+        // is applied and STICKS — OCR misreads are rejected, never overwriting it.
+        status.textContent = '레벨 적용됨 · 수동값 유지 (자동 인식이 어려운 항목)'
+      } else {
+        // Manual value is applied and pinned; learning the glyphs just failed (the
+        // ROI/label glyph counts differ). Show the real reason — don't claim "정상".
+        status.textContent = `적용됨 · 수동값 유지 (학습 실패: ${res.note ?? ''})${commaHint}`
+      }
     }
 
-    return h('div', { class: 'row' },
-      h('span', { class: 'stat-chip__label', style: { minWidth: '52px' } }, label),
-      input,
-      fillBtn,
-      applyBtn,
-      status,
-      hint
+    return h('div', { class: 'stack stack--tight' },
+      h('div', { class: 'row' },
+        h('span', { class: 'stat-chip__label', style: { minWidth: '48px' } }, label),
+        input,
+        fillBtn,
+        applyBtn
+      ),
+      h('div', { class: 'row' }, status, hint)
     )
   }
 
   const learnCard = h('section', { class: 'card' },
     h('div', { class: 'card__title' }, '보정 · 학습 (정확도 ↑)'),
-    h('div', { class: 'row' }, calibBtn, calibStatus),
-    h('div', { class: 'tick-info' }, 'MP가 가득 찼을 때 「MP 바 100% 보정」을 누르면 MP가 100% 정확해집니다.'),
-    h('div', { class: 'tick-info' }, '학습: 「인식값↩」로 현재 인식값을 불러와 화면과 비교 → 틀린 자리만 고치고 「적용 & 학습」.'),
-    h('div', { class: 'tick-info' }, '글자수가 안 맞으면(예: 분할 8 ≠ 입력 7) 해당 영역을 숫자에만 딱 맞게(%/여백 제외) 다시 지정하세요.'),
-    learnRow('mp', 'MP', '예: 0/320'),
-    learnRow('exp', 'EXP', '예: 78.3638'),
-    learnRow('level', '레벨', '예: 32'),
-    learnRow('adena', '아데나', '예: 12345')
+    h('div', { class: 'stack' },
+      h('div', { class: 'row' }, calibBtn, calibStatus),
+      h('div', { class: 'tick-info' }, 'MP가 가득 찼을 때 「MP 바 100% 보정」을 누르면 MP가 100% 정확해집니다.'),
+      h('div', { class: 'tick-info' }, '학습: 「인식값↩」로 현재 인식값을 불러와 화면과 비교 → 틀린 자리만 고치고 「적용 & 학습」.'),
+      learnRow('mp', 'MP', '예: 0/320'),
+      learnRow('exp', 'EXP', '예: 78.3638'),
+      learnRow('level', '레벨', '예: 32'),
+      learnRow('adena', '아데나', '예: 12345')
+    )
   )
 
   // -------------------------------------------------------------------------
@@ -655,6 +1047,16 @@ export function createSetupView(ctx: ViewContext): View {
 
       // 3) OCR
       tDetectMode.set(ad.mode === 'auto')
+      fCaptureMode.select.value = ad.captureMode
+      applyCaptureModeUi(ad.captureMode)
+      // Auto-load the window list once if we start up already in window mode.
+      if (ad.captureMode === 'window' && !windowsInitialized) {
+        windowsInitialized = true
+        void refreshWindows()
+      }
+      if (ad.captureMode === 'window' && ad.windowTitle && windowStatus.textContent === '') {
+        windowStatus.textContent = `선택됨: ${ad.windowTitle}`
+      }
       for (const { key } of REGION_TARGETS) {
         const row = regionRows.get(key)
         if (!row) continue
@@ -666,13 +1068,29 @@ export function createSetupView(ctx: ViewContext): View {
       if (document.activeElement !== fIntervalMs.input) fIntervalMs.input.value = String(ad.intervalMs)
       if (document.activeElement !== fStability.input) fStability.input.value = String(ad.stabilityRequired)
       btnDetect.textContent = ad.enabled ? '■ 정지' : '▶ 자동 인식 시작'
-      detectStatus.textContent = detection.running ? '실행 중' : '정지됨'
+      detectStatus.textContent = !detection.running
+        ? '정지됨'
+        : ad.captureMode === 'window' && !detection.hasWindowSource()
+          ? '게임 창 탐색 중…'
+          : '실행 중'
 
       // 4) items
       syncItems(state.persisted.items)
+
+      // 5) learn-row hints reflect the value the app actually uses (kept fresh even
+      //    without a new OCR event, e.g. right after a manual apply).
+      updateHint('mp')
+      updateHint('exp')
+      updateHint('level')
+      updateHint('adena')
+
+      // 6) ROI editor: show which regions have a manual override.
+      updateRoiOverrideStatus()
     },
     destroy() {
       offDetect()
+      window.removeEventListener('mousemove', onRoiMove)
+      window.removeEventListener('mouseup', onRoiUp)
     }
   }
 }

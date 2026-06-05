@@ -18,13 +18,14 @@ import { IPC } from '@shared/ipc-contract'
 import type { IpcEventMap } from '@shared/ipc-contract'
 import {
   closeWindow,
+  dispatchHotkey,
   getMainWindow,
   hideWindow,
   minimizeWindow,
   setAlwaysOnTop,
   toggleDevtools
 } from './windows'
-import { listDisplays, startRegionSelect } from './capture'
+import { listDisplays, listWindows, resolveWindowSource, startRegionSelect } from './capture'
 import { getResourcePaths } from './paths'
 import { registerGlobalHotkeys } from './hotkeys'
 import { listPendingSamples, savePendingSample, saveTrainingSample } from './training-store'
@@ -127,6 +128,8 @@ export function registerIpc(): void {
   handle(IPC.listDisplays, () => listDisplays())
   handle(IPC.startRegionSelect, (displayId?: string) => startRegionSelect(displayId))
   handle(IPC.getResourcePaths, () => getResourcePaths())
+  handle(IPC.listWindows, () => listWindows())
+  handle(IPC.resolveWindowSource, (title: string) => resolveWindowSource(title))
 
   // --- window controls ---
   handle(IPC.setAlwaysOnTop, (on: boolean) => setAlwaysOnTop(on))
@@ -140,8 +143,12 @@ export function registerIpc(): void {
   handle(IPC.notifyComplete, (payload: { title: string; body: string }) =>
     notifyComplete(payload)
   )
+  // Re-registered global hotkeys dispatch main-side (same as the startup
+  // registration). The renderer does not subscribe to a 'hotkey' event — these
+  // are main-window behaviours (always-on-top / hide) — so routing through
+  // pushEvent here previously made re-registered F1/F2 no-ops.
   handle(IPC.setGlobalHotkeys, (map: Record<string, string>) =>
-    registerGlobalHotkeys(map, (action) => pushEvent('hotkey', action))
+    registerGlobalHotkeys(map, dispatchHotkey)
   )
 
   // --- training data ---

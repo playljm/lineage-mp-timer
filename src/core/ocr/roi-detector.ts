@@ -24,6 +24,7 @@
  */
 import type { RgbaImage, BinaryMask, GlyphBox } from './types'
 import { connectedComponents } from './segmentation'
+import { scaleToHeight } from './imaging'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Geometry types
@@ -1088,5 +1089,86 @@ export function detectGameUI(img: RgbaImage, opts: DetectOptions = {}): DetectRe
     textRois,
     valid: !!(validation.valid && chosenHp && chosenMp && chosenExp && chosenAdena),
     issues
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Scale-normalized entry point (for window-capture / HiDPI frames)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Reference frame width the {@link DEFAULT_ROI_CONFIG} absolute-pixel thresholds
+ * (expMinWidth, mpTextMinWidth, lvText pixel gates, …) were tuned at. Frames much
+ * wider than this (whole game windows, HiDPI physical-pixel captures) are
+ * downscaled to this width before detection so the thresholds stay valid.
+ */
+export const DETECTION_REFERENCE_WIDTH = 1280
+
+function scaleTextRoi(r: TextRoi | null, k: number, fw: number, fh: number): TextRoi | null {
+  if (!r) return null
+  const x0 = Math.max(0, Math.min(fw, Math.round(r.x0 * k)))
+  const y0 = Math.max(0, Math.min(fh, Math.round(r.y0 * k)))
+  const x1 = Math.max(x0, Math.min(fw, Math.round(r.x1 * k)))
+  const y1 = Math.max(y0, Math.min(fh, Math.round(r.y1 * k)))
+  const out: TextRoi = { x0, y0, x1, y1 }
+  if (r.clipped) {
+    out.clipped = true
+    if (r.intendedWidth != null) out.intendedWidth = Math.round(r.intendedWidth * k)
+    if (r.intendedHeight != null) out.intendedHeight = Math.round(r.intendedHeight * k)
+  }
+  return out
+}
+
+function scaleBlob(b: ColorBlob | null, k: number): ColorBlob | null {
+  if (!b) return null
+  return {
+    x: Math.round(b.x * k),
+    y: Math.round(b.y * k),
+    width: Math.round(b.width * k),
+    height: Math.round(b.height * k),
+    area: Math.round(b.area * k * k),
+    avgHue: b.avgHue,
+    avgSat: b.avgSat
+  }
+}
+
+/**
+ * Like {@link detectGameUI} but scale-normalized: a frame wider than
+ * {@link DETECTION_REFERENCE_WIDTH} is area-averaged down to that width before
+ * detection (so the px-tuned config stays valid), then the resulting anchors/ROIs
+ * are scaled back to the ORIGINAL frame's pixel space. Frames at/below the
+ * reference width are detected natively (no scaling). Pure — no DOM/node/clock.
+ *
+ * This is the entry point window-capture mode uses: it feeds the whole game-window
+ * frame (any size / DPI) and gets ROIs in that frame's own physical pixels, ready
+ * to crop with `captureRegion` (scaleFactor=1) directly.
+ */
+export function detectGameUiScaled(img: RgbaImage, opts: DetectOptions = {}): DetectResult {
+  const refW = DETECTION_REFERENCE_WIDTH
+  if (img.width <= Math.round(refW * 1.15)) return detectGameUI(img, opts)
+
+  const targetH = Math.max(1, Math.round(img.height * (refW / img.width)))
+  const small = scaleToHeight(img, targetH)
+  if (small.width >= img.width) return detectGameUI(img, opts) // safety: no downscale happened
+
+  const res = detectGameUI(small, opts)
+  const k = img.width / small.width
+  const fw = img.width
+  const fh = img.height
+  return {
+    anchors: {
+      hp: scaleBlob(res.anchors.hp, k),
+      mp: scaleBlob(res.anchors.mp, k),
+      exp: scaleBlob(res.anchors.exp, k),
+      adena: scaleBlob(res.anchors.adena, k)
+    },
+    textRois: {
+      mp: scaleTextRoi(res.textRois.mp, k, fw, fh),
+      exp: scaleTextRoi(res.textRois.exp, k, fw, fh),
+      level: scaleTextRoi(res.textRois.level, k, fw, fh),
+      adena: scaleTextRoi(res.textRois.adena, k, fw, fh)
+    },
+    valid: res.valid,
+    issues: res.issues
   }
 }

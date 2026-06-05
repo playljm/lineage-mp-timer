@@ -17,8 +17,13 @@
 import { desktopCapturer, ipcMain, screen } from 'electron'
 import type { Display } from 'electron'
 import { IPC } from '@shared/ipc-contract'
-import type { DisplayInfo, Rect, RegionSelectResult } from '@shared/ipc-contract'
+import type { DisplayInfo, Rect, RegionSelectResult, WindowInfo } from '@shared/ipc-contract'
 import { closeOverlayWindow, createOverlayWindow } from './windows'
+
+/** Our own window title — excluded from the game-window picker. */
+const SELF_WINDOW_TITLE = 'Lineage MP Timer'
+/** Auto-match pattern for the Lineage game window (EN + KO). */
+const LINEAGE_TITLE_RE = /lineage|리니지/i
 
 /** Large thumbnail so `thumbnail.getSize()` reports physical pixel resolution. */
 const HIRES_THUMB = { width: 4096, height: 4096 }
@@ -108,6 +113,104 @@ export async function listDisplays(): Promise<DisplayInfo[]> {
   } catch {
     return []
   }
+}
+
+/**
+ * Enumerate capturable top-level windows for the game-window picker.
+ *
+ * Excludes our own window and untitled/system windows. The returned `id` is the
+ * volatile `window:HWND:0` capture source id; persist the `title` (stable key)
+ * and re-resolve the id via {@link resolveWindowSource} on each detection start.
+ *
+ * @returns One {@link WindowInfo} per eligible window, largest-thumbnail first.
+ */
+export async function listWindows(): Promise<WindowInfo[]> {
+  try {
+    const sources = await desktopCapturer.getSources({
+      types: ['window'],
+      thumbnailSize: PREVIEW_THUMB
+    })
+    const out: Array<WindowInfo & { _area: number }> = []
+    for (const s of sources) {
+      const title = (s.name || '').trim()
+      if (!title || title === SELF_WINDOW_TITLE) continue
+      const sz = thumbSize(s)
+      let thumbnailDataUrl: string | undefined
+      try {
+        thumbnailDataUrl = s.thumbnail.toDataURL()
+      } catch {
+        /* leave undefined */
+      }
+      out.push({ id: s.id, title, thumbnailDataUrl, _area: sz.width * sz.height })
+    }
+    // Lineage-matching windows first, then by descending thumbnail area (the main
+    // game window beats tooltips/child windows of the same title).
+    out.sort((a, b) => {
+      const am = LINEAGE_TITLE_RE.test(a.title) ? 1 : 0
+      const bm = LINEAGE_TITLE_RE.test(b.title) ? 1 : 0
+      if (am !== bm) return bm - am
+      return b._area - a._area
+    })
+    return out.map(({ _area, ...w }) => {
+      void _area
+      return w
+    })
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Re-resolve a window's CURRENT capture source id by matching its title.
+ *
+ * Window `window:HWND:0` ids are bound to the OS handle and change every time the
+ * game is closed/reopened, so a persisted id is useless — this re-enumerates and
+ * matches by title on each detection start. Match order: exact title, then
+ * case-insensitive substring either way, then the `lineage|리니지` auto-match.
+ * Ties break on largest thumbnail (the real game window, not a child/tooltip).
+ *
+ * @param title Saved game-window title; empty falls straight to auto-match.
+ * @returns The fresh `{ sourceId, title }`, or null when no window matches.
+ */
+export async function resolveWindowSource(
+  title: string
+): Promise<{ sourceId: string; title: string } | null> {
+  let sources: Source[] = []
+  try {
+    sources = await desktopCapturer.getSources({ types: ['window'], thumbnailSize: PREVIEW_THUMB })
+  } catch {
+    return null
+  }
+  const eligible = sources.filter((s) => {
+    const n = (s.name || '').trim()
+    return n && n !== SELF_WINDOW_TITLE
+  })
+  if (eligible.length === 0) return null
+
+  const area = (s: Source): number => {
+    const sz = thumbSize(s)
+    return sz.width * sz.height
+  }
+  const byAreaDesc = (a: Source, b: Source): number => area(b) - area(a)
+  const want = title.trim()
+
+  const tiers: Array<(s: Source) => boolean> = []
+  if (want) {
+    const lc = want.toLowerCase()
+    tiers.push((s) => (s.name || '').trim() === want)
+    tiers.push((s) => {
+      const n = (s.name || '').trim().toLowerCase()
+      return n.length > 0 && (n.includes(lc) || lc.includes(n))
+    })
+  }
+  tiers.push((s) => LINEAGE_TITLE_RE.test(s.name || ''))
+
+  for (const match of tiers) {
+    const hits = eligible.filter(match).sort(byAreaDesc)
+    const best = hits[0]
+    if (best) return { sourceId: best.id, title: (best.name || '').trim() }
+  }
+  return null
 }
 
 /**

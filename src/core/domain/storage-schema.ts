@@ -22,7 +22,7 @@ import type { MovementState, LocationKind } from './mp-engine'
 import type { RegionKind } from '../ocr/types'
 
 /** Current persisted schema version. Bump and add a migration when the shape changes. */
-export const SCHEMA_VERSION = 1 as const
+export const SCHEMA_VERSION = 3 as const
 
 /** Theme identifiers carried over from v2.x settings. */
 export type ThemeName = 'green' | 'amber' | 'blue' | 'mono'
@@ -80,6 +80,23 @@ export interface ItemEntry {
   qty: number
 }
 
+/** A user-drawn ROI box in WINDOW-FRAME physical pixels (window-capture override). */
+export interface WindowRoiBox {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/** Per-region manual ROI overrides for window mode (null = use auto-detection). */
+export interface WindowRoiOverrides {
+  mp: WindowRoiBox | null
+  mpBar: WindowRoiBox | null
+  exp: WindowRoiBox | null
+  level: WindowRoiBox | null
+  adena: WindowRoiBox | null
+}
+
 /** A screen-space capture region for OCR. */
 export interface CaptureRegion {
   x: number
@@ -94,6 +111,14 @@ export interface CaptureRegion {
 
 export type OcrEngineMode = 'tesseract' | 'paddle' | 'hybrid'
 export type AutoDetectMode = 'manual' | 'auto'
+/**
+ * Capture source kind:
+ * - `screen`: capture a monitor + a user-picked region (legacy default).
+ * - `window`: capture the game WINDOW by title — monitor-independent; ROIs are
+ *   window-relative and auto-derived by the ROI detector. Solves the dual-monitor
+ *   / DPI fragility because there is no screen-to-source matching to get wrong.
+ */
+export type CaptureMode = 'screen' | 'window'
 
 /** OCR / auto-detect configuration (port of the v2.x autoDetect blob). */
 export interface AutoDetectState {
@@ -124,6 +149,14 @@ export interface AutoDetectState {
   gameRegion: CaptureRegion | null
   roiCacheMaxAge: number
   roiFailThreshold: number
+  /** Capture source kind. `window` captures the game window by title (monitor-independent). */
+  captureMode: CaptureMode
+  /** Last-resolved window capture source id (`window:HWND:0`) — volatile, re-resolved by title each start. */
+  windowId: string | null
+  /** Saved game-window title — the STABLE key used to re-resolve {@link windowId}. */
+  windowTitle: string | null
+  /** Manual ROI overrides (window-frame px) — take precedence over auto-detection in window mode. */
+  windowRoi: WindowRoiOverrides
 }
 
 /** Misc UI/runtime settings (port of the v2.x settings blob). */
@@ -201,7 +234,11 @@ export const DEFAULT_AUTO_DETECT: AutoDetectState = {
   mode: 'manual',
   gameRegion: null,
   roiCacheMaxAge: 300,
-  roiFailThreshold: 5
+  roiFailThreshold: 5,
+  captureMode: 'screen',
+  windowId: null,
+  windowTitle: null,
+  windowRoi: { mp: null, mpBar: null, exp: null, level: null, adena: null }
 }
 
 /** Default UI settings. */
@@ -272,7 +309,32 @@ export interface Migration {
  * clean typed shape and drops the transient ROI cache entirely, so they have no
  * v3 equivalent. The list begins empty at version 1 and grows from here.
  */
-export const MIGRATIONS: readonly Migration[] = []
+export const MIGRATIONS: readonly Migration[] = [
+  {
+    to: 2,
+    description: 'add autoDetect.captureMode/windowId/windowTitle (window-capture mode)',
+    apply: (state) => {
+      const ad = isObject(state['autoDetect']) ? { ...(state['autoDetect'] as object) } : {}
+      const rec = ad as Record<string, unknown>
+      if (rec['captureMode'] === undefined) rec['captureMode'] = 'screen'
+      if (rec['windowId'] === undefined) rec['windowId'] = null
+      if (rec['windowTitle'] === undefined) rec['windowTitle'] = null
+      return { ...state, autoDetect: rec }
+    }
+  },
+  {
+    to: 3,
+    description: 'add autoDetect.windowRoi (manual window-mode ROI overrides)',
+    apply: (state) => {
+      const ad = isObject(state['autoDetect']) ? { ...(state['autoDetect'] as object) } : {}
+      const rec = ad as Record<string, unknown>
+      if (rec['windowRoi'] === undefined) {
+        rec['windowRoi'] = { mp: null, mpBar: null, exp: null, level: null, adena: null }
+      }
+      return { ...state, autoDetect: rec }
+    }
+  }
+]
 
 function structuredCloneTracker(t: TrackerState): TrackerState {
   return {
@@ -315,6 +377,7 @@ const STATES: readonly MovementState[] = ['standing', 'moving', 'combat', 'block
 const THEMES: readonly ThemeName[] = ['green', 'amber', 'blue', 'mono']
 const ENGINES: readonly OcrEngineMode[] = ['tesseract', 'paddle', 'hybrid']
 const DETECT_MODES: readonly AutoDetectMode[] = ['manual', 'auto']
+const CAPTURE_MODES: readonly CaptureMode[] = ['screen', 'window']
 const REGION_KINDS: readonly RegionKind[] = ['mp', 'exp', 'level', 'adena']
 
 /**
@@ -502,7 +565,32 @@ function coerceAutoDetect(v: unknown): AutoDetectState {
     mode: str(v['mode'], DETECT_MODES, d.mode),
     gameRegion: coerceRegion(v['gameRegion']),
     roiCacheMaxAge: num(v['roiCacheMaxAge'], d.roiCacheMaxAge),
-    roiFailThreshold: num(v['roiFailThreshold'], d.roiFailThreshold)
+    roiFailThreshold: num(v['roiFailThreshold'], d.roiFailThreshold),
+    captureMode: str(v['captureMode'], CAPTURE_MODES, d.captureMode),
+    windowId: typeof v['windowId'] === 'string' ? v['windowId'] : d.windowId,
+    windowTitle: typeof v['windowTitle'] === 'string' ? v['windowTitle'] : d.windowTitle,
+    windowRoi: coerceWindowRoi(v['windowRoi'])
+  }
+}
+
+function coerceRoiBox(v: unknown): WindowRoiBox | null {
+  if (!isObject(v)) return null
+  const x = num(v['x'], NaN)
+  const y = num(v['y'], NaN)
+  const width = num(v['width'], NaN)
+  const height = num(v['height'], NaN)
+  if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null
+  return { x, y, width, height }
+}
+
+function coerceWindowRoi(v: unknown): WindowRoiOverrides {
+  const o = isObject(v) ? v : {}
+  return {
+    mp: coerceRoiBox(o['mp']),
+    mpBar: coerceRoiBox(o['mpBar']),
+    exp: coerceRoiBox(o['exp']),
+    level: coerceRoiBox(o['level']),
+    adena: coerceRoiBox(o['adena'])
   }
 }
 

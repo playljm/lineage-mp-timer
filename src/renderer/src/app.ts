@@ -182,6 +182,21 @@ export function bootApp(rootEl: HTMLElement): void {
     }
   })
 
+  // Sync the persisted global-hotkey enable/disable state to main on boot. Main
+  // registers DEFAULT_HOTKEYS (F1/F2) at startup oblivious to the user's saved
+  // toggles, so without this a hotkey the user DISABLED would re-activate on every
+  // launch. Only global-scope bindings are registered globally; Space/R are
+  // window-scope and handled by the keydown listener above.
+  {
+    const hk = app.get().persisted.hotkeys
+    const map: Record<string, string> = {}
+    for (const k of ['alwaysOnTop', 'toggleHide'] as const) {
+      const b = hk[k]
+      if (b.scope === 'global' && b.enabled && b.accel) map[k] = b.accel
+    }
+    void api.setGlobalHotkeys(map).catch((err) => console.error('[hotkeys.sync]', err))
+  }
+
   // Auto-resume detection if it was enabled.
   if (app.get().persisted.autoDetect.enabled) {
     void detection.start().catch((err) => console.error('[detect.start]', err))

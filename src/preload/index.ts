@@ -10,6 +10,8 @@ const api: IpcApi = {
   listDisplays: () => ipcRenderer.invoke(IPC.listDisplays),
   startRegionSelect: (displayId) => ipcRenderer.invoke(IPC.startRegionSelect, displayId),
   getResourcePaths: () => ipcRenderer.invoke(IPC.getResourcePaths),
+  listWindows: () => ipcRenderer.invoke(IPC.listWindows),
+  resolveWindowSource: (title) => ipcRenderer.invoke(IPC.resolveWindowSource, title),
 
   setAlwaysOnTop: (on) => ipcRenderer.invoke(IPC.setAlwaysOnTop, on),
   minimizeWindow: () => ipcRenderer.invoke(IPC.minimizeWindow),

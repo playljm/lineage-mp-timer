@@ -27,6 +27,15 @@ export interface DisplayInfo {
   thumbnailDataUrl?: string
 }
 
+/** A capturable top-level window (window-capture mode). */
+export interface WindowInfo {
+  /** desktopCapturer source id, form `window:HWND:0` on Windows. Volatile across game restarts. */
+  id: string
+  /** Window title (the stable key — re-resolve the volatile id by matching this). */
+  title: string
+  thumbnailDataUrl?: string
+}
+
 export interface RegionSelectResult {
   region: Rect
   displayId: string
@@ -77,6 +86,17 @@ export interface IpcApi {
   listDisplays(): Promise<DisplayInfo[]>
   startRegionSelect(displayId?: string): Promise<RegionSelectResult | null>
   getResourcePaths(): Promise<ResourcePaths>
+
+  // --- window capture (auto-detect the game window) ---
+  /** Enumerate capturable top-level windows (for the game-window picker). */
+  listWindows(): Promise<WindowInfo[]>
+  /**
+   * Re-resolve a window's CURRENT (volatile) capture source id by matching its
+   * title. Window `window:HWND:0` ids change every game restart, so this is called
+   * on each detection start. `title` is the saved game-window title; an empty
+   * string falls back to the `lineage|리니지` auto-match.
+   */
+  resolveWindowSource(title: string): Promise<{ sourceId: string; title: string } | null>
 
   // --- window controls ---
   setAlwaysOnTop(on: boolean): Promise<boolean>
@@ -137,6 +157,8 @@ export const IPC = {
   listDisplays: 'app:list-displays',
   startRegionSelect: 'app:start-region-select',
   getResourcePaths: 'app:get-resource-paths',
+  listWindows: 'app:list-windows',
+  resolveWindowSource: 'app:resolve-window-source',
   setAlwaysOnTop: 'win:set-always-on-top',
   minimizeWindow: 'win:minimize',
   hideWindow: 'win:hide',
