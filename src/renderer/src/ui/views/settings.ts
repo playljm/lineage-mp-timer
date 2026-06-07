@@ -1,8 +1,10 @@
 /**
  * Settings view — secondary screen for presentation + behaviour preferences.
  *
- * Five `.card` sections: theme swatches, notification/behaviour toggles, hotkey
- * rebinding, a collapsed cloud-sync drawer, and an info footer. Like every view
+ * Sections: theme swatches, notification/behaviour toggles, hotkey rebinding, a
+ * collapsed cloud-sync drawer, a collapsed OCR user-template import drawer
+ * (paste the scripts/build-user-templates.ts artifact), and an info footer.
+ * Like every view
  * it renders FROM the store and writes back through the {@link AppStore} mutation
  * helpers (`setTheme`/`setUi`/`store.set`) — nothing reads state out of an input.
  *
@@ -13,6 +15,14 @@
 import { h } from '../dom'
 import { THEME_OPTIONS, applyTheme } from '../theme'
 import { DEFAULT_HOTKEYS, type ThemeName, type HotkeyState } from '@core/domain/storage-schema'
+import {
+  deserializeTemplates,
+  mergeTemplateSets,
+  serializeTemplates,
+  type SerializedTemplateSet,
+  type TemplateSet
+} from '@core/ocr/template-matcher'
+import { USER_TEMPLATE_KEY } from '../../ocr/detection'
 import type { View, ViewContext } from '../view'
 import type { AppState } from '../../state/store'
 import type { HotkeyMap } from '@shared/ipc-contract'
@@ -63,8 +73,62 @@ function accelFromEvent(e: KeyboardEvent): string {
   return parts.join('+')
 }
 
+/**
+ * Validate pasted text as a SerializedTemplateSet (the scripts/build-user-templates.ts
+ * artifact). Returns the DESERIALIZED set so the caller knows it round-trips through
+ * exactly the path detection.ts loads it with.
+ */
+function parseUserTemplateJson(
+  text: string
+): { ok: true; set: TemplateSet } | { ok: false; error: string } {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return { ok: false, error: 'JSON 파싱 실패 — 파일 내용을 그대로 붙여넣었는지 확인하세요' }
+  }
+  const s = parsed as SerializedTemplateSet
+  if (
+    !s ||
+    typeof s !== 'object' ||
+    !Number.isInteger(s.canonW) ||
+    s.canonW <= 0 ||
+    !Number.isInteger(s.canonH) ||
+    s.canonH <= 0 ||
+    !Array.isArray(s.chars) ||
+    s.chars.length === 0
+  ) {
+    return { ok: false, error: '템플릿 형식이 아닙니다 (canonW/canonH/chars 필요)' }
+  }
+  for (const c of s.chars) {
+    if (
+      !c ||
+      typeof c.char !== 'string' ||
+      c.char.length !== 1 ||
+      typeof c.grid !== 'string' ||
+      !Number.isFinite(c.samples) ||
+      c.samples <= 0 ||
+      !Number.isFinite(c.meanAspect) ||
+      c.meanAspect <= 0
+    ) {
+      return { ok: false, error: `글자 항목이 손상되었습니다 (char/grid/samples/meanAspect)` }
+    }
+  }
+  try {
+    const set = deserializeTemplates(s)
+    for (const c of set.chars) {
+      if (c.grid.length !== s.canonW * s.canonH) {
+        return { ok: false, error: `'${c.char}' 그리드 크기가 ${s.canonW}×${s.canonH}와 다릅니다` }
+      }
+    }
+    return { ok: true, set }
+  } catch {
+    return { ok: false, error: '템플릿 디코딩 실패 (grid base64 손상?)' }
+  }
+}
+
 export function createSettingsView(ctx: ViewContext): View {
-  const { app, api } = ctx
+  const { app, api, detection } = ctx
 
   // --- section 1: theme swatches -------------------------------------------
   const swatchByValue = new Map<ThemeName, HTMLButtonElement>()
@@ -272,7 +336,98 @@ export function createSettingsView(ctx: ViewContext): View {
     )
   )
 
-  // --- section 5: info ------------------------------------------------------
+  // --- section 5: OCR user templates (offline batch-learn import) ----------
+  const tplStatus = h('span', { class: 'badge' })
+  const tplMsg = h('p', { class: 'stat-chip__label' })
+  const tplTextarea = h('textarea', {
+    rows: 4,
+    spellcheck: false,
+    placeholder: 'out/user-templates.json 내용을 붙여넣으세요',
+    style: { width: '100%', minHeight: '88px', resize: 'vertical' }
+  })
+
+  /** Reflect the currently-stored user template set on the status badge. */
+  function refreshTplStatus(): void {
+    try {
+      const raw = localStorage.getItem(USER_TEMPLATE_KEY)
+      if (!raw) {
+        tplStatus.textContent = '유저 템플릿 없음'
+        return
+      }
+      const set = deserializeTemplates(JSON.parse(raw) as SerializedTemplateSet)
+      const samples = set.chars.reduce((a, c) => a + c.samples, 0)
+      tplStatus.textContent = `활성: ${set.chars.length}글자 · ${samples}샘플`
+    } catch {
+      tplStatus.textContent = '저장본 손상 — 가져오기로 교체하세요'
+    }
+  }
+
+  const tplImportBtn = h('button', {
+    class: 'btn btn--sm btn--primary',
+    type: 'button',
+    onclick: () => {
+      const text = tplTextarea.value.trim()
+      if (!text) {
+        tplMsg.textContent = '먼저 user-templates.json 내용을 붙여넣으세요'
+        return
+      }
+      const res = parseUserTemplateJson(text)
+      if (!res.ok) {
+        tplMsg.textContent = `가져오기 실패: ${res.error}`
+        return
+      }
+      // Imported chars win outright (they are big offline averages); chars the
+      // user live-taught that the import does not cover are preserved.
+      let final = res.set
+      try {
+        const existingRaw = localStorage.getItem(USER_TEMPLATE_KEY)
+        if (existingRaw) {
+          const existing = deserializeTemplates(JSON.parse(existingRaw) as SerializedTemplateSet)
+          if (existing.canonW === res.set.canonW && existing.canonH === res.set.canonH) {
+            final = mergeTemplateSets(res.set, existing)
+          }
+        }
+      } catch {
+        /* corrupt store: plain replace */
+      }
+      try {
+        localStorage.setItem(USER_TEMPLATE_KEY, JSON.stringify(serializeTemplates(final)))
+      } catch {
+        tplMsg.textContent = '저장 실패 (localStorage)'
+        return
+      }
+      detection.reloadUserTemplates()
+      tplTextarea.value = ''
+      tplMsg.textContent = `가져옴: ${res.set.chars.length}글자 (활성 ${final.chars.length}글자) — 즉시 인식에 반영됩니다`
+      refreshTplStatus()
+    }
+  }, '가져오기')
+
+  const tplResetBtn = h('button', {
+    class: 'btn btn--ghost btn--sm',
+    type: 'button',
+    onclick: () => {
+      localStorage.removeItem(USER_TEMPLATE_KEY)
+      detection.reloadUserTemplates()
+      tplMsg.textContent = '유저 템플릿을 비웠습니다 — 기본 템플릿으로 동작'
+      refreshTplStatus()
+    }
+  }, '초기화')
+
+  refreshTplStatus()
+  const templateCard = h('details', { class: 'drawer' },
+    h('summary', {}, 'OCR 유저 템플릿'),
+    h('div', { class: 'row' }, tplStatus),
+    tplTextarea,
+    h('div', { class: 'row' }, tplImportBtn, tplResetBtn),
+    tplMsg,
+    h('p', { class: 'stat-chip__label' },
+      '오프라인 일괄 학습 산출물(out/user-templates.json — npm run templates:user로 생성)을 붙여넣어 적용합니다. ' +
+        '가져온 글자는 기본 템플릿보다 우선하며, 보정·학습 탭의 수동 학습으로 언제든 덮어쓸 수 있습니다.'
+    )
+  )
+
+  // --- section 6: info ------------------------------------------------------
   const devtoolsBtn = h('button', {
     class: 'btn btn--ghost btn--sm',
     type: 'button',
@@ -281,7 +436,7 @@ export function createSettingsView(ctx: ViewContext): View {
 
   const infoCard = h('section', { class: 'card' },
     h('div', { class: 'card__title' }, '정보'),
-    h('div', { class: 'stat-chip__value' }, 'Lineage MP Timer v3.0.0'),
+    h('div', { class: 'stat-chip__value' }, 'Lineage MP Timer v3.1.0'),
     h('p', { class: 'stat-chip__label' }, 'prefers-reduced-motion 설정을 존중합니다.'),
     h('div', { class: 'row' }, devtoolsBtn)
   )
@@ -291,6 +446,7 @@ export function createSettingsView(ctx: ViewContext): View {
     behaviourCard,
     hotkeyCard,
     cloudCard,
+    templateCard,
     infoCard
   )
 
