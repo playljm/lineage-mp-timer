@@ -1,0 +1,24 @@
+
+[1m[46m RUN [49m[22m [36mv3.2.6 [39m[90mC:/dev/lineage-mp-timer[39m
+
+[90mstdout[2m | test/debug/dbg-mp-binarize-sweep.test.ts[2m > [22m[2mdbg-mp-binarize-sweep[2m > [22m[2mG1. mp 픽스처 그레이스케일 여부 + blueMargin 트리거 픽셀
+[22m[39m
+=== G1. mp 픽스처 110장: 완전 그레이스케일=110장, blueMargin(B>R+40 && B>G) 트리거 픽셀 총합=0, max(B-R)=0
+
+[90mstdout[2m | test/debug/dbg-mp-binarize-sweep.test.ts[2m > [22m[2mdbg-mp-binarize-sweep[2m > [22m[2mG2. darkRatio 스윕: 가드 통과율 + mp-only 셋 TEST 정확도
+[22m[39m
+=== G2. mp 이진화 스윕 (train 가드 통과 → mp-only 템플릿 → TEST 정확도) ===
+  auto(현행)     가드PASS  8/55  chars=[/12345678]  TEST 0.0% (0/55)  실패예: 0/235->"4412125511" ; 0/242->"1226151771576618888888" ; 0/242->"12282251288155/76888888"
+  dark r=0.80  가드PASS  0/55  chars=[]  TEST 0.0% (0/55)  실패예: 0/235->"" ; 0/242->"" ; 0/242->""
+  dark r=0.55  가드PASS  0/55  chars=[]  TEST 0.0% (0/55)  실패예: 0/235->"" ; 0/242->"" ; 0/242->""
+  dark r=0.45  가드PASS  0/55  chars=[]  TEST 0.0% (0/55)  실패예: 0/235->"" ; 0/242->"" ; 0/242->""
+  dark r=0.35  가드PASS  0/55  chars=[]  TEST 0.0% (0/55)  실패예: 0/235->"" ; 0/242->"" ; 0/242->""
+
+ [32m✓[39m test/debug/dbg-mp-binarize-sweep.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 900[2mms[22m[39m
+   [33m[2m✓[22m[39m dbg-mp-binarize-sweep[2m > [22mG2. darkRatio 스윕: 가드 통과율 + mp-only 셋 TEST 정확도 [33m 801[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m   Start at [22m 19:41:20
+[2m   Duration [22m 1.96s[2m (transform 65ms, setup 0ms, collect 745ms, tests 900ms, environment 0ms, prepare 98ms)[22m
+

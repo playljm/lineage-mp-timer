@@ -1,0 +1,33 @@
+[set exp+level+adena (current)] used=78 perChar={"0":67,"1":23,"2":62,"3":53,"4":26,"5":23,"6":25,"7":43,"8":41,"9":19,".":55}
+[set exp+level+adena (current)] '8' samples=41 meanAspect=0.895
+[set exp+level+adena (current)] '6' samples=25 meanAspect=0.769
+[set exp+level+adena (current)] exp: 70.9% (39/55) fails: 27.0865->"27.0665" | 27.0865->"27.0665" | 27.0982->"27.0962" | 27.0982->"27.0962" | 27.0982->"27.0962" | 30.4782->"30.4762"
+[set exp+level+adena (current)] level: 95.2% (20/21) fails: 8->"1"
+[set exp+level+adena (current)] adena: 3.6% (2/55) fails: 115->"34662" | 126->"056126" | 14373->"34414" | 15483->"3055077" | 163242->"0503073" | 172242->"405596"
+[set exp+adena (no level)] used=57 perChar={"0":67,"1":23,"2":41,"3":53,"4":26,"5":23,"6":25,"7":43,"8":20,"9":19,".":55}
+[set exp+adena (no level)] '8' samples=20 meanAspect=0.769
+[set exp+adena (no level)] '6' samples=25 meanAspect=0.769
+[set exp+adena (no level)] exp: 100.0% (55/55)
+[set exp+adena (no level)] level: 0.0% (0/21) fails: 28->"70" | 28->"70" | 28->"70" | 28->"70" | 28->"70" | 28->"70"
+[set exp+adena (no level)] adena: 5.5% (3/55) fails: 115->"34882" | 126->"858126" | 14373->"34414" | 15483->"3855877" | 163242->"8508873" | 172242->"485598"
+[set exp+level (no adena)] used=76 perChar={"0":67,"1":23,"2":60,"3":50,"4":24,"5":22,"6":23,"7":43,"8":41,"9":19,".":55}
+[set exp+level (no adena)] '8' samples=41 meanAspect=0.895
+[set exp+level (no adena)] '6' samples=23 meanAspect=0.769
+[set exp+level (no adena)] exp: 70.9% (39/55) fails: 27.0865->"27.0665" | 27.0865->"27.0665" | 27.0982->"27.0962" | 27.0982->"27.0962" | 27.0982->"27.0962" | 30.4782->"30.4762"
+[set exp+level (no adena)] level: 95.2% (20/21) fails: 8->"1"
+[set exp+level (no adena)] adena: 3.6% (2/55) fails: 115->"34662" | 126->"056126" | 14373->"34414" | 15483->"3055077" | 163242->"0503073" | 172242->"405596"
+[set exp only] used=55 perChar={"0":67,"1":23,"2":39,"3":50,"4":24,"5":22,"6":23,"7":43,"8":20,"9":19,".":55}
+[set exp only] '8' samples=20 meanAspect=0.769
+[set exp only] '6' samples=23 meanAspect=0.769
+[set exp only] exp: 100.0% (55/55)
+[set exp only] level: 0.0% (0/21) fails: 28->"70" | 28->"70" | 28->"70" | 28->"70" | 28->"70" | 28->"70"
+[set exp only] adena: 5.5% (3/55) fails: 115->"34682" | 126->"858126" | 14373->"34414" | 15483->"3855877" | 163242->"8508873" | 172242->"485598"
+[22m[39m[C] level-only set: used=21 perChar={"2":21,"8":21}
+[C] level w/ level-only set: 100.0% (21/21)
+[C] level w/ merged (level wins per char): 95.2% (20/21) fails: 8->"1"
+[C] exp w/ merged should stay polluted-by-level for chars 2/8: 23.6% (13/55) fails: 27.0604->"37.0604" | 27.0604->"37.0604" | 27.0644->"37.0644" | 27.0644->"37.0644" | 27.0710->"37.0710" | 27.0710->"37.0710"
+[22m[39m[glyph] 27.0865 glyph#4 ('8') 20x26 aspect=0.769
+[score exp+level+adena (current)] top4: '6'=0.842(px0.842) '8'=0.818(px0.836) '0'=0.805(px0.805) '3'=0.805(px0.805)
+[score exp+adena (no level)] top4: '8'=0.978(px0.978) '6'=0.842(px0.842) '0'=0.805(px0.805) '3'=0.805(px0.805)
+[score exp+level (no adena)] top4: '6'=0.855(px0.855) '8'=0.818(px0.836) '3'=0.815(px0.815) '0'=0.805(px0.805)
+[score exp only] top4: '8'=0.978(px0.978) '6'=0.855(px0.855) '3'=0.815(px0.815) '0'=0.805(px0.805)
