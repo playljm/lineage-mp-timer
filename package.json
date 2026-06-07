@@ -1,6 +1,6 @@
 {
   "name": "lineage-mp-timer",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "리니지 클래식 MP 자연회복 완충 타이머 + EXP/아데나 트래커 (TS/Vite 리뉴얼, 바-픽셀 + 유저 디지트 템플릿 OCR)",
   "type": "module",
   "main": "out/main/index.js",
@@ -16,6 +16,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ocr": "vitest run test/ocr",
+    "templates:user": "vitest run test/tools/build-user-templates.test.ts",
     "dist": "electron-vite build && electron-builder",
     "dist:portable": "electron-vite build && electron-builder --win portable"
   },

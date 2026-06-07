@@ -1,10 +1,11 @@
-# Lineage MP Timer v3.0
+# Lineage MP Timer v3.1
 
 리니지 클래식용 **MP 자연회복 완충 타이머 + EXP/아데나 세션 트래커** Electron 앱.
 
 게임 화면을 인식해 MP/EXP/레벨/아데나를 자동으로 읽고, MP 완충 예상 시각·EXP/h·아데나/h·레벨업 ETA를 계산합니다. MP가 차면 토스트 + 사운드로 알려줍니다.
 
 > **v3.0 리뉴얼**: TypeScript + electron-vite로 전면 재작성. 문자 인식(OCR)을 근본부터 재설계하고, UI/UX를 3탭 구조로 정리했습니다.
+> **v3.1**: MP 보정 자기검증(파란 게이지 게이트 + 자동 축소 + 색 스와치), 추적 freeze 해소(stale-anchor 재부트스트랩·수동 잠금 90s·dt-완화), 템플릿 오염 차단(기하 가드 + 중앙값 aspect), adena 전처리 체인 — 실측 정확도 exp 54.5%→98.2%, adena 5.5%→73.0% (세션-홀드아웃 기준, `CHANGELOG.md` 참고).
 
 ---
 
