@@ -213,7 +213,7 @@ function buildTitlebar(ctx: ViewContext): HTMLElement {
     h('button', { class: 'btn btn--icon btn--ghost', title, 'aria-label': title, onclick: onClick }, label)
 
   return h('header', { class: 'titlebar' },
-    h('span', { class: 'titlebar__title' }, '🗡️ Lineage MP Timer ', h('small', {}, 'v3.0')),
+    h('span', { class: 'titlebar__title' }, '🗡️ Lineage MP Timer ', h('small', {}, 'v3.1')),
     h('div', { class: 'titlebar__actions' },
       iconBtn('📦', '컴팩트 모드 (F3)', () => actions.setCompact(!app.get().persisted.ui.compactMode)),
       iconBtn('📌', '항상 위', () => {

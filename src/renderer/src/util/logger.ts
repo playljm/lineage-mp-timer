@@ -75,7 +75,7 @@ class Logger {
 
   /** Full log as plain text, newest last. */
   export(): string {
-    const head = `Lineage MP Timer v3.0 diagnostic log\nexported ${stamp(Date.now())} · ${this.buf.length} entries\n${'-'.repeat(60)}\n`
+    const head = `Lineage MP Timer v3.1 diagnostic log\nexported ${stamp(Date.now())} · ${this.buf.length} entries\n${'-'.repeat(60)}\n`
     return (
       head +
       this.buf
