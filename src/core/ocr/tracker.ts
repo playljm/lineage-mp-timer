@@ -53,6 +53,7 @@ export type ObserveReason =
   | 'normal' // accepted: posterior >= threshold
   | 'anomaly_consistency' // force-accepted: anomaly repeated N times -> real change
   | 'low_posterior' // rejected: posterior < threshold
+  | 'stale_anchor_rebootstrap' // anchor invalidated after prolonged rejection — back to init
 
 /** Per-region temporal value shapes carried by the trackers. */
 export interface MpValue {
@@ -80,10 +81,28 @@ export interface BaseTrackerOptions {
    * After a manual (`force`) observation, ignore OCR observations for this many ms
    * so a user-typed value is not immediately overwritten by a (possibly misread)
    * auto value. 0 = no lock (default). MP uses 0 (its bar-pixel source is accurate
-   * and MP changes constantly); EXP/level/adena use a long lock so a typed value
-   * sticks where auto-ROI is unreliable.
+   * and MP changes constantly); EXP/level/adena use a lock so a typed value
+   * sticks where auto-ROI is unreliable. While locked, OCR observations agreeing
+   * with the pinned value (within `manualUnlockTolerance`) 3 consecutive times
+   * release the lock early — auto-recognition has proven it reads the same number.
    */
   manualLockMs?: number
+  /**
+   * Stale-anchor re-bootstrap window: when no observation has been accepted and
+   * `low_posterior` rejections have persisted for this many ms, the anchor itself
+   * is presumed wrong/stale, is invalidated, and the tracker falls back to the
+   * init bootstrap (N consecutive identical observations — misread defence kept).
+   * Default 45_000.
+   */
+  staleAnchorMs?: number
+  /**
+   * Minimum OCR confidence for an observation to participate in the init
+   * bootstrap consistency window. Garbage reads (e.g. an uncalibrated "000000"
+   * text fallback) must not seed the anchor. Low-confidence observations are
+   * neither counted nor recorded pre-anchor, so they don't break the window
+   * either. Default 0.5.
+   */
+  initMinConfidence?: number
 }
 
 /** Extra `observe()` controls. */
@@ -109,6 +128,9 @@ function clamp01(x: number): number {
   return x
 }
 
+/** Consecutive agreeing OCR observations that release a manual lock early. */
+const MANUAL_AGREE_RELEASE_COUNT = 3
+
 /**
  * Shared temporal-validation machinery. Subclasses supply the domain shape check,
  * the prior score, the temporal score, and the scalar projection used for the
@@ -122,6 +144,8 @@ export abstract class BaseTracker<V> {
   protected anomalyConsistencyThreshold: number
   private readonly rateEmaAlpha: number
   private readonly manualLockMs: number
+  private readonly staleAnchorMs: number
+  private readonly initMinConfidence: number
 
   protected history: HistoryEntry<V>[] = []
   protected lastTrusted: V | null = null
@@ -129,6 +153,10 @@ export abstract class BaseTracker<V> {
   protected anomalyStreak = 0
   /** Epoch ms until which OCR observations are ignored (set by a manual force). */
   protected manualLockUntilMs = 0
+  /** Timestamp of the first `low_posterior` rejection since the last acceptance (0 = none). */
+  protected rejectStreakStartMs = 0
+  /** Consecutive locked OCR observations agreeing with the pinned manual value. */
+  private manualAgreeStreak = 0
 
   private rateEma: number | null = null
   private rateVar: number | null = null
@@ -141,6 +169,8 @@ export abstract class BaseTracker<V> {
     this.anomalyConsistencyThreshold = opts.anomalyConsistencyThreshold ?? 5
     this.rateEmaAlpha = opts.rateEmaAlpha ?? 0.3
     this.manualLockMs = opts.manualLockMs ?? 0
+    this.staleAnchorMs = opts.staleAnchorMs ?? 45_000
+    this.initMinConfidence = opts.initMinConfidence ?? 0.5
   }
 
   /** The currently trusted value, or `null` if no anchor has been established. */
@@ -170,12 +200,28 @@ export abstract class BaseTracker<V> {
       this.commit(value, nowMs, ocrConfidence, true, 1.0)
       this.anomalyStreak = 0
       this.manualLockUntilMs = this.manualLockMs > 0 ? nowMs + this.manualLockMs : 0
+      this.manualAgreeStreak = 0
       return { accepted: true, value, posterior: 1.0, reason: 'user_force' }
     }
 
-    // A freshly-typed value is pinned for the lock window — reject OCR until it expires.
+    // A freshly-typed value is pinned for the lock window — reject OCR until it
+    // expires. EARLY RELEASE: when OCR repeatedly reads a value agreeing with the
+    // pinned one (within the per-region tolerance, 3 consecutive times), auto
+    // recognition has proven it tracks the same number — release the lock now and
+    // process the current observation normally instead of sitting out the window.
     if (this.manualLockUntilMs > nowMs) {
-      return { accepted: false, value: this.lastTrusted, posterior: 0, reason: 'user_locked' }
+      if (value != null && this.isValueShape(value) && this.manualAgrees(value)) {
+        this.manualAgreeStreak++
+        if (this.manualAgreeStreak < MANUAL_AGREE_RELEASE_COUNT) {
+          return { accepted: false, value: this.lastTrusted, posterior: 0, reason: 'user_locked' }
+        }
+        this.manualLockUntilMs = 0
+        this.manualAgreeStreak = 0
+        // fall through — the 3rd agreeing observation is evaluated normally below
+      } else {
+        this.manualAgreeStreak = 0
+        return { accepted: false, value: this.lastTrusted, posterior: 0, reason: 'user_locked' }
+      }
     }
 
     if (value == null || !this.isValueShape(value)) {
@@ -197,6 +243,12 @@ export abstract class BaseTracker<V> {
 
     // No anchor yet: bootstrap once `initConsistencyThreshold` identical values land.
     if (this.lastTrusted == null) {
+      // Bootstrap conf gate: garbage reads (e.g. an uncalibrated "000000" text
+      // fallback) must not seed the anchor. Below-gate observations are not
+      // recorded, so they neither count toward nor break the consistency window.
+      if (ocr < this.initMinConfidence) {
+        return { accepted: false, value: null, posterior, reason: 'init_pending' }
+      }
       this.record(value, nowMs, ocr, false, posterior)
       if (this.isConsistentRecent(value, this.initConsistencyThreshold)) {
         this.updateRateEma(value, nowMs)
@@ -210,6 +262,11 @@ export abstract class BaseTracker<V> {
     if (anomaly) {
       this.anomalyStreak++
       // A real change (vs a misread) repeats identically; promote after N consistent.
+      // Record BEFORE the consistency check — same order as the init path — so the
+      // current observation participates in the N-window. The previous
+      // check-before-record order cost one extra frame (off-by-one): promotion
+      // needed N+1 identical frames instead of the designed N.
+      this.record(value, nowMs, ocr, false, posterior)
       if (
         this.anomalyStreak >= this.anomalyConsistencyThreshold &&
         this.isConsistentRecent(value, this.anomalyConsistencyThreshold)
@@ -219,7 +276,17 @@ export abstract class BaseTracker<V> {
         this.anomalyStreak = 0
         return { accepted: true, value, posterior, reason: 'anomaly_consistency' }
       }
-      this.record(value, nowMs, ocr, false, posterior)
+      // Stale-anchor re-bootstrap: rejections persisting `staleAnchorMs` without a
+      // single acceptance mean the anchor itself is wrong/stale (e.g. polluted by a
+      // misread, or a manual value the game has long moved past). Drop it and fall
+      // back to the init bootstrap — its N-consecutive-identical gate (plus the
+      // conf gate) keeps the misread defence intact.
+      if (this.rejectStreakStartMs === 0) {
+        this.rejectStreakStartMs = nowMs
+      } else if (nowMs - this.rejectStreakStartMs >= this.staleAnchorMs) {
+        this.invalidateAnchor()
+        return { accepted: false, value: null, posterior, reason: 'stale_anchor_rebootstrap' }
+      }
       return { accepted: false, value: this.lastTrusted, posterior, reason: 'low_posterior' }
     }
 
@@ -238,6 +305,8 @@ export abstract class BaseTracker<V> {
     this.rateEma = null
     this.rateVar = null
     this.manualLockUntilMs = 0
+    this.rejectStreakStartMs = 0
+    this.manualAgreeStreak = 0
   }
 
   /** Forget all state. */
@@ -249,6 +318,30 @@ export abstract class BaseTracker<V> {
     this.rateEma = null
     this.rateVar = null
     this.manualLockUntilMs = 0
+    this.rejectStreakStartMs = 0
+    this.manualAgreeStreak = 0
+  }
+
+  /**
+   * Drop a stale anchor and return to the init-bootstrap phase. History is kept so
+   * recent (rejected) observations can immediately count toward re-bootstrapping.
+   */
+  private invalidateAnchor(): void {
+    this.lastTrusted = null
+    this.lastTrustedTs = 0
+    this.anomalyStreak = 0
+    this.rateEma = null
+    this.rateVar = null
+    this.rejectStreakStartMs = 0
+  }
+
+  /** Does an OCR value agree with the pinned manual value (early lock release)? */
+  private manualAgrees(value: V): boolean {
+    if (this.lastTrusted == null) return false
+    const a = this.extractScalar(value)
+    const b = this.extractScalar(this.lastTrusted)
+    if (a == null || b == null) return false
+    return Math.abs(a - b) <= this.manualUnlockTolerance(b)
   }
 
   // ── Adaptive rate EMA ───────────────────────────────────────────────────────
@@ -285,7 +378,7 @@ export abstract class BaseTracker<V> {
     const rate = Math.abs(scalar - lastScalar) / dt
     const sigma = Math.sqrt(Math.max(0, this.rateVar ?? 0))
     const upper = this.rateEma + 2 * sigma
-    const effectiveUpper = Math.max(upper, this.rateEma * 3, 1.0)
+    const effectiveUpper = Math.max(upper, this.rateEma * 3, this.minRateFloor())
     if (rate <= effectiveUpper) return 1.0
     const excess = (rate - effectiveUpper) / Math.max(effectiveUpper, 1.0)
     if (excess < 1) return 0.5
@@ -298,6 +391,7 @@ export abstract class BaseTracker<V> {
   private commit(value: V, nowMs: number, conf: number, accepted: boolean, posterior: number): void {
     this.lastTrusted = value
     this.lastTrustedTs = nowMs
+    this.rejectStreakStartMs = 0 // any acceptance ends the stale-anchor countdown
     this.record(value, nowMs, conf, accepted, posterior)
   }
 
@@ -331,6 +425,23 @@ export abstract class BaseTracker<V> {
   /** Structural equality used by the consistency gates. */
   protected valueEquals(a: V, b: V): boolean {
     return a === b
+  }
+  /**
+   * Absolute floor (units/sec) for the adaptive rate-gate upper bound. The default
+   * 1.0 suits %-scale regions (EXP) and levels; ADENA overrides it because its
+   * scalar moves by thousands per pickup — a 1 unit/sec floor made the first
+   * pickup after idle always trip the rate gate.
+   */
+  protected minRateFloor(): number {
+    return 1.0
+  }
+  /**
+   * Agreement tolerance for early manual-lock release, in scalar units around the
+   * pinned value. Default: 1% of the pinned scalar (relative). EXP overrides with
+   * ±1 percentage point; LEVEL requires an exact match.
+   */
+  protected manualUnlockTolerance(pinnedScalar: number): number {
+    return 0.01 * Math.abs(pinnedScalar)
   }
 }
 
@@ -463,15 +574,28 @@ export class ExpTracker extends BaseTracker<ExpValue> {
     return 1.0
   }
 
-  protected temporalScore(value: ExpValue, _nowMs: number): number {
+  protected temporalScore(value: ExpValue, nowMs: number): number {
     if (this.lastTrusted == null) return 0.7
+    // Elapsed-time relaxation (cf. MP's rate=|Δ|/dt): while the anchor is stale
+    // (rejections stop it from advancing) the legitimate hunting delta keeps
+    // growing, so the bands widen with dt at ~0.2 %p/s. g==1 (dt<=5s) reproduces
+    // the original instantaneous bands at the live 1s tick; a Δ>10 jump becomes
+    // correctable once 10·g catches up — the old dt-blind bands made a >10%p
+    // divergence permanently unrecoverable at live conf 0.72.
+    const dt = Math.max(0.1, (nowMs - this.lastTrustedTs) / 1000)
+    const g = Math.max(1, 0.2 * dt)
     const delta = value - this.lastTrusted
-    if (delta >= 0 && delta <= 1.0) return 1.0 // normal hunting gain
-    if (delta > 1.0 && delta <= 10) return 0.4 // big jump (post-levelup anchor stale?)
-    if (delta > 10) return 0.15 // very big jump (catastrophic misread)
-    if (delta < 0 && delta >= -10) return 0.5 // small decrease (death)
-    if (delta < -10) return 0.1 // catastrophic digit loss
+    if (delta >= 0 && delta <= 1.0 * g) return 1.0 // normal hunting gain
+    if (delta > 1.0 * g && delta <= 10 * g) return 0.4 // big jump (post-levelup anchor stale?)
+    if (delta > 10 * g) return 0.15 // very big jump (catastrophic misread)
+    if (delta < 0 && delta >= -10 * g) return 0.5 // small decrease (death)
+    if (delta < -10 * g) return 0.1 // catastrophic digit loss
     return 0.6
+  }
+
+  /** ±1 percentage point on the 0..100 EXP scale (not relative to the value). */
+  protected override manualUnlockTolerance(_pinnedScalar: number): number {
+    return 1.0
   }
 }
 
@@ -498,15 +622,25 @@ export class LevelTracker extends BaseTracker<LevelValue> {
     return 1.0
   }
 
-  protected temporalScore(value: LevelValue, _nowMs: number): number {
+  protected temporalScore(value: LevelValue, nowMs: number): number {
     if (this.lastTrusted == null) return 0.7
+    // Elapsed-time relaxation: a stale anchor must accept the extra level-ups that
+    // legitimately happened while it was frozen (budget ~1 level / minute). For
+    // dt < 60s the budget is 1 — identical to the original dt-blind bands.
+    const dt = Math.max(0.1, (nowMs - this.lastTrustedTs) / 1000)
+    const budget = 1 + Math.floor(dt / 60)
     const delta = value - this.lastTrusted
     if (delta === 0) return 1.0
-    if (delta === 1) return 0.85 // normal level-up
-    if (delta === 2) return 0.3 // fast 2-level-up possible (low level)
-    if (delta > 2) return 0.1 // jump (suspect)
+    if (delta >= 1 && delta <= budget) return 0.85 // normal level-up(s)
+    if (delta === budget + 1) return 0.3 // fast 2-level-up possible (low level)
+    if (delta > budget + 1) return 0.1 // jump (suspect)
     if (delta < 0) return 0.02 // level-down (impossible)
     return 0.5
+  }
+
+  /** Levels are integers — only an exact match counts as manual-lock agreement. */
+  protected override manualUnlockTolerance(_pinnedScalar: number): number {
+    return 0
   }
 }
 
@@ -545,6 +679,15 @@ export class AdenaTracker extends BaseTracker<AdenaValue> {
     if (!Number.isInteger(value) || value < 0) return 0.01
     if (value > 1e9) return 0.1 // >1 billion unrealistic
     return 1.0
+  }
+
+  /**
+   * ADENA moves thousands of units per pickup; the base 1 unit/sec floor made the
+   * first pickup after idle (rateEma≈0) always trip the rate gate (diagnosis
+   * scenario E: +500 pickup rejected for 6 frames). Floor scales with the anchor.
+   */
+  protected override minRateFloor(): number {
+    return Math.max(5000, Math.abs(this.lastTrusted ?? 0) * 0.5)
   }
 
   protected temporalScore(value: AdenaValue, nowMs: number): number {
@@ -677,8 +820,12 @@ export function createRegionTrackers(opts?: {
   adena?: AdenaTrackerOptions
 }): RegionTrackers {
   // MP omits the lock — its bar-pixel source is accurate and MP changes constantly.
-  // EXP/level/adena pin a manually-typed value for 10 min (auto-ROI can be unreliable).
-  const MANUAL_LOCK_MS = 600_000
+  // EXP/level/adena pin a manually-typed value for 90s (auto-ROI can be unreliable).
+  // Was 10 min: long enough for EXP to legitimately progress >10%p, which chained
+  // into a permanent low_posterior freeze after unlock (live diagnosis B3). 90s
+  // still blocks an immediate misread overwrite, and the lock releases early when
+  // OCR agrees with the typed value 3 consecutive times.
+  const MANUAL_LOCK_MS = 90_000
   return {
     // MP changes fast in combat (a single cast drops it a lot). The bar-pixel source
     // is high-confidence, so promote a genuinely-changed value after 3 consistent

@@ -1,0 +1,64 @@
+
+[1m[46m RUN [49m[22m [36mv3.2.6 [39m[90mC:/dev/lineage-mp-timer[39m
+
+[90mstdout[2m | test/debug/dbg-live-tracker-freeze.test.ts[2m > [22m[2mdbg-live-tracker-freeze[2m > [22m[2m(A) 정상 시나리오: 58.2000 앵커 후 58.2383 변화 — 1프레임 수락
+[22m[39m[A] Δ=+0.0383 conf=0.72 → normal post=0.720
+[A] 무노이즈 사냥 300프레임: 수락 300/300
+
+[90mstdout[2m | test/debug/dbg-live-tracker-freeze.test.ts[2m > [22m[2mdbg-live-tracker-freeze[2m > [22m[2m(B1) 부트스트랩 직후 상향 오염 2회 → [수정 후] dt-완화로 사냥 중 10프레임 자동 복구
+[22m[39m[B1] 오염1: normal post=0.455 / 오염2: normal post=0.455 → 앵커=77.4595
+[B1] 사냥 200프레임(매 프레임 고유값): 거부 9/200, 첫 수락 10프레임, 마지막 reason=normal, 앵커=59.5202
+[B1] 복구 후 idle 1프레임: normal post=0.720
+
+[90mstdout[2m | test/debug/dbg-live-tracker-freeze.test.ts[2m > [22m[2mdbg-live-tracker-freeze[2m > [22m[2m(B2) 54% 정확도 iid 노이즈 스트림 600프레임 — 고착/복구 통계
+[22m[39m[B2] iid 노이즈: 관측 572/600, 수락 488, 거부 84, 최장 연속거부 3프레임, 오염수락 0회, anomaly승급 0회, 최대이탈 0.800%p, 종료이탈 0.000%p
+
+[90mstdout[2m | test/debug/dbg-live-tracker-freeze.test.ts[2m > [22m[2mdbg-live-tracker-freeze[2m > [22m[2m(B3) 수동입력(적용&학습 버튼) → [수정 후] 90s 잠금 + OCR 일치 3회 조기 해제 — freeze 체인 소멸
+[22m[39m[B3] 600프레임: user_locked 2/600 (before: 599), 첫 수락 f3, 최종 앵커=62
+
+[90mstdout[2m | test/debug/dbg-live-tracker-freeze.test.ts[2m > [22m[2mdbg-live-tracker-freeze[2m > [22m[2m(B4) 결정적 오인식 모델(같은 값=같은 오독) — 오독이 5회 반복되면 오값이 승급된다
+[22m[39m[B4] 결정적 오독: 수락 499/600, 최장 연속거부 4, 오염수락 77회, anomaly승급 24회, 최대이탈 54.038%p, 종료이탈 0.762%p, 종료 연속거부 1
+
+[90mstdout[2m | test/debug/dbg-live-tracker-freeze.test.ts[2m > [22m[2mdbg-live-tracker-freeze[2m > [22m[2m(C) 레벨업 28→29: 1s 틱 conf 0.71 → 1프레임 수락 / 0.3s 틱 저conf → 거부 후 dt 성장으로 복구
+[22m[39m[C] 1s틱 28→29 conf0.71: normal post=0.655
+[C] 0.3s틱 28→29 conf0.71: f1:normal@0.327 f2:normal@0.710 f3:normal@0.710 f4:normal@0.710 f5:normal@0.710 f6:normal@0.710 → 수락 1프레임
+[C] 0.3s틱 28→29 conf0.66: f1:normal@0.304 f2:normal@0.660 f3:normal@0.660 f4:normal@0.660 f5:normal@0.660 f6:normal@0.660 → 수락 1프레임
+[C] 0.3s틱 28→29 conf0.6: f1:low_posterior@0.277 f2:normal@0.391 f3:normal@0.600 f4:normal@0.600 f5:normal@0.600 f6:normal@0.600 → 수락 2프레임
+
+[90mstdout[2m | test/debug/dbg-live-tracker-freeze.test.ts[2m > [22m[2mdbg-live-tracker-freeze[2m > [22m[2m(D) conf × temporal-band 수락 경계표 — conf<0.775면 |Δ|>10 교정은 구조적으로 불가능
+[22m[39m[D] band(s값) → 수락에 필요한 최소 conf = 0.3/sqrt(s):
+    EXP Δ∈[0,+1] (정상사냥, t=1.0)               s=1.00 → conf ≥ 0.300
+    EXP Δ∈(+1,+10] (점프, t=0.4)               s=0.40 → conf ≥ 0.474
+    EXP Δ>+10 (대점프, t=0.15)                  s=0.15 → conf ≥ 0.775
+    EXP Δ∈[-10,0) (사망, t=0.5)                s=0.50 → conf ≥ 0.424
+    EXP Δ<-10 (자릿수손실, t=0.1)                 s=0.10 → conf ≥ 0.949
+    EXP confusion(prior 0.3)×사망(0.5)         s=0.15 → conf ≥ 0.775
+    LEVEL Δ=+1 (t=0.85)                      s=0.85 → conf ≥ 0.325
+    LEVEL Δ=+2 (t=0.3)                       s=0.30 → conf ≥ 0.548
+    LEVEL Δ<0 (t=0.02)                       s=0.02 → conf ≥ 2.12 (불가능)
+    MP rate>100/s (t=0.05)                   s=0.05 → conf ≥ 1.34 (불가능)
+    ADENA rate게이트 0.1 (t=1.0×r=0.1)          s=0.10 → conf ≥ 0.949
+[D] 실측 Δ=+15: conf0.77→low_posterior(0.298) / conf0.78→normal(0.302)
+[D] 실측 Δ=-15 conf0.94 → low_posterior(0.297)
+[D] conf0.72 Δ=0.5 → normal(0.720)
+[D] conf0.72 Δ=9.9 → normal(0.455)
+[D] conf0.72 Δ=10.1 → low_posterior(0.279)
+[D] conf0.72 Δ=-9.9 → normal(0.509)
+[D] conf0.72 Δ=-10.1 → low_posterior(0.228)
+
+[90mstdout[2m | test/debug/dbg-live-tracker-freeze.test.ts[2m > [22m[2mdbg-live-tracker-freeze[2m > [22m[2m(E) ADENA rate-EMA 트랩: [수정 후] minRateFloor(max(5000, |앵커|·0.5)/s)로 idle 후 첫 픽업 1프레임 수락
+[22m[39m[E] idle→+500 픽업: f1:normal@0.700 → 수락 1프레임
+
+[90mstdout[2m | test/debug/dbg-live-tracker-freeze.test.ts[2m > [22m[2mdbg-live-tracker-freeze[2m > [22m[2m(F) MP: 쓰레기 "000000"(cur=0) 부트스트랩 → 실값 208 점프는 conf=1.0로도 통과 불가
+[22m[39m[F] 쓰레기 0 부트스트랩: init_consistency (init conf 게이트 0.5 < 0.66이라 통과 — 주방어는 detection 입구 차단)
+[F] 0→208 conf1.0 (dt=1s): low_posterior post=0.224
+[F] 변동 MP(매 프레임 다른 값): f1:low_posterior@0.148 f2:normal@0.361 → 2프레임에 dt-감쇠로 복구
+[F2] 정상앵커 208 vs 쓰레기 0 반복: f1:low_posterior@0.148 f2:low_posterior@0.148 f3:normal@0.361 → 3프레임에 0이 앵커 탈취
+
+ [32m✓[39m test/debug/dbg-live-tracker-freeze.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m9 passed[39m[22m[90m (9)[39m
+[2m   Start at [22m 20:22:55
+[2m   Duration [22m 351ms[2m (transform 56ms, setup 0ms, collect 54ms, tests 11ms, environment 0ms, prepare 97ms)[22m
+
