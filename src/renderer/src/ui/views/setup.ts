@@ -130,6 +130,8 @@ export function createSetupView(ctx: ViewContext): View {
   const latestNorm: Partial<Record<LRegion, string | null>> = {}
   /** Whether the latest OCR observation for the region was ACCEPTED (adopted) or rejected/locked. */
   const lastAccepted: Partial<Record<LRegion, boolean>> = {}
+  /** Reason string of the latest detection event (e.g. 'calibration_required'). */
+  const lastReason: Partial<Record<LRegion, string>> = {}
   const rawHints: Partial<Record<LRegion, HTMLElement>> = {}
 
   /** The value the app is actually USING for a region (tracker/mpConfig), as a string. */
@@ -153,6 +155,13 @@ export function createSetupView(ctx: ViewContext): View {
     if (!hint) return
     const used = usedValueFor(region)
     const raw = latestRaw[region]
+    // Bar mode ON without a valid calibration: text-OCR fallback is blocked at the
+    // detection entry, so tell the user exactly what is needed instead of '인식: —'.
+    if (region === 'mp' && lastReason[region] === 'calibration_required') {
+      hint.textContent = `사용: ${used} · MP 바 보정 필요 (100% MP에서 보정)`
+      hint.title = ''
+      return
+    }
     if (lastAccepted[region]) {
       hint.textContent = `인식: ${used}` // accepted → used value IS the OCR value
     } else if (raw != null && raw !== '') {
@@ -812,6 +821,7 @@ export function createSetupView(ctx: ViewContext): View {
     latestRaw[e.region] = e.raw
     latestNorm[e.region] = e.value ? formatParsed(e.value) : null
     lastAccepted[e.region] = e.accepted
+    lastReason[e.region] = e.reason
     updateHint(e.region)
   })
 
@@ -902,10 +912,46 @@ export function createSetupView(ctx: ViewContext): View {
   const calibStatus = h('span', { class: 'tick-info' }, '')
   const calibBtn = h('button', { class: 'btn btn--sm', onclick: doCalibrate }, '📊 MP 바 100% 보정')
 
+  function rgbLabel(c: { r: number; g: number; b: number }): string {
+    return `rgb(${Math.round(c.r)},${Math.round(c.g)},${Math.round(c.b)})`
+  }
+
+  /** Inline colour swatch so the user SEES what colour the calibration learned
+   *  (a brown swatch instantly explains a misplaced ROI — the field failure). */
+  function colorSwatch(c: { r: number; g: number; b: number }): HTMLElement {
+    return h('span', {
+      title: rgbLabel(c),
+      style: {
+        display: 'inline-block',
+        width: '10px',
+        height: '10px',
+        background: rgbLabel(c),
+        border: '1px solid rgba(255,255,255,0.45)',
+        borderRadius: '2px',
+        margin: '0 4px',
+        verticalAlign: 'middle'
+      }
+    })
+  }
+
   async function doCalibrate(): Promise<void> {
     calibStatus.textContent = '보정 중…'
     const res = await detection.calibrateMpBar()
-    calibStatus.textContent = res.ok ? `보정 완료 (${res.fullColumns} cols)` : `실패: ${res.note ?? ''}`
+    calibStatus.textContent = ''
+    if (res.ok) {
+      calibStatus.append(`보정 완료 (${res.fullColumns} cols`)
+      if (res.fillColor) calibStatus.append(', ', colorSwatch(res.fillColor), ` ${rgbLabel(res.fillColor)}`)
+      calibStatus.append(')')
+      // A valid calibration now exists — drop a stale '보정 필요' hint immediately
+      // (the loop may be stopped, so no fresh detection event will clear it).
+      if (lastReason['mp'] === 'calibration_required') {
+        lastReason['mp'] = 'recalibrated'
+        updateHint('mp')
+      }
+    } else {
+      calibStatus.append(`실패: ${res.note ?? ''}`)
+      if (res.fillColor) calibStatus.append(' ', colorSwatch(res.fillColor))
+    }
   }
 
   function applyToStore(v: ParsedValue): void {

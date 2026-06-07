@@ -19,7 +19,14 @@ import { recognizeRegion } from '@core/ocr/recognizer'
 import { createRegionTrackers, type RegionTrackers } from '@core/ocr/tracker'
 import { learnFromCapture } from '@core/ocr/learn'
 import type { ParsedValue, RegionKind, RgbaImage } from '@core/ocr/types'
-import { calibrateBar, type BarCalibration } from '@core/ocr/bar-fill'
+import {
+  calibrateBarChecked,
+  isBlueDominant,
+  type BarCalibration,
+  type Rgb,
+  type RowBand
+} from '@core/ocr/bar-fill'
+import { assessNoSlashMp, MP_NO_SLASH_MAX_FACTOR } from '@core/ocr/parser'
 import { detectGameUiScaled, type TextRoi } from '@core/ocr/roi-detector'
 import type { AutoDetectState, CaptureRegion, WindowRoiBox } from '@core/domain/storage-schema'
 import { ScreenCapture } from '../capture/screen-capture'
@@ -31,7 +38,8 @@ const baseTemplates: TemplateSet = deserializeTemplates(
   baseTemplatesData as unknown as SerializedTemplateSet
 )
 
-const USER_TEMPLATE_KEY = 'lmp.userTemplates.v3'
+/** localStorage key holding the user's learned/imported templates (shared with the settings import UI). */
+export const USER_TEMPLATE_KEY = 'lmp.userTemplates.v3'
 
 export interface DetectionEvent {
   region: 'mp' | 'exp' | 'level' | 'adena'
@@ -84,8 +92,28 @@ function loadUserTemplates(): TemplateSet | null {
   }
 }
 
+/**
+ * Encode an RgbaImage as a PNG data URL via an offscreen canvas. Renderer-only;
+ * returns null in DOM-less environments (node vitest) or on any canvas failure —
+ * callers treat the data URL as best-effort.
+ */
+function rgbaToPngDataUrl(img: RgbaImage): string | null {
+  if (typeof document === 'undefined') return null
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = img.width
+    canvas.height = img.height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+    ctx.putImageData(new ImageData(new Uint8ClampedArray(img.data), img.width, img.height), 0, 0)
+    return canvas.toDataURL('image/png')
+  } catch {
+    return null
+  }
+}
+
 export class DetectionController {
-  private readonly capture = new ScreenCapture()
+  private readonly capture: ScreenCapture
   private readonly trackers: RegionTrackers = createRegionTrackers()
   private readonly listeners = new Set<DetectionListener>()
   private timer: number | null = null
@@ -105,7 +133,12 @@ export class DetectionController {
   /** In-memory auto-derived ROIs for window mode (never persisted). */
   private windowRois: WindowRois | null = null
 
-  constructor(private readonly app: AppStore) {
+  /** `capture` is injectable for tests (node env has no DOM for ScreenCapture). */
+  constructor(
+    private readonly app: AppStore,
+    capture?: ScreenCapture
+  ) {
+    this.capture = capture ?? new ScreenCapture()
     const t = app.get().persisted.tracker.current
     this.latest = { exp: t.exp, level: t.level, adena: t.adena }
   }
@@ -173,8 +206,14 @@ export class DetectionController {
           : ad.adenaRegion
   }
 
-  /** Calibrate the MP bar at 100% MP: stores fill column count + reference colour. */
-  async calibrateMpBar(): Promise<{ ok: boolean; fullColumns?: number; note?: string }> {
+  /**
+   * Calibrate the MP bar at 100% MP: stores fill column count + reference colour.
+   * v3.0.2: validity-gated (blue-dominance + shrink-to-band + self-check) so an
+   * oversized/misplaced ROI can no longer produce a false-success calibration that
+   * pins MP at max, and the result is flushed immediately (an off-loop calibrate →
+   * app close used to silently lose the calibration).
+   */
+  async calibrateMpBar(): Promise<{ ok: boolean; fullColumns?: number; fillColor?: Rgb; note?: string }> {
     const ad = this.app.get().persisted.autoDetect
     const barRegion = ad.captureMode === 'window' ? this.windowRois?.mpBar ?? null : ad.mpBarRegion
     if (!barRegion) {
@@ -189,22 +228,78 @@ export class DetectionController {
       logger.warn('calib', 'MP 바 캡처 실패')
       return { ok: false, note: 'MP 바 캡처 실패' }
     }
-    const cal = calibrateBar(img)
-    if (!cal) {
-      logger.warn('calib', 'MP 바 보정 실패 — 게이지가 가득 찬 상태인지 확인하세요')
-      return { ok: false, note: '게이지가 가득 찬 상태(100%)에서 보정하세요' }
+    const check = calibrateBarChecked(img)
+    if (!check.ok) {
+      logger.warn('calib', `MP 바 보정 거부(${check.reason}): ${check.note}`)
+      return { ok: false, note: check.note, fillColor: check.fillColor ?? undefined }
     }
+    const cal = check.calibration
+
+    // shrink-to-band: when the ROI was taller than the detected gauge strip, narrow
+    // the stored bar ROI to the band so every future measurement sees only gauge
+    // rows (an oversized ROI dilutes column density below the fill threshold).
+    const bandH = check.rowBand.y1 - check.rowBand.y0
+    if (bandH > 0 && bandH < img.height) {
+      this.shrinkBarRoiToBand(check.rowBand)
+      logger.info(
+        'calib',
+        `MP 바 ROI 행 밴드 자동 축소: ${img.height}px → rows ${check.rowBand.y0}..${check.rowBand.y1 - 1} (${bandH}px)`
+      )
+    }
+
     this.app.store.set((prev) => ({
       persisted: {
         ...prev.persisted,
         autoDetect: { ...prev.persisted.autoDetect, mpBarMaxX: cal.fullColumns, mpBarRefColor: cal.fillColor }
       }
     }))
+    // Raw store.set does NOT schedule a persistence write (only patchPersisted/
+    // ingestSample do) — flush now so calibrating while the loop is stopped and then
+    // closing the app cannot silently lose the calibration (the 6/4 field pattern).
+    this.app.flush()
+
+    const selfOk = check.selfRatio >= 0.95 && check.selfRatio <= 1.0
     logger.info(
       'calib',
-      `MP 바 보정 완료: ${cal.fullColumns} cols · rgb(${Math.round(cal.fillColor.r)},${Math.round(cal.fillColor.g)},${Math.round(cal.fillColor.b)})`
+      `MP 바 보정 완료: ${cal.fullColumns} cols · rgb(${Math.round(cal.fillColor.r)},${Math.round(cal.fillColor.g)},${Math.round(cal.fillColor.b)})` +
+        ` · 자기검증 ratio=${check.selfRatio.toFixed(3)} (기대 0.95~1.0 → ${selfOk ? 'OK' : '⚠ 비정상'})`
     )
-    return { ok: true, fullColumns: cal.fullColumns }
+    return { ok: true, fullColumns: cal.fullColumns, fillColor: cal.fillColor }
+  }
+
+  /** Narrow every stored MP-bar ROI variant to the calibrated gauge row band. */
+  private shrinkBarRoiToBand(band: RowBand): void {
+    const ad = this.app.get().persisted.autoDetect
+    const h = band.y1 - band.y0
+    if (ad.captureMode === 'window') {
+      const cur = this.windowRois?.mpBar
+      if (this.windowRois && cur) {
+        this.windowRois = { ...this.windowRois, mpBar: { ...cur, y: cur.y + band.y0, height: h } }
+      }
+      const ov = ad.windowRoi.mpBar
+      if (ov) {
+        this.app.store.set((prev) => ({
+          persisted: {
+            ...prev.persisted,
+            autoDetect: {
+              ...prev.persisted.autoDetect,
+              windowRoi: {
+                ...prev.persisted.autoDetect.windowRoi,
+                mpBar: { ...ov, y: ov.y + band.y0, height: h }
+              }
+            }
+          }
+        }))
+      }
+    } else if (ad.mpBarRegion) {
+      const r = ad.mpBarRegion
+      this.app.store.set((prev) => ({
+        persisted: {
+          ...prev.persisted,
+          autoDetect: { ...prev.persisted.autoDetect, mpBarRegion: { ...r, y: r.y + band.y0, height: h } }
+        }
+      }))
+    }
   }
 
   /** Teach the user's own glyphs for a region from its true value. */
@@ -225,6 +320,20 @@ export class DetectionController {
       logger.error('learn', `저장 실패: ${String(err)}`)
     }
     logger.info('learn', `${region} 학습 완료: "${label}" (${result.learned} glyphs)`)
+    // Resume label-corpus collection (stopped in v3 — nothing called the wired-up
+    // saveTrainingSample IPC): persist the accepted capture + label so the offline
+    // batch learner (scripts/build-user-templates.ts) keeps gaining data.
+    // Best-effort fire-and-forget: missing IPC (browser preview) or disk errors
+    // must never fail the teach itself.
+    const dataUrl = rgbaToPngDataUrl(img)
+    if (dataUrl) {
+      void api
+        .saveTrainingSample({ region, dataUrl, label })
+        .then((r) => {
+          if (r.ok) logger.debug('learn', `학습 샘플 저장됨: ${r.path ?? '(training-data)'}`)
+        })
+        .catch(() => {})
+    }
     return { ok: true, learned: result.learned }
   }
 
@@ -340,6 +449,9 @@ export class DetectionController {
           }
         }
       }))
+      // Raw store.set does not schedule persistence — flush so the resolved id/title
+      // survive an app close even when no other persisted mutation follows.
+      this.app.flush()
       logger.info('detect', `window source resolved: "${resolved.title}" (${resolved.sourceId.slice(0, 24)}…)`)
       return true
     } catch (err) {
@@ -498,6 +610,10 @@ export class DetectionController {
 
   private barCalibration(ad: AutoDetectState): BarCalibration | null {
     if (!ad.useMpBar || ad.mpBarMaxX <= 0 || !ad.mpBarRefColor) return null
+    // Invalidate legacy/garbage calibrations whose reference colour cannot be an MP
+    // gauge (field case: brown PANEL rgb(111.5,91.6,78.6) learned from an oversized
+    // ROI — replaying it pins MP at max forever). Treat as "calibration required".
+    if (!isBlueDominant(ad.mpBarRefColor)) return null
     return { fullColumns: ad.mpBarMaxX, fillColor: ad.mpBarRefColor }
   }
 
@@ -508,14 +624,34 @@ export class DetectionController {
     maxMp: number,
     now: number
   ): void {
+    if (useMpBar && !cal) {
+      // ENTRY BLOCK (v3.0.2): bar mode is ON but there is no (valid) calibration.
+      // The old behaviour fell back to text OCR of the tiny cur/max — which misreads
+      // as digit soup ("000000" → cur=0) that the tracker then ACCEPTS as an anchor.
+      // Garbage must not enter the tracker at all: surface "calibration required"
+      // through the existing event channel and read nothing this tick.
+      logger.warn(
+        'ocr:mp',
+        'MP 바 픽셀 모드 ON 이지만 유효한 보정(calibration) 없음 → MP 인식 보류 — 100% MP에서 「MP 바 100% 보정」을 실행하세요'
+      )
+      this.emit({
+        region: 'mp',
+        raw: null,
+        accepted: false,
+        value: null,
+        posterior: 0,
+        source: 'mp-bar',
+        reason: 'calibration_required',
+        at: now
+      })
+      return
+    }
+
     const barImage = useMpBar && regions.mpBarRegion ? this.capture.captureRegion(regions.mpBarRegion) : null
     const textImage = regions.mpRegion ? this.capture.captureRegion(regions.mpRegion) : null
     if (!barImage && !textImage) {
       logger.warn('cap:mp', 'no MP capture (region null or frame not ready)')
       return
-    }
-    if (useMpBar && !cal) {
-      logger.warn('ocr:mp', 'MP 바 픽셀 모드 ON 이지만 보정(calibration) 없음 → 텍스트 OCR로 폴백 (100% MP에서 보정 필요)')
     }
 
     const result = recognizeRegion(
@@ -532,11 +668,27 @@ export class DetectionController {
     const dims = `${(textImage ?? barImage)!.width}x${(textImage ?? barImage)!.height}`
     if (result.value?.kind === 'mp') {
       const v = result.value
-      const verdict = this.trackers.mp.observe({ cur: v.cur, max: v.max || maxMp }, result.confidence, now)
+      let confidence = result.confidence
+      if (v.max <= 0) {
+        // No '/' was recognized → cur-only text parse. Structurally suspect (the HUD
+        // always renders "cur/max"): drop implausible values against the known max
+        // and dampen confidence for the rest so the tracker needs stronger evidence.
+        const assess = assessNoSlashMp(v.cur, confidence, maxMp)
+        if (!assess.ok) {
+          logger.debug(
+            'ocr:mp',
+            `[${dims}] raw="${result.raw}" src=${result.source} no-slash cur=${v.cur} > max(${maxMp})×${MP_NO_SLASH_MAX_FACTOR} → 무효`
+          )
+          this.emit({ region: 'mp', raw: result.raw, accepted: false, value: null, posterior: 0, source: result.source, reason: 'implausible_no_slash', at: now })
+          return
+        }
+        confidence = assess.confidence
+      }
+      const verdict = this.trackers.mp.observe({ cur: v.cur, max: v.max || maxMp }, confidence, now)
       if (verdict.accepted && verdict.value) {
         this.app.setMpConfig({ curMp: verdict.value.cur })
       }
-      logger.debug('ocr:mp', `[${dims}] raw="${result.raw}" src=${result.source} conf=${result.confidence.toFixed(2)} → ${verdict.accepted ? 'ACCEPT' : 'reject'} cur=${verdict.value?.cur} post=${verdict.posterior.toFixed(2)} (${verdict.reason})`)
+      logger.debug('ocr:mp', `[${dims}] raw="${result.raw}" src=${result.source} conf=${confidence.toFixed(2)} → ${verdict.accepted ? 'ACCEPT' : 'reject'} cur=${verdict.value?.cur} post=${verdict.posterior.toFixed(2)} (${verdict.reason})`)
       this.emit({ region: 'mp', raw: result.raw, accepted: verdict.accepted, value: result.value, posterior: verdict.posterior, source: result.source, reason: verdict.reason, at: now })
     } else {
       logger.debug('ocr:mp', `[${dims}] raw="${result.raw}" src=${result.source} → parse FAIL`)

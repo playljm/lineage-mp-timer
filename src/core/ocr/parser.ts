@@ -4,12 +4,22 @@
  */
 import type { ParsedValue, RegionKind } from './types'
 
-export function parseRegionString(region: RegionKind, raw: string | null): ParsedValue | null {
+/** Optional context that tightens validation when the caller knows more. */
+export interface ParseContext {
+  /** Known max MP — validates no-slash MP parses (cur-only) for plausibility. */
+  maxMp?: number
+}
+
+export function parseRegionString(
+  region: RegionKind,
+  raw: string | null,
+  ctx?: ParseContext
+): ParsedValue | null {
   if (!raw) return null
   const s = raw.trim()
   switch (region) {
     case 'mp':
-      return parseMp(s)
+      return parseMp(s, ctx?.maxMp)
     case 'exp':
       return parseExp(s)
     case 'level':
@@ -23,7 +33,38 @@ function digits(s: string): string {
   return s.replace(/[^0-9]/g, '')
 }
 
-function parseMp(s: string): ParsedValue | null {
+/**
+ * A no-slash MP parse (cur-only, '/' never recognized) is plausible only when
+ * `cur <= maxMp * MP_NO_SLASH_MAX_FACTOR`. Live evidence: the tiny "cur/max" text
+ * misreads as digit soup ("000000", "6610068380") whose '/' is NEVER matched —
+ * without a max-context check these become tracker observations (cur=0 anchor
+ * takeover / cur=6.6e9).
+ */
+export const MP_NO_SLASH_MAX_FACTOR = 2
+
+/**
+ * Confidence multiplier applied to no-slash MP parses by the live pipeline. A
+ * missing '/' separator means the read is structurally suspect (the real HUD always
+ * renders "cur/max"), so the tracker should need much stronger evidence to accept.
+ */
+export const MP_NO_SLASH_CONFIDENCE_PENALTY = 0.6
+
+/**
+ * Conservative gate for a no-slash MP parse against a known maxMp:
+ *  - `cur > maxMp × 2` → implausible, drop the value entirely (`ok: false`);
+ *  - otherwise keep it but dampen confidence by {@link MP_NO_SLASH_CONFIDENCE_PENALTY}.
+ * With `maxMp <= 0` (unknown) only the penalty applies.
+ */
+export function assessNoSlashMp(
+  cur: number,
+  confidence: number,
+  maxMp: number
+): { ok: boolean; confidence: number } {
+  if (maxMp > 0 && cur > maxMp * MP_NO_SLASH_MAX_FACTOR) return { ok: false, confidence: 0 }
+  return { ok: true, confidence: confidence * MP_NO_SLASH_CONFIDENCE_PENALTY }
+}
+
+function parseMp(s: string, maxMp?: number): ParsedValue | null {
   const m = s.match(/(\d+)\s*\/\s*(\d+)/)
   if (m) {
     const cur = parseInt(m[1]!, 10)
@@ -34,10 +75,12 @@ function parseMp(s: string): ParsedValue | null {
     return null
   }
   // No slash recognized: treat as current only (max filled in by caller's anchor).
+  // With a maxMp context, an implausibly large cur is rejected outright.
   const d = digits(s)
   if (!d) return null
   const cur = parseInt(d, 10)
   if (!Number.isFinite(cur)) return null
+  if (maxMp != null && maxMp > 0 && cur > maxMp * MP_NO_SLASH_MAX_FACTOR) return null
   return { kind: 'mp', cur, max: 0 }
 }
 
