@@ -45,8 +45,15 @@ export function normalizeGlyph(mask: BinaryMask, canonW = CANON_W, canonH = CANO
   return resampleMask(tight, canonW, canonH).data
 }
 
+function median(values: readonly number[]): number {
+  if (!values.length) return 0
+  const s = [...values].sort((a, b) => a - b)
+  const m = s.length >> 1
+  return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2
+}
+
 export class TemplateBuilder {
-  private readonly acc = new Map<string, { sum: Float64Array; count: number; aspect: number }>()
+  private readonly acc = new Map<string, { sum: Float64Array; count: number; aspects: number[] }>()
   constructor(
     readonly canonW = CANON_W,
     readonly canonH = CANON_H
@@ -57,12 +64,12 @@ export class TemplateBuilder {
     const norm = normalizeGlyph(tightMask, this.canonW, this.canonH)
     let entry = this.acc.get(char)
     if (!entry) {
-      entry = { sum: new Float64Array(this.canonW * this.canonH), count: 0, aspect: 0 }
+      entry = { sum: new Float64Array(this.canonW * this.canonH), count: 0, aspects: [] }
       this.acc.set(char, entry)
     }
     for (let i = 0; i < norm.length; i++) entry.sum[i]! += norm[i]!
     entry.count++
-    entry.aspect += aspectOf(tightMask)
+    entry.aspects.push(aspectOf(tightMask))
   }
 
   finalize(): TemplateSet {
@@ -74,7 +81,13 @@ export class TemplateBuilder {
         char,
         grid,
         samples: entry.count,
-        meanAspect: entry.aspect / entry.count
+        // Median, not arithmetic mean: a handful of mis-segmented outliers (e.g. the
+        // 54x2 MP gauge bands once learned as '1', aspect ~28) used to drag the mean
+        // to 6.26 and saturate the matcher's aspect penalty for every TRUE '1'
+        // (1->7 confusion). The median ignores such foreign blobs while behaving
+        // identically to the mean on clean samples. Field name stays `meanAspect`
+        // for serialization compatibility.
+        meanAspect: median(entry.aspects)
       })
     }
     chars.sort((a, b) => a.char.localeCompare(b.char))

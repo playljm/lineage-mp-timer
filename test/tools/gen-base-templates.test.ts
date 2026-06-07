@@ -24,10 +24,23 @@ describe('generate base-templates.json', () => {
     // eslint-disable-next-line no-console
     console.log(
       `[gen] base templates: ${set.chars.length} chars from ${stats.used} samples ` +
-        `(skipped ${stats.skipped}); per-char ${JSON.stringify(stats.perChar)}`
+        `(skipped ${stats.skipped}, ${stats.rejectedByGeometry} by geometry guard); ` +
+        `per-char ${JSON.stringify(stats.perChar)}`
     )
     for (const d of '0123456789') {
       expect(set.chars.some((c) => c.char === d)).toBe(true)
     }
+    // Poisoning regression guard: every digit template must have a plausible
+    // width prior. Before the geometry guard + median aspect, mis-segmented MP
+    // gauge bands drove '1'.meanAspect to 6.36 (true value ~0.69), saturating the
+    // matcher's aspect penalty and causing the 1->7 confusion.
+    for (const c of set.chars) {
+      if (!/[0-9]/.test(c.char)) continue
+      expect(c.meanAspect, `digit '${c.char}' meanAspect`).toBeGreaterThan(0.3)
+      expect(c.meanAspect, `digit '${c.char}' meanAspect`).toBeLessThan(1.4)
+    }
+    const one = set.chars.find((c) => c.char === '1')!
+    expect(one.meanAspect).toBeGreaterThanOrEqual(0.6)
+    expect(one.meanAspect).toBeLessThanOrEqual(0.7)
   })
 })
