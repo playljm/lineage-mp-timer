@@ -311,6 +311,95 @@ describe('(c) tight ROI 정상 보정 회귀', () => {
   })
 })
 
+describe('(d) 실측 저채도 게이지 회귀 — HANDOFF-2026-06-07 (v3.1.1 게이트 수정)', () => {
+  // 실측: 게이지 본체 rgb(74,74,92) — 채도 (92−74)/92 ≈ 0.196. 옛 채도 게이트 0.25 가
+  // 본체 전체를 탈락시키고 금장식(192,142,96, 채도 0.5)만 평균해 not_blue 로 영구 실패했다.
+  // 수정: FILL_SATURATION_GATE 0.12 + BLUE_DOMINANCE_MARGIN 8 + 파랑-클러스터 우선 평균.
+  const FIELD_BODY: Rgb = { r: 74, g: 74, b: 92 }
+  const GOLD_TRIM: Rgb = { r: 192, g: 142, b: 96 }
+  const TEXT_WHITE: Rgb = { r: 230, g: 230, b: 230 }
+
+  /** 필드 ROI 모사 255×24: 금장식 상하 2행 + 본체(rows 2..21) + 흰 텍스트 산포 + 빈 트랙. */
+  function makeFieldRoi(fillRatio: number): RgbaImage {
+    const W = 255
+    const H = 24
+    const img = makeImage(W, H, EMPTY_TRACK)
+    fillRect(img, 0, 2, Math.round(W * fillRatio), H - 4, FIELD_BODY)
+    fillRect(img, 0, 0, W, 2, GOLD_TRIM)
+    fillRect(img, 0, H - 2, W, 2, GOLD_TRIM)
+    // 흰 텍스트 "MP:327/327" 모사 (중앙 7행 × 65px, 1/3 산포)
+    for (let y = 9; y <= 15; y++) {
+      for (let x = 95; x < 160; x++) {
+        if ((x + y * 3) % 3 === 0 && x < W * fillRatio) {
+          const p = (y * W + x) * 4
+          img.data[p] = TEXT_WHITE.r
+          img.data[p + 1] = TEXT_WHITE.g
+          img.data[p + 2] = TEXT_WHITE.b
+        }
+      }
+    }
+    addNoise(img, 3)
+    return img
+  }
+
+  it('저채도(0.196) 게이지 + 금장식 + 흰 텍스트에서 보정이 성공하고 파란색을 학습한다', () => {
+    const check = calibrateBarChecked(makeFieldRoi(1.0))
+    expect(check.ok).toBe(true)
+    if (!check.ok) return
+    // 학습 색은 본체 파랑 — 금장식 갈색(192,142,96) 학습 금지 (옛 필드 실패의 정반대)
+    expect(isBlueDominant(check.calibration.fillColor)).toBe(true)
+    expect(check.calibration.fillColor.r).toBeLessThan(check.calibration.fillColor.b)
+    // 밴드는 금장식 행을 제외 (rows ~2..22)
+    expect(check.rowBand.y0).toBeGreaterThanOrEqual(1)
+    expect(check.rowBand.y1).toBeLessThanOrEqual(23)
+    expect(check.calibration.fullColumns).toBeGreaterThanOrEqual(250)
+    expect(check.selfRatio).toBeGreaterThanOrEqual(0.95)
+    expect(check.selfRatio).toBeLessThanOrEqual(1.0)
+  })
+
+  it('저채도 보정으로 부분 채움(60%/30%)이 정확히 측정된다', () => {
+    const check = calibrateBarChecked(makeFieldRoi(1.0))
+    expect(check.ok).toBe(true)
+    if (!check.ok) return
+    for (const ratio of [0.6, 0.3]) {
+      const cur = barFillToMp(cropRows(makeFieldRoi(ratio), check.rowBand), 327, check.calibration)
+      expect(Math.abs(cur - 327 * ratio)).toBeLessThanOrEqual(14)
+    }
+  })
+
+  it('게이트 완화 후에도 갈색-only ROI 는 여전히 not_blue 로 거부된다 (거짓성공 차단 보존)', () => {
+    const check = calibrateBarChecked(makePanelOnlyRoi())
+    expect(check.ok).toBe(false)
+    if (check.ok) return
+    expect(check.reason).toBe('not_blue')
+    expect(isBlueDominant(LIVE_BAD_REF)).toBe(false) // 레거시 무효화 판정도 불변
+  })
+
+  it('균일 청회색·보라·저채도 노이즈 ROI 도 전부 거부 — v3.0.2 거짓성공 방어의 색 공간 보존', () => {
+    // 디프 리뷰 프로브 실측에서 "완화 게이트가 새로 허용"으로 지적된 색들.
+    // 최종 isBlueDominant 게이트 15 유지(밴드 투표만 8) + 면적 비례 표본 하한으로 전부 차단:
+    const uniform = (c: Rgb): RgbaImage => {
+      const img = makeImage(287, 24, c)
+      addNoise(img, 6)
+      return img
+    }
+    const NON_GAUGE: Rgb[] = [
+      { r: 70, g: 70, b: 80 }, // 그림자/물 계열 청회색 — 마진 10
+      { r: 80, g: 80, b: 92 }, // 청회색 — 마진 12
+      { r: 45, g: 45, b: 58 }, // 푸른빛 빈 트랙 후보 — 마진 13
+      { r: 150, g: 100, b: 160 }, // 보라 — 마진 10
+      { r: 90, g: 70, b: 100 }, // 어두운 보라 — 마진 10
+      { r: 70, g: 70, b: 78 } // 채도 0.103 (게이트 미달) — 노이즈 복권은 표본 하한이 차단
+    ]
+    for (const c of NON_GAUGE) {
+      const check = calibrateBarChecked(uniform(c))
+      expect(check.ok, `rgb(${c.r},${c.g},${c.b}) 은 게이지가 아니므로 거부돼야 함`).toBe(false)
+    }
+    // 반대로 실측 필드 게이지(저채도 파랑, 마진 18)는 클러스터 평균이 15 게이트를 통과
+    expect(isBlueDominant(FIELD_BODY)).toBe(true)
+  })
+})
+
 describe('calibrateMpBar 통합: 보정 → ROI 축소 + 즉시 flush 영속', () => {
   it('과대 ROI 보정 성공 시 mpBarRegion 이 밴드로 축소되고 localStorage 에 즉시 영속된다', async () => {
     const barRegion: CaptureRegion = { x: 1776, y: 976, width: 287, height: 47, scaleFactor: 1 }

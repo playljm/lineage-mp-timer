@@ -87,12 +87,33 @@ const MIN_FILL_EMPTY_CONTRAST2 = 18 * 18
 
 // ── Calibration validity constants (v3.0.2) ─────────────────────────────────
 /**
- * Blue-dominance margin: a colour counts as a plausible MP-gauge fill when
- * `b > max(r, g) + BLUE_DOMINANCE_MARGIN`. The Lineage Classic MP gauge is always
- * blue; the field-observed garbage calibration rgb(111.5, 91.6, 78.6) (brown UI
- * panel learned from an oversized ROI) fails this by a wide margin.
+ * Blue-dominance margin for the FINAL colour gate {@link isBlueDominant}: a colour
+ * counts as a plausible MP-gauge fill when `b > max(r, g) + BLUE_DOMINANCE_MARGIN`.
+ * The Lineage Classic MP gauge is always blue; the field-observed garbage
+ * calibration rgb(111.5, 91.6, 78.6) (brown UI panel learned from an oversized
+ * ROI) fails this by a wide margin.
+ *
+ * v3.1.1: stays 15. The 2026-06-07 field failure was never this final gate — the
+ * saturation gate starved the sample and the mixed mean got dragged by gold trim;
+ * with the blue-cluster mean (see {@link detectFillColor}) the learned colour's
+ * margin is ~18 and clears 15 comfortably. Keeping 15 preserves the whole v3.0.2
+ * false-success defence: uniform blue-grays (shadow/water, margin 9–15, e.g.
+ * rgb(70,70,80)) and purples stay rejected, and legacy stored calibrations that
+ * v3.0.2 invalidated stay invalid. Only the per-pixel band VOTE is relaxed
+ * ({@link BAND_PIXEL_VOTE_MARGIN}).
  */
 export const BLUE_DOMINANCE_MARGIN = 15
+/**
+ * Per-pixel vote margin for gauge row-band detection ({@link detectGaugeRowBand}).
+ *
+ * v3.1.1: 15 → 8 for the vote ONLY. The field gauge body clears max(r,g) by just
+ * 18 and gloss/dither speckle drops individual pixels to ~4, so with 15 a single
+ * texture step flipped rows below the 50% threshold — the band collapsed and the
+ * gold trim entered the fill-colour sample. The calibration colour itself is still
+ * gated by isBlueDominant at 15, so the looser vote cannot admit a non-blue
+ * calibration on its own.
+ */
+const BAND_PIXEL_VOTE_MARGIN = 8
 /**
  * Fraction of a row's pixels that must be blue-dominant for the row to count as
  * part of the gauge band during shrink-to-band (calibration happens at ~100% MP,
@@ -101,6 +122,19 @@ export const BLUE_DOMINANCE_MARGIN = 15
 const BAND_MIN_ROW_FRACTION = 0.5
 /** Minimum usable gauge-band height (rows); thinner runs are treated as noise. */
 const MIN_BAND_HEIGHT = 2
+/**
+ * Saturation gate for fill-colour sampling in {@link detectFillColor}.
+ *
+ * v3.1.1: 0.25 → 0.12. The field MP gauge's dark blue measures saturation
+ * 0.163–0.196 (body rgb(74,74,92) → (92−74)/92 ≈ 0.196), which the old 0.25 gate
+ * rejected wholesale — the gold trim (sat 0.50) was then the only survivor, so the
+ * "detected fill colour" came out brown rgb(192,142,96) and calibration failed
+ * with not_blue forever (HANDOFF-2026-06-07, reproduced in
+ * test/debug/dbg-mpcal-sat-gate.test.ts). 0.12 accepts every observed gauge shade
+ * while still excluding white overlay text (sat ≤ ~0.05) and the dark empty track
+ * (blocked by the luma gate).
+ */
+const FILL_SATURATION_GATE = 0.12
 
 /** Row band [y0, y1) within a bar ROI. */
 export interface RowBand {
@@ -129,6 +163,15 @@ function saturation(r: number, g: number, b: number): number {
 /**
  * Auto-detect the fill colour by averaging the most saturated/bright pixels in the
  * left interior of the bar (which is filled whenever MP > 0).
+ *
+ * v3.1.1 blue-cluster priority: gate-passing pixels are additionally split into a
+ * blue-leaning cluster (b > max(r, g)). When that cluster is both sufficient and
+ * the majority, its mean is returned INSTEAD of the mixed mean — otherwise a few
+ * percent of gold-trim contamination in the sample drags the mixed mean below the
+ * blue-dominance gate and calibration fails not_blue even though the gauge itself
+ * is perfectly visible. A brown-panel-only ROI has an empty blue cluster and still
+ * falls through to the mixed (brown) mean, so the false-success rejection path is
+ * preserved.
  */
 export function detectFillColor(img: RgbaImage): Rgb | null {
   const { width, height, data } = img
@@ -137,6 +180,10 @@ export function detectFillColor(img: RgbaImage): Rgb | null {
   let g = 0
   let b = 0
   let n = 0
+  let blueR = 0
+  let blueG = 0
+  let blueB = 0
+  let blueN = 0
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < x1; x++) {
       const p = (y * width + x) * 4
@@ -144,15 +191,29 @@ export function detectFillColor(img: RgbaImage): Rgb | null {
       const pg = data[p + 1]!
       const pb = data[p + 2]!
       const lum = 0.299 * pr + 0.587 * pg + 0.114 * pb
-      if (lum > 40 && saturation(pr, pg, pb) > 0.25) {
+      if (lum > 40 && saturation(pr, pg, pb) > FILL_SATURATION_GATE) {
         r += pr
         g += pg
         b += pb
         n++
+        if (pb > Math.max(pr, pg)) {
+          blueR += pr
+          blueG += pg
+          blueB += pb
+          blueN++
+        }
       }
     }
   }
-  if (n < height * 0.5) return null
+  // v3.1.1: the sample floor is area-proportional (5% of the sampled left quarter),
+  // not just height*0.5 (~0.7% of the area) — otherwise a handful of noise outliers
+  // on a below-gate uniform colour could define the fill colour by lottery. The
+  // field gauge passes the gate with 55–100% of its pixels, far above the floor.
+  const minSamples = Math.max(height * 0.5, x1 * height * 0.05)
+  if (n < minSamples) return null
+  if (blueN >= minSamples && blueN * 2 >= n) {
+    return { r: blueR / blueN, g: blueG / blueN, b: blueB / blueN }
+  }
   return { r: r / n, g: g / n, b: b / n }
 }
 
@@ -209,7 +270,7 @@ export function detectGaugeRowBand(img: RgbaImage): RowBand | null {
         const r = data[p]!
         const g = data[p + 1]!
         const b = data[p + 2]!
-        if (b > Math.max(r, g) + BLUE_DOMINANCE_MARGIN) cnt++
+        if (b > Math.max(r, g) + BAND_PIXEL_VOTE_MARGIN) cnt++
       }
       isBand = cnt >= need
     }
