@@ -778,6 +778,148 @@ function splitLevelExp(
   return { level, exp }
 }
 
+/**
+ * Trim a LEVEL text ROI down to just the value digits when it also captured the
+ * "LEV:" label (the in-game level display is "LEV:NN", one visual group). Scans the
+ * ROI's columns for bright low-sat text runs (glyphs) and, if a clear separator gap
+ * exists, keeps only the trailing 1-3 runs to the RIGHT of the rightmost separator —
+ * the value. Returns the box unchanged when there is no label prefix (≤1 run, or no
+ * gap clearly larger than the inter-digit spacing — e.g. a clean "NN" crop).
+ *
+ * Field evidence (2026-06-13, lc-frame.png): the auto ROI captured "LEV:33"
+ * → OCR read "660233" → parseLevel(null). Glyph runs L E V : 3 3 had label↔value
+ * gaps of ~6px vs inter-digit ~3px; splitting at the rightmost large gap isolates "33".
+ */
+export function refineLevelRoiToValue(img: RgbaImage, roi: TextRoi, cfg: RoiConfig): TextRoi {
+  const { width: fw, data } = img
+  const x0 = Math.max(0, roi.x0)
+  const x1 = Math.min(fw, roi.x1)
+  const y0 = Math.max(0, roi.y0)
+  const y1 = Math.min(img.height, roi.y1)
+  const w = x1 - x0
+  const h = y1 - y0
+  if (w <= 0 || h <= 0) return roi
+
+  // Per-column bright low-sat (text) pixel counts within the ROI.
+  const col = new Array<number>(w).fill(0)
+  for (let x = 0; x < w; x++) {
+    let c = 0
+    for (let y = 0; y < h; y++) {
+      const i = ((y0 + y) * fw + (x0 + x)) * 4
+      const r = data[i]!
+      const g = data[i + 1]!
+      const b = data[i + 2]!
+      const max = Math.max(r, g, b)
+      const min = Math.min(r, g, b)
+      const lum = (r + g + b) / 3
+      const sat = max === 0 ? 0 : (max - min) / max
+      if (lum > cfg.lvTextLumMin && sat < cfg.lvTextSatMax) c++
+    }
+    col[x] = c
+  }
+
+  // Group columns into glyph runs (a column is "on" with >=2 text pixels).
+  const runs: Array<{ s: number; e: number }> = []
+  let st = -1
+  for (let x = 0; x <= w; x++) {
+    const on = x < w && col[x]! >= 2
+    if (on && st < 0) st = x
+    else if (!on && st >= 0) {
+      runs.push({ s: st, e: x - 1 })
+      st = -1
+    }
+  }
+  if (runs.length <= 1) return roi // single glyph / solid block — no label to strip
+
+  const gaps: number[] = []
+  for (let i = 1; i < runs.length; i++) gaps.push(runs[i]!.s - runs[i - 1]!.e)
+  const sorted = gaps.slice().sort((a, b) => a - b)
+  const median = sorted[Math.floor(sorted.length / 2)]!
+  // A separator gap is clearly wider than the inter-digit spacing.
+  const sepThreshold = Math.max(5, median * 1.5)
+
+  // Rightmost separator whose right side is a plausible 1-3 digit value.
+  for (let i = gaps.length - 1; i >= 0; i--) {
+    if (gaps[i]! < sepThreshold) continue
+    const rightCount = runs.length - (i + 1)
+    if (rightCount < 1 || rightCount > 3) continue
+    const valStart = runs[i + 1]!.s
+    const valEnd = runs[runs.length - 1]!.e
+    const pad = 3
+    return {
+      ...roi,
+      x0: Math.max(0, x0 + valStart - pad),
+      x1: Math.min(fw, x0 + valEnd + 1 + pad)
+    }
+  }
+  return roi
+}
+
+/**
+ * Tighten a derived ROI to the bounding box of its bright low-saturation pixels —
+ * the white HUD digits. This keys on the TEXT's own colour, so it drops the yellow
+ * coin icon (high saturation) and the dark inventory-cell borders (low brightness)
+ * that a geometric box around the adena number inevitably catches. Returns the box
+ * unchanged when no text-like region is found (e.g. synthetic icon-only frames), so
+ * an ROI is never lost.
+ *
+ * Field evidence (2026-06-13): the adena number "16476" sits in a tight cell right
+ * under the coin icon; the geometric box bled coin/border pixels → OCR "154058".
+ */
+export function tightenToTextBBox(img: RgbaImage, roi: TextRoi, cfg: RoiConfig, pad: number): TextRoi {
+  const { width: fw, data } = img
+  const x0 = Math.max(0, roi.x0)
+  const x1 = Math.min(fw, roi.x1)
+  const y0 = Math.max(0, roi.y0)
+  const y1 = Math.min(img.height, roi.y1)
+  const w = x1 - x0
+  const h = y1 - y0
+  if (w <= 0 || h <= 0) return roi
+
+  const isText = (i: number): boolean => {
+    const r = data[i]!
+    const g = data[i + 1]!
+    const b = data[i + 2]!
+    const max = Math.max(r, g, b)
+    const min = Math.min(r, g, b)
+    const lum = (r + g + b) / 3
+    const sat = max === 0 ? 0 : (max - min) / max
+    return lum > cfg.lvTextLumMin && sat < cfg.lvTextSatMax
+  }
+
+  // Column/row text-pixel counts; require >=2 to ignore stray AA pixels.
+  const colOn = new Array<boolean>(w).fill(false)
+  const rowOn = new Array<boolean>(h).fill(false)
+  const colCnt = new Array<number>(w).fill(0)
+  const rowCnt = new Array<number>(h).fill(0)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (isText(((y0 + y) * fw + (x0 + x)) * 4)) {
+        colCnt[x]!++
+        rowCnt[y]!++
+      }
+    }
+  }
+  for (let x = 0; x < w; x++) colOn[x] = colCnt[x]! >= 2
+  for (let y = 0; y < h; y++) rowOn[y] = rowCnt[y]! >= 2
+
+  let cMin = -1
+  let cMax = -1
+  for (let x = 0; x < w; x++) if (colOn[x]) { if (cMin < 0) cMin = x; cMax = x }
+  let rMin = -1
+  let rMax = -1
+  for (let y = 0; y < h; y++) if (rowOn[y]) { if (rMin < 0) rMin = y; rMax = y }
+  if (cMin < 0 || rMin < 0) return roi // no text found — keep original box
+
+  return {
+    ...roi,
+    x0: Math.max(0, x0 + cMin - pad),
+    y0: Math.max(0, y0 + rMin - pad),
+    x1: Math.min(fw, x0 + cMax + 1 + pad),
+    y1: Math.min(img.height, y0 + rMax + 1 + pad)
+  }
+}
+
 function deriveTextRois(img: RgbaImage, anchors: UiAnchors, cfg: RoiConfig): DerivedTextRois {
   const frameW = img.width
   const frameH = img.height
@@ -861,6 +1003,11 @@ function deriveTextRois(img: RgbaImage, anchors: UiAnchors, cfg: RoiConfig): Der
     }
   }
 
+  if (exp && out.level) {
+    // Strip the "LEV:" label from the level ROI, keeping only the value digits.
+    out.level = refineLevelRoiToValue(img, out.level, cfg)
+  }
+
   if (adena) {
     const right: Box = {
       x: Math.round(adena.x + adena.width * cfg.adenaRightXFrac),
@@ -868,9 +1015,17 @@ function deriveTextRois(img: RgbaImage, anchors: UiAnchors, cfg: RoiConfig): Der
       width: Math.max(cfg.adenaRightMinWidth, Math.round(adena.width * cfg.adenaRightWFrac)),
       height: Math.round(adena.height * cfg.adenaRightHFrac)
     }
+    // The "below" number sits UNDER the coin icon — start the box at the icon's
+    // bottom edge, not partway up it. adenaBelowYFrac (0.83) clipped ~5px into a
+    // 32px icon, whose yellow pixels segmented as a phantom leading digit
+    // ("16476" → "115476", field 2026-06-13). Clamp the top to the icon bottom.
+    const belowY = Math.max(
+      Math.round(adena.y + adena.height * cfg.adenaBelowYFrac),
+      Math.round(adena.y + adena.height)
+    )
     const below: Box = {
       x: Math.max(0, Math.round(adena.x - cfg.adenaBelowXShift)),
-      y: Math.round(adena.y + adena.height * cfg.adenaBelowYFrac),
+      y: belowY,
       width: Math.max(cfg.adenaBelowMinWidth, Math.round(adena.width * cfg.adenaBelowWFrac)),
       height: Math.max(cfg.adenaBelowMinHeight, Math.round(adena.height * cfg.adenaBelowHFrac))
     }
@@ -878,7 +1033,9 @@ function deriveTextRois(img: RgbaImage, anchors: UiAnchors, cfg: RoiConfig): Der
     const rs = inkScore(img, right.x, right.y, right.width, right.height, cfg)
     const bs = inkScore(img, below.x, below.y, below.width, below.height, cfg)
     if (bs > rs * cfg.adenaBelowInkRatio) chosen = below
-    out.adena = toRoi(chosen)
+    // Tighten to the white-digit bbox so the yellow coin icon and the inventory-cell
+    // borders the geometric box catches don't bleed phantom glyphs into the OCR.
+    out.adena = tightenToTextBBox(img, toRoi(chosen), cfg, 2)
   }
 
   // Frame-boundary clamp — record clipping for diagnostics.
