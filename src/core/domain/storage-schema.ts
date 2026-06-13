@@ -141,6 +141,9 @@ export interface AutoDetectState {
   useMpBar: boolean
   mpBarMaxX: number
   mpBarRefColor: { r: number; g: number; b: number } | null
+  /** v3.1.12: static left-bevel offset (fraction of the full bar) the variable fill starts
+   *  from — affine-corrects the low-MP over-read. Default ~0.037 (field-measured). */
+  mpBarLeftOffsetFrac: number
   expRegion: CaptureRegion | null
   levelRegion: CaptureRegion | null
   adenaRegion: CaptureRegion | null
@@ -227,6 +230,7 @@ export const DEFAULT_AUTO_DETECT: AutoDetectState = {
   useMpBar: false,
   mpBarMaxX: 0,
   mpBarRefColor: null,
+  mpBarLeftOffsetFrac: 0.037,
   expRegion: null,
   levelRegion: null,
   adenaRegion: null,
@@ -558,6 +562,7 @@ function coerceAutoDetect(v: unknown): AutoDetectState {
     useMpBar: bool(v['useMpBar'], d.useMpBar),
     mpBarMaxX: num(v['mpBarMaxX'], d.mpBarMaxX),
     mpBarRefColor: coerceRefColor(v['mpBarRefColor']),
+    mpBarLeftOffsetFrac: num(v['mpBarLeftOffsetFrac'], d.mpBarLeftOffsetFrac),
     expRegion: coerceRegion(v['expRegion']),
     levelRegion: coerceRegion(v['levelRegion']),
     adenaRegion: coerceRegion(v['adenaRegion']),

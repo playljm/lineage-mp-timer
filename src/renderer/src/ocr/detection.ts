@@ -21,7 +21,9 @@ import { learnFromCapture } from '@core/ocr/learn'
 import type { ParsedValue, RegionKind, RgbaImage } from '@core/ocr/types'
 import {
   calibrateBarChecked,
+  computeBarFill,
   isBlueDominant,
+  solveLeftOffsetFrac,
   type BarCalibration,
   type BarCalibrationFailure,
   type Rgb,
@@ -669,7 +671,33 @@ export class DetectionController {
     // gauge (field case: brown PANEL rgb(111.5,91.6,78.6) learned from an oversized
     // ROI — replaying it pins MP at max forever). Treat as "calibration required".
     if (!isBlueDominant(ad.mpBarRefColor)) return null
-    return { fullColumns: ad.mpBarMaxX, fillColor: ad.mpBarRefColor }
+    return { fullColumns: ad.mpBarMaxX, fillColor: ad.mpBarRefColor, leftOffsetFrac: ad.mpBarLeftOffsetFrac }
+  }
+
+  /**
+   * Fine-tune the MP bar's static left-offset (v3.1.12) from a user-entered true MP at any
+   * non-full level: capture the current bar, measure its raw fill, back-solve leftOffsetFrac,
+   * and persist it. Closes the residual low-MP over-read that the affine correction targets
+   * (the offset has no visual cap, so it can only be learned from one known reading).
+   */
+  async calibrateMpOffsetFromValue(trueMp: number): Promise<{ ok: boolean; offsetFrac?: number; note?: string }> {
+    const ad = this.app.get().persisted.autoDetect
+    const cal = this.barCalibration(ad)
+    if (!cal) return { ok: false, note: 'MP 바 100% 보정을 먼저 하세요' }
+    const maxMp = this.app.get().persisted.mpConfig.maxMp
+    if (!(trueMp >= 0) || trueMp >= maxMp) return { ok: false, note: `0 이상 ${maxMp} 미만의 실제 MP 값이 필요합니다 (가득 찬 상태 말고)` }
+    const barRegion = ad.captureMode === 'window' ? this.windowRois?.mpBar ?? null : ad.mpBarRegion
+    if (!barRegion) return { ok: false, note: 'MP 바 영역이 없습니다' }
+    const img = await this.captureRegion(barRegion)
+    if (!img) return { ok: false, note: 'MP 바 캡처 실패' }
+    const res = computeBarFill(img, { refColor: cal.fillColor })
+    const offsetFrac = solveLeftOffsetFrac(res.filledColumns, trueMp, cal.fullColumns, maxMp)
+    this.app.store.set((prev) => ({
+      persisted: { ...prev.persisted, autoDetect: { ...prev.persisted.autoDetect, mpBarLeftOffsetFrac: offsetFrac } }
+    }))
+    this.app.flush()
+    logger.info('calib', `MP 좌측 오프셋 보정: filled=${res.filledColumns}/${cal.fullColumns}, 실제=${trueMp}/${maxMp} → leftOffsetFrac=${offsetFrac.toFixed(4)}`)
+    return { ok: true, offsetFrac }
   }
 
   private processMp(

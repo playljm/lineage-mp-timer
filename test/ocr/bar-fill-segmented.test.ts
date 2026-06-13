@@ -14,7 +14,7 @@
  * (main/highlight/divider) is blue-dominant; the gray track and white text are not.
  */
 import { describe, it, expect } from 'vitest'
-import { computeBarFill, type Rgb } from '@core/ocr/bar-fill'
+import { computeBarFill, barFillToMp, solveLeftOffsetFrac, type Rgb } from '@core/ocr/bar-fill'
 import type { RgbaImage } from '@core/ocr/types'
 
 const MAIN: Rgb = { r: 121, g: 124, b: 150 }
@@ -84,6 +84,38 @@ describe('bar-fill segmented gauge + text overlay (v3.1.10)', () => {
     const res = computeBarFill(im, { refColor: MAIN })
     // The track (cols 50..199) is gray (not blue-dominant) → must stay empty.
     expect(res.filledColumns).toBeLessThan(60)
+  })
+
+  it('left-offset affine correction: exact at full, removes low-MP over-read (field 110)', () => {
+    // A bar whose gauge fill region starts ~9px in from the ROI left (a static bevel that
+    // is always blue): fill 0..90 full-height blue, rest gray track. Without correction the
+    // raw ratio over-reads at low MP; the affine offset fixes it and stays exact at full.
+    const im = img(260, 7, TRACK)
+    for (let x = 0; x < 91; x++) for (let y = 0; y < 7; y++) px(im, x, y, MAIN)
+    const filled = computeBarFill(im, { refColor: MAIN }).filledColumns
+    expect(filled).toBe(91)
+
+    const FULL = 252
+    const MAX = 327
+    // Naive (no offset) over-reads: 327*91/252 ≈ 118 (field saw this kind of +error at low MP)
+    expect(barFillToMp(im, MAX, { fullColumns: FULL, fillColor: MAIN })).toBe(118)
+
+    // Solve the offset from the known truth (game MP 110) and apply → exact.
+    const frac = solveLeftOffsetFrac(91, 110, FULL, MAX)
+    expect(frac).toBeGreaterThan(0.03)
+    expect(frac).toBeLessThan(0.045)
+    expect(barFillToMp(im, MAX, { fullColumns: FULL, fillColor: MAIN, leftOffsetFrac: frac })).toBe(110)
+
+    // The offset is EXACT at 100% regardless: a full bar still reads max.
+    const full = img(260, 7, TRACK)
+    for (let x = 0; x < FULL; x++) for (let y = 0; y < 7; y++) px(full, x, y, MAIN)
+    expect(barFillToMp(full, MAX, { fullColumns: FULL, fillColor: MAIN, leftOffsetFrac: frac })).toBe(MAX)
+  })
+
+  it('solveLeftOffsetFrac is safe at degenerate inputs (full / zero / invalid)', () => {
+    expect(solveLeftOffsetFrac(91, 327, 252, 327)).toBe(0) // trueMp == max → 0 (no div blowup)
+    expect(solveLeftOffsetFrac(91, 110, 0, 327)).toBe(0) // no fullColumns
+    expect(solveLeftOffsetFrac(91, -5, 252, 327)).toBe(0) // negative true
   })
 
   it('excludes the partial-height fill-front GLOW (field over-read: 110→135)', () => {

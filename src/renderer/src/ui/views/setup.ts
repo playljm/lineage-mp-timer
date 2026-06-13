@@ -1177,7 +1177,18 @@ export function createSetupView(ctx: ViewContext): View {
       lastAccepted[region] = false
       updateHint(region)
       if (region === 'mp') {
-        status.textContent = '적용됨 (MP는 바 보정 권장)'
+        // v3.1.12: use the entered TRUE MP to fine-tune the bar's static left-offset
+        // (fixes the low-MP over-read). Needs a non-full reading + an existing 100% calib.
+        if (parsed.kind === 'mp') {
+          status.textContent = '좌측 오프셋 보정 중…'
+          const off = await detection.calibrateMpOffsetFromValue(parsed.cur)
+          actions.recomputeTimer()
+          status.textContent = off.ok
+            ? `적용 + 좌측 오프셋 보정됨 (${((off.offsetFrac ?? 0) * 100).toFixed(1)}%) — 저 MP 정확도 ↑`
+            : `적용됨 · 오프셋 보정 보류: ${off.note ?? ''}`
+        } else {
+          status.textContent = '적용됨 (MP는 바 보정 권장)'
+        }
         return
       }
       status.textContent = '학습 중…'
@@ -1213,6 +1224,7 @@ export function createSetupView(ctx: ViewContext): View {
       h('div', { class: 'row' }, calibBtn, calibStatus),
       calibAction,
       h('div', { class: 'tick-info' }, 'MP가 가득 찼을 때 「MP 바 100% 보정」을 누르면 MP가 100% 정확해집니다.'),
+      h('div', { class: 'tick-info' }, 'MP가 낮을 때(가득 X) 실제 MP 값을 MP칸에 넣고 「적용 & 학습」하면 저 MP 과다오차가 보정됩니다.'),
       h('div', { class: 'tick-info' }, '학습: 「인식값↩」로 현재 인식값을 불러와 화면과 비교 → 틀린 자리만 고치고 「적용 & 학습」.'),
       learnRow('mp', 'MP', '예: 0/320'),
       learnRow('exp', 'EXP', '예: 78.3638'),

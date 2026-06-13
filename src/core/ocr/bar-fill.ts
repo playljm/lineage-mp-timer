@@ -440,6 +440,33 @@ export function computeBarFill(img: RgbaImage, opts: BarFillOptions = {}): BarFi
 export interface BarCalibration {
   fullColumns: number
   fillColor: Rgb
+  /**
+   * Fraction of `fullColumns` that the gauge's variable fill is OFFSET from the ROI's
+   * left edge (v3.1.12). The bar has a static left bevel/cap (~3-4% of its width) that is
+   * always blue, so the fill measured from x=0 over-reads at low MP and is accurate near
+   * full — exactly the field pattern (actual 30 read high, 250 read right). The cur is then
+   * an affine map `maxMp*(filled-off)/(fullColumns-off)` with `off = leftOffsetFrac*fullColumns`,
+   * which is EXACT at 100% regardless of the offset and only removes the low-MP over-read.
+   * Stored as a fraction (not px) so it is resolution-independent. Default 0 (no offset).
+   */
+  leftOffsetFrac?: number
+}
+
+/**
+ * Back-solve {@link BarCalibration.leftOffsetFrac} from one observed (filled, trueMp)
+ * point given the 100%-calibrated `fullColumns`/`maxMp`. The user enters the game's real
+ * MP at any non-full level; this recovers the static left offset. Clamped to a sane band.
+ */
+export function solveLeftOffsetFrac(
+  filledColumns: number,
+  trueMp: number,
+  fullColumns: number,
+  maxMp: number
+): number {
+  if (fullColumns <= 0 || maxMp <= 0 || trueMp < 0 || trueMp >= maxMp) return 0
+  // trueMp = maxMp*(filled-off)/(full-off)  →  off = (maxMp*filled - trueMp*full)/(maxMp-trueMp)
+  const off = (maxMp * filledColumns - trueMp * fullColumns) / (maxMp - trueMp)
+  return Math.max(0, Math.min(0.25, off / fullColumns))
 }
 
 /** Why a checked calibration was rejected. */
@@ -542,6 +569,12 @@ export function barFillToMp(
 ): number {
   const res = computeBarFill(img, { ...opts, refColor: cal.fillColor })
   if (cal.fullColumns <= 0) return 0
-  const cur = Math.round((maxMp * res.filledColumns) / cal.fullColumns)
+  // Affine left-offset correction (v3.1.12): subtract the static left bevel from BOTH the
+  // measured fill and the full width. Exact at 100% (off cancels), removes the low-MP
+  // over-read. off=0 → identical to the legacy ratio.
+  const off = Math.round(Math.max(0, Math.min(0.25, cal.leftOffsetFrac ?? 0)) * cal.fullColumns)
+  const den = cal.fullColumns - off
+  if (den <= 0) return 0
+  const cur = Math.round((maxMp * (res.filledColumns - off)) / den)
   return Math.max(0, Math.min(maxMp, cur))
 }
