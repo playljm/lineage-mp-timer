@@ -24,7 +24,7 @@
  */
 import type { RgbaImage, BinaryMask, GlyphBox } from './types'
 import { connectedComponents } from './segmentation'
-import { scaleToHeight } from './imaging'
+import { scaleToHeight, binarizeAuto, columnInk, cropImage } from './imaging'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Geometry types
@@ -356,7 +356,9 @@ export const DEFAULT_ROI_CONFIG: RoiConfig = {
   roiMinHeight: 5,
   adenaRoiMinWidth: 50,
   expRoiMinWidth: 50,
-  levelRoiMinWidth: 30
+  // v3.1.2 trims the level ROI to just the value digits ("33" ≈ 18-26px), so the
+  // legacy 30px floor would false-flag a correctly-trimmed ROI as invalid.
+  levelRoiMinWidth: 14
 }
 
 export interface DetectOptions {
@@ -780,18 +782,24 @@ function splitLevelExp(
 
 /**
  * Trim a LEVEL text ROI down to just the value digits when it also captured the
- * "LEV:" label (the in-game level display is "LEV:NN", one visual group). Scans the
- * ROI's columns for bright low-sat text runs (glyphs) and, if a clear separator gap
- * exists, keeps only the trailing 1-3 runs to the RIGHT of the rightmost separator —
- * the value. Returns the box unchanged when there is no label prefix (≤1 run, or no
- * gap clearly larger than the inter-digit spacing — e.g. a clean "NN" crop).
+ * "LEV:" label (the in-game level display is "LEV:NN", one visual group). Binarizes
+ * the ROI the SAME way the recognizer does ({@link binarizeAuto}) and groups ink
+ * columns into glyph runs; if a clear separator gap exists, keeps only the trailing
+ * 1-3 runs to the RIGHT of the rightmost separator — the value. Returns the box
+ * unchanged when there is no label prefix (≤1 run, or no gap clearly larger than the
+ * inter-digit spacing — e.g. a clean "NN" crop).
  *
- * Field evidence (2026-06-13, lc-frame.png): the auto ROI captured "LEV:33"
- * → OCR read "660233" → parseLevel(null). Glyph runs L E V : 3 3 had label↔value
- * gaps of ~6px vs inter-digit ~3px; splitting at the rightmost large gap isolates "33".
+ * Field evidence (2026-06-13): the auto ROI captured "LEV:33" → OCR read "660133"
+ * → parseLevel(null), rejected every tick. The first cut used an absolute brightness
+ * gate (lum>180) that the renderer's screen-capture (dimmer than PrintWindow) fell
+ * below, so it found no glyphs and never trimmed on the actual device. Using the
+ * recognizer's adaptive binarization makes glyph detection match what actually gets
+ * OCR'd, so the trim fires wherever the text is readable. Glyph runs L E V : 3 3 have
+ * a label↔value gap (~6px) wider than the inter-digit gap (~3px); splitting at the
+ * rightmost large gap isolates "33".
  */
 export function refineLevelRoiToValue(img: RgbaImage, roi: TextRoi, cfg: RoiConfig): TextRoi {
-  const { width: fw, data } = img
+  const { width: fw } = img
   const x0 = Math.max(0, roi.x0)
   const x1 = Math.min(fw, roi.x1)
   const y0 = Math.max(0, roi.y0)
@@ -800,29 +808,19 @@ export function refineLevelRoiToValue(img: RgbaImage, roi: TextRoi, cfg: RoiConf
   const h = y1 - y0
   if (w <= 0 || h <= 0) return roi
 
-  // Per-column bright low-sat (text) pixel counts within the ROI.
-  const col = new Array<number>(w).fill(0)
-  for (let x = 0; x < w; x++) {
-    let c = 0
-    for (let y = 0; y < h; y++) {
-      const i = ((y0 + y) * fw + (x0 + x)) * 4
-      const r = data[i]!
-      const g = data[i + 1]!
-      const b = data[i + 2]!
-      const max = Math.max(r, g, b)
-      const min = Math.min(r, g, b)
-      const lum = (r + g + b) / 3
-      const sat = max === 0 ? 0 : (max - min) / max
-      if (lum > cfg.lvTextLumMin && sat < cfg.lvTextSatMax) c++
-    }
-    col[x] = c
-  }
+  // Adaptive binarization (same path as the recognizer) → per-column ink counts.
+  // Keying on the binarized glyph mask (not an absolute brightness gate) makes the
+  // trim robust to capture-method brightness differences.
+  const crop = cropImage(img, { x0, y0, x1, y1 })
+  const mask = binarizeAuto(crop)
+  const ink = columnInk(mask) // ink pixels per column (length w)
+  const onThreshold = Math.max(1, Math.floor(h * 0.12))
 
-  // Group columns into glyph runs (a column is "on" with >=2 text pixels).
+  // Group columns into glyph runs.
   const runs: Array<{ s: number; e: number }> = []
   let st = -1
   for (let x = 0; x <= w; x++) {
-    const on = x < w && col[x]! >= 2
+    const on = x < w && (ink[x] ?? 0) >= onThreshold
     if (on && st < 0) st = x
     else if (!on && st >= 0) {
       runs.push({ s: st, e: x - 1 })
