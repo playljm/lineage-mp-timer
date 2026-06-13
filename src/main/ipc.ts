@@ -63,14 +63,27 @@ function setCompact(on: boolean): void {
   }
 }
 
+/** The single live completion toast — reused so repeated fires never pile up in the
+ *  OS notification center (Windows Action Center). Closed before each new show. */
+let completeNotification: Notification | null = null
+
 function notifyComplete(payload: { title: string; body: string }): void {
   try {
     if (Notification.isSupported()) {
-      new Notification({
+      // Replace any prior toast instead of stacking a new one each fire — even with
+      // the renderer-side re-fire fixed, this keeps the Action Center from filling
+      // up if a value oscillates around full.
+      try {
+        completeNotification?.close()
+      } catch {
+        /* ignore */
+      }
+      completeNotification = new Notification({
         title: payload.title || 'MP 충전 완료',
         body: payload.body || '리니지 MP가 가득 찼습니다.',
         urgency: 'critical'
-      }).show()
+      })
+      completeNotification.show()
     }
   } catch {
     /* notifications are best-effort */

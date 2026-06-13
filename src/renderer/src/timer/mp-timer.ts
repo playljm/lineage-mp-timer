@@ -43,7 +43,13 @@ export class MpTimer {
     }
     const secs = calculateFullMpTime(cfg.curMp, cfg.maxMp, toMpConfig(cfg))
     this.completionAt = Number.isFinite(secs) ? nowMs + secs * 1000 : null
-    this.notified = false
+    // Re-arm the completion alert ONLY for a genuine countdown (MP below full →
+    // secs > 0). When already full (secs === 0) we must NOT clear `notified`, or
+    // every store write while full (the session tracker ingests a sample each tick,
+    // and the store has no dedup) re-arms it and the 250ms render re-fires the toast
+    // forever. Keeping it set means exactly one alert per refill cycle: it clears
+    // when MP drops (secs > 0) and fires once when it next reaches full.
+    if (secs > 0) this.notified = false
   }
 
   /** Seconds remaining; static ETA when paused. Fires onComplete on first zero. */
