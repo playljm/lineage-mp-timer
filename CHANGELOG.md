@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.1.4 — 2026-06-13
+
+### 레벨 인식 실패 수정 — 실기 진단 로그 기반 (`roi-detector.ts`)
+
+실기 진단 리포트(`%APPDATA%\LineageMPTimer\diagnostic\`) 분석으로 확정: 실행 중인 앱에서 **레벨만 매 틱 거부**(`raw="660133" conf=0.28 → reject`)되고 MP(327 accept)·EXP(57.06% accept)·adena(accept)는 정상 동작 중이었음. 원인은 v3.1.2의 레벨 트림(`refineLevelRoiToValue`)이 **절대 밝기 게이트(lum>180)** 로 글자를 찾는데, 앱의 화면 캡처(desktopCapturer)가 PrintWindow보다 어둡게 렌더링되면 글자를 못 찾아 트림이 안 되고 "LEV:33" 전체(85px)를 그대로 OCR → "660133" → parseLevel null.
+
+- **`refineLevelRoiToValue`를 인식기와 동일한 적응형 이진화(`binarizeAuto` + `columnInk`)로 전환**: 글자 검출이 실제 OCR되는 것과 일치하므로, 인식기가 "LEV:33"을 분할할 수 있는 한(=로그의 6글자) 트림이 항상 발동. 캡처 방식·밝기 차이에 무관.
+- `levelRoiMinWidth` 30 → 14: 트림된 레벨 ROI(≈24px)가 `valid:false`로 오플래그되던 것 해소.
+- 회귀: `test/ocr/roi-refine.test.ts` 6종 유지(binarizeAuto 기반에서도 통과). 테스트 41파일 294개 PASS · typecheck PASS.
+
+> 진단 로그로 확인된 정상 동작: MP는 bar-pixel로 327 정상 추적(가득 찬 상태라 카운트다운할 게 없을 뿐 — 사용 시 드롭 측정됨, 50% 가림 재현 시 165/327), EXP 57.06% 정상. adena는 값을 읽으나 자릿수 노이즈 가능성 잔존(기존 한계).
+
 ## v3.1.3 — 2026-06-13
 
 ### MP 완충 알림 무한 반복 수정 (`mp-timer.ts` / `ipc.ts`)
