@@ -31,9 +31,11 @@ export function createSummaryBar(ctx: ViewContext): View {
     el,
     update(state) {
       const c = state.persisted.mpConfig
-      const pct = c.maxMp > 0 ? Math.round((c.curMp / c.maxMp) * 100) : 0
-      mp.set(`${c.curMp}/${c.maxMp} · ${pct}%`)
-      rem.set(formatDuration(ctx.timer.remainingSeconds(c, ctx.now())), true)
+      const now = ctx.now()
+      const mpVal = ctx.timer.displayMp(c, now)
+      const pct = c.maxMp > 0 ? Math.round((mpVal / c.maxMp) * 100) : 0
+      mp.set(`${mpVal}/${c.maxMp} · ${pct}%`)
+      rem.set(formatDuration(ctx.timer.remainingSeconds(c, now)), true)
       const s = state.runtime.trackerStats
       exph.set(s.expPerHour != null ? `+${s.expPerHour.toFixed(2)}%` : '—')
       adh.set(s.adenaPerHour != null ? `+${Math.round(s.adenaPerHour).toLocaleString('en-US')}` : '—')

@@ -75,17 +75,20 @@ export function createMonitorView(ctx: ViewContext): View {
       const c = state.persisted.mpConfig
       const now = ctx.now()
       const remaining = timer.remainingSeconds(c, now)
+      // Show the smooth tick-model MP (matches the game's discrete recovery, ignores
+      // per-frame bar/OCR jitter) instead of the raw measured value.
+      const mp = timer.displayMp(c, now)
       hero.textContent = formatDuration(remaining)
       heroSub.textContent =
         Number.isFinite(remaining) && remaining > 0
           ? `완충 예상 ${formatCompletionTime(remaining, new Date(now))}`
-          : c.curMp >= c.maxMp
+          : mp >= c.maxMp
             ? '완충 완료'
             : '회복 불가'
 
-      const pct = c.maxMp > 0 ? Math.min(100, (c.curMp / c.maxMp) * 100) : 0
+      const pct = c.maxMp > 0 ? Math.min(100, (mp / c.maxMp) * 100) : 0
       gaugeFill.style.width = `${pct}%`
-      gaugeText.textContent = `${c.curMp} / ${c.maxMp}  ·  ${Math.round(pct)}%`
+      gaugeText.textContent = `${mp} / ${c.maxMp}  ·  ${Math.round(pct)}%`
       gauge.setAttribute('aria-valuenow', String(Math.round(pct)))
 
       btnStart.textContent = timer.running ? '일시정지' : '시작'

@@ -29,8 +29,9 @@ export function createCompactView(ctx: ViewContext): View {
     el,
     update(state) {
       const c = state.persisted.mpConfig
-      hero.textContent = formatDuration(ctx.timer.remainingSeconds(c, ctx.now()))
-      const pct = c.maxMp > 0 ? Math.round((c.curMp / c.maxMp) * 100) : 0
+      const now = ctx.now()
+      hero.textContent = formatDuration(ctx.timer.remainingSeconds(c, now))
+      const pct = c.maxMp > 0 ? Math.round((ctx.timer.displayMp(c, now) / c.maxMp) * 100) : 0
       mp.v.textContent = `${pct}%`
       const s = state.runtime.trackerStats
       exph.v.textContent = s.expPerHour != null ? `+${s.expPerHour.toFixed(2)}%` : '—'
