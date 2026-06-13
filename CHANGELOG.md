@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (v3.1.1)
+## v3.1.1 — 2026-06-13
 
 ### MP 바 보정 영구 실패 해소 — 저채도 게이지 게이트 교정 (`bar-fill.ts` / `detection.ts` / `setup.ts`)
 
