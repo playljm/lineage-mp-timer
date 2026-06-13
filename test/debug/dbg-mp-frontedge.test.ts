@@ -25,7 +25,7 @@ import {
 import { cropImage } from '@core/ocr/imaging'
 import type { RgbaImage } from '@core/ocr/types'
 
-const FRAME = 'C:/dev/tmp/lc-mp-third.png'
+const FRAME = 'C:/dev/tmp/game-110.png'
 const CAL = { fullColumns: 252, fillColor: { r: 121, g: 124, b: 150 } as Rgb }
 const MAX_MP = 327
 
@@ -143,28 +143,24 @@ describe('dbg-mp-frontedge: 실기 저-MP 프레임 바 측정 vs 텍스트(실�
     const tol2 = 70 * 70
     const need = Math.max(1, Math.floor(height * 0.5))
     const midY = Math.floor(height / 2)
-    const from = Math.max(0, res.filledColumns - 18)
-    const to = Math.min(res.filledColumns + 45, width - 1)
-    console.log(`\nband ${width}x${height} need=${need}/row. FRONT region columns ${from}..${to} (measured front=${res.filledColumns}):`)
-    console.log(`x   cnt fill midpx              dFill dEmpty`)
+    const from = 80
+    const to = Math.min(125, width - 1)
+    console.log(`\nband ${width}x${height}. cols ${from}..${to} (measured front=${res.filledColumns}). per-row category counts:`)
+    console.log(`x   blue white gray  | blueOrWhite (proposed full-height fill)`)
     for (let x = from; x <= to; x++) {
-      let cnt = 0
+      let blue = 0, white = 0, gray = 0
       for (let y = 0; y < height; y++) {
         const p = (y * width + x) * 4
         const r = data[p]!, g = data[p + 1]!, b = data[p + 2]!
-        const dF = (CAL.fillColor.r - r) ** 2 + (CAL.fillColor.g - g) ** 2 + (CAL.fillColor.b - b) ** 2
-        let isFill: boolean
-        if (empty) {
-          const dE = (empty.r - r) ** 2 + (empty.g - g) ** 2 + (empty.b - b) ** 2
-          isFill = dF < dE && dF <= tol2
-        } else isFill = dF <= tol2
-        if (isFill) cnt++
+        const isBlue = b > Math.max(r, g) + 8
+        const lm = 0.299 * r + 0.587 * g + 0.114 * b
+        const isWhite = lm > 200 && Math.max(r, g, b) - Math.min(r, g, b) < 22
+        if (isBlue) blue++
+        else if (isWhite) white++
+        else gray++
       }
-      const p = (midY * width + x) * 4
-      const r = data[p]!, g = data[p + 1]!, b = data[p + 2]!
-      const dF = dist(CAL.fillColor, r, g, b)
-      const dE = empty ? dist(empty, r, g, b) : -1
-      console.log(`${String(x).padStart(3)} ${String(cnt).padStart(2)}/${height}  ${cnt >= need ? 'Y' : '.'}   (${String(r).padStart(3)},${String(g).padStart(3)},${String(b).padStart(3)})      ${String(dF).padStart(4)}  ${String(dE).padStart(4)}`)
+      const bw = blue + white
+      console.log(`${String(x).padStart(3)}  ${blue}     ${white}     ${gray}    | ${bw}/${height} ${bw >= height ? 'FILL' : '.'}`)
     }
   })
 })

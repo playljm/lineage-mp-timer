@@ -85,4 +85,18 @@ describe('bar-fill segmented gauge + text overlay (v3.1.10)', () => {
     // The track (cols 50..199) is gray (not blue-dominant) → must stay empty.
     expect(res.filledColumns).toBeLessThan(60)
   })
+
+  it('excludes the partial-height fill-front GLOW (field over-read: 110→135)', () => {
+    // Solid fill 0..49 (full height), then a fill-front GLOW 50..85: blue in the middle
+    // rows but GRAY at the top/bottom (the glow fades at the band edges), then gray track.
+    // The glow must NOT be counted (it caused the v3.1.10 over-read); the front stays ~50.
+    const im = img(200, 7, TRACK)
+    paintSegmentedFill(im, 50)
+    for (let x = 50; x < 86; x++) {
+      for (let y = 1; y <= 5; y++) px(im, x, y, MAIN) // blue middle rows only (rows 0,6 stay gray track)
+    }
+    const res = computeBarFill(im, { refColor: MAIN })
+    expect(res.filledColumns).toBeGreaterThanOrEqual(48)
+    expect(res.filledColumns).toBeLessThanOrEqual(52) // glow (50..85) excluded, NOT counted to ~86
+  })
 })

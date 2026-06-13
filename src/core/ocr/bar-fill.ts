@@ -162,6 +162,16 @@ const FILL_SATURATION_GATE = 0.12
  * dark divider rgb(16,26,41) (b 41 > max 26 + 8) while still rejecting track/white text.
  */
 const GAUGE_PIXEL_BLUE_MARGIN = 8
+/**
+ * White "cur/max" text detection (v3.1.11) — a row is the overlaid text when it is bright
+ * AND near-neutral (r≈g≈b). Counting text rows as fill (alongside blue gauge rows) lets a
+ * fill column that the digits punch through still reach full height, so the text can't
+ * truncate the front at low MP — while the fill-front GLOW and empty track (which contain
+ * GRAY rows, not white) stay excluded. The bright blue highlight rgb(200,206,255) is NOT
+ * neutral (spread 55) so it is classified blue, not text.
+ */
+const WHITE_TEXT_LUMA = 200
+const WHITE_TEXT_NEUTRAL = 22
 
 /** Row band [y0, y1) within a bar ROI. */
 export interface RowBand {
@@ -333,7 +343,6 @@ export function computeBarFill(img: RgbaImage, opts: BarFillOptions = {}): BarFi
   }
   const { width, height, data } = img
   const tolerance = opts.colorTolerance ?? 70
-  const minDensity = opts.minColumnDensity ?? 0.5
   const refColor = opts.refColor ?? detectFillColor(img)
 
   if (!refColor || width === 0 || height === 0) {
@@ -342,10 +351,23 @@ export function computeBarFill(img: RgbaImage, opts: BarFillOptions = {}): BarFi
 
   const emptyColor = opts.emptyColor ?? detectEmptyColor(img, refColor)
   const tol2 = tolerance * tolerance
-  const need = Math.max(1, Math.floor(height * minDensity))
   // The Lineage MP gauge is always blue; classify those by blue-dominance (clean across
   // the segmented texture + cur/max text). Non-blue fills keep the legacy distance path.
   const refIsBlue = isBlueDominant(refColor)
+  // Density requirement (rows per column that must read fill). The SOLID fill spans the
+  // FULL gauge-band height (every row blue, + white where the cur/max text sits), whereas
+  // the fill-front GLOW/gradient that extends ~30px past the real fill is only PARTIAL
+  // height (always has GRAY rows) — counting it caused a field over-read (actual 110→135).
+  // So a blue gauge DEFAULTS to full-height (glow excluded; the boundary scan's window
+  // still absorbs isolated text columns). An EXPLICIT minColumnDensity is honoured as-is
+  // (the sat-gate/thin-band diagnostics pin 0.3 to exercise the density mechanism); the
+  // live MP path never sets it, so it always gets the full-height rule.
+  const need =
+    opts.minColumnDensity != null
+      ? Math.max(1, Math.floor(height * opts.minColumnDensity))
+      : refIsBlue
+        ? height
+        : Math.max(1, Math.floor(height * 0.5))
 
   // 1) Classify each column as fill / not-fill. With an empty-track reference we use
   //    relative distance (closer to fill than to track) so a similar-coloured track
@@ -360,15 +382,17 @@ export function computeBarFill(img: RgbaImage, opts: BarFillOptions = {}): BarFi
       const b = data[p + 2]!
       let isFill: boolean
       if (refIsBlue) {
-        // Blue MP gauge: classify by BLUE-DOMINANCE, not distance-to-average. The gauge
-        // is rendered as segments — average fill rgb(121,124,150) + bright highlights
-        // rgb(200,206,255) + near-black dividers rgb(16,26,41); the distance gate (≤70
-        // from the average) dropped the highlights/dividers AND falsely accepted noisy
-        // mid-tones in the empty track/anti-aliased "cur/max" text, so the boundary both
-        // under-read (low MP, text holes) and over-read (track noise). Every genuine
-        // gauge pixel is blue-dominant while the gray track and white text are not, which
-        // gives a clean, sharp fill front at every MP level. (See GAUGE_PIXEL_BLUE_MARGIN.)
-        isFill = b > Math.max(r, g) + GAUGE_PIXEL_BLUE_MARGIN
+        // Blue MP gauge: a row counts toward fill if it is a gauge pixel (BLUE-DOMINANT —
+        // covers the average fill rgb(121,124,150), bright highlights rgb(200,206,255) and
+        // near-black dividers rgb(16,26,41) that a distance-to-average gate wrongly drops)
+        // OR a white "cur/max" text pixel overlaying the fill. Combined with the
+        // full-height `need` below, this is what separates real fill from the two
+        // look-alikes that flipped earlier fixes: the fill-front GLOW and the empty track
+        // always contain GRAY rows (neither blue nor white), whereas the solid fill is
+        // every-row blue (+ white where the text sits). (See GAUGE_PIXEL_BLUE_MARGIN.)
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b
+        const isWhiteText = lum > WHITE_TEXT_LUMA && Math.max(r, g, b) - Math.min(r, g, b) < WHITE_TEXT_NEUTRAL
+        isFill = b > Math.max(r, g) + GAUGE_PIXEL_BLUE_MARGIN || isWhiteText
       } else if (emptyColor) {
         // Non-blue fill (legacy/other gauges): relative classification defeats a
         // similar-coloured track (the v3.0.1 saturation defence).

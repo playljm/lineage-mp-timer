@@ -49,11 +49,13 @@ describe('computeBarFill on a thin band with top sheen', () => {
     expect(res.ratio).toBeGreaterThan(0.95)
   })
 
-  it('the old lenient density (0.3) would have mismeasured the same ROI as full', () => {
+  it('an EXPLICIT lenient density (0.3) still mismeasures — the default (full-height) is what fixes it', () => {
     const img = makeThinBar(100, 6, 0.6, 2)
     const lenient = computeBarFill(img, { refColor: FILL, minColumnDensity: 0.3 })
-    // Documents the regression: at 0.3 the top sheen (2 of 6 rows ≥ need=1) marks
-    // empty columns filled → reads (near) full.
+    // When the caller explicitly sets the density knob it is honoured (used by the
+    // sat-gate diagnostics). At 0.3 the top sheen (2 blue rows ≥ need=1) marks empty
+    // columns filled → reads (near) full. The LIVE path passes NO density, so a blue
+    // gauge defaults to full-height and the sheen is excluded (cases 1-2 above).
     expect(lenient.ratio).toBeGreaterThan(0.9)
   })
 })
