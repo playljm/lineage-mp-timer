@@ -186,30 +186,55 @@ describe('MpTimer completion alert', () => {
 })
 
 /**
- * Tick-model regression (v3.1.8). The countdown is driven by a deterministic recovery
- * model (anchorMp + floor(elapsed/interval)*recovery), not by every noisy per-frame
- * reading — the root cause of "1초 줄었다 다시 늘고" was re-anchoring on bar/OCR jitter.
- * The displayed MP follows the same model so it shows the game's discrete ticks
- * instead of measurement noise.
+ * Tick-model regression (v3.1.8 / v3.1.9). The COUNTDOWN is driven by a deterministic
+ * recovery model (anchorMp + floor(elapsed/interval)*recovery) so bar/OCR jitter no
+ * longer re-anchors it ("1초 줄었다 다시 늘고"). The DISPLAYED MP, however, tracks the
+ * MEASURED value as a per-cycle high-water mark — v3.1.8's floored prediction lagged
+ * the real MP by up to half a tick and read consistently ~6 low (263→257, 283→278).
  */
 describe('MpTimer tick model', () => {
-  it('displayMp advances by exactly one recovery tick per interval', () => {
+  it('displayMp tracks the measured MP without the floored-prediction lag', () => {
     const t = new MpTimer()
     const t0 = 7_000_000
-    const c = cfg(100) // recovery 2/tick, 16s interval
-    t.start(c, t0)
-    expect(t.displayMp(c, t0)).toBe(100)
-    expect(t.displayMp(c, t0 + 16_000 - 1)).toBe(100) // just before the first tick
-    expect(t.displayMp(c, t0 + 16_000)).toBe(102) // tick 1
-    expect(t.displayMp(c, t0 + 32_000)).toBe(104) // tick 2
+    t.start(cfgBuffed(200), t0) // recovery 12/tick
+    // MP rises ~one tick per reading; each within tolerance → must show the REAL value,
+    // never a value that lags below it.
+    let now = t0
+    for (const v of [206, 212, 218, 224]) {
+      now += 16_000
+      t.recompute(cfgBuffed(v), now)
+      expect(t.displayMp(cfgBuffed(v), now)).toBe(v)
+    }
   })
 
-  it('displayMp caps at maxMp (never predicts beyond full)', () => {
+  it('displayMp ignores downward jitter but follows real recovery up (high-water)', () => {
+    const t = new MpTimer()
+    const t0 = 7_020_000
+    t.start(cfgBuffed(260), t0)
+    expect(t.displayMp(cfgBuffed(260), t0)).toBe(260)
+    // A spurious low dip within tolerance must NOT drag the displayed MP down.
+    t.recompute(cfgBuffed(257), t0 + 1000)
+    expect(t.displayMp(cfgBuffed(257), t0 + 1000)).toBe(260)
+    // A real rise within tolerance shows immediately.
+    t.recompute(cfgBuffed(266), t0 + 2000)
+    expect(t.displayMp(cfgBuffed(266), t0 + 2000)).toBe(266)
+  })
+
+  it('displayMp drops when MP is actually used (re-anchor below tolerance)', () => {
+    const t = new MpTimer()
+    const t0 = 7_040_000
+    t.start(cfgBuffed(320), t0)
+    expect(t.displayMp(cfgBuffed(320), t0)).toBe(320)
+    t.recompute(cfgBuffed(150), t0 + 1000) // −170 ≫ one tick → genuine use
+    expect(t.displayMp(cfgBuffed(150), t0 + 1000)).toBe(150)
+  })
+
+  it('displayMp clamps the measured value to maxMp', () => {
     const t = new MpTimer()
     const t0 = 7_050_000
-    const c = cfgBuffed(320) // recovery 12 → would overshoot in 1 tick
-    t.start(c, t0)
-    expect(t.displayMp(c, t0 + 16_000 * 5)).toBe(327)
+    t.start(cfgBuffed(320), t0)
+    t.recompute(cfgBuffed(999), t0 + 1000) // implausible over-read
+    expect(t.displayMp(cfgBuffed(999), t0 + 1000)).toBe(327)
   })
 
   it('countdown stays smooth (monotone ~1s/s) through sub-tick OCR jitter', () => {

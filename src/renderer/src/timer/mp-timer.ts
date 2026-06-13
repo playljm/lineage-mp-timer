@@ -46,6 +46,11 @@ export class MpTimer {
   private anchorMax = 0
   private anchorRecovery = 0 // MP gained per tick at the anchor's config
   private anchorIntervalMs = 0 // ms per tick at the anchor's config
+  /** MP to DISPLAY — the measured value tracked as a high-water mark within a charge
+   *  cycle (rises with real recovery, ignores downward jitter, drops only on a genuine
+   *  re-anchor). Decoupled from the floored tick prediction, which lagged the real MP
+   *  by up to half a tick and read consistently ~6 low. */
+  private displayedMp: number | null = null
   private notified = false
   running = false
   onComplete: (() => void) | null = null
@@ -63,6 +68,7 @@ export class MpTimer {
     this.completionAt = null
     this.anchorMp = null
     this.anchorAt = null
+    this.displayedMp = null
   }
 
   /** (Re)seat the tick model on the current reading and rebuild the completion time. */
@@ -73,6 +79,9 @@ export class MpTimer {
     this.anchorMax = cfg.maxMp
     this.anchorRecovery = calculateTickRecovery(m)
     this.anchorIntervalMs = calculateTickInterval(cfg.state) * 1000
+    // Re-anchoring is a genuine MP event (start, use, potion, buff change) — reseat the
+    // displayed value to the measured MP too (a drop lowers it; a jump raises it).
+    this.displayedMp = this.anchorMp
     const secs = calculateFullMpTime(this.anchorMp, cfg.maxMp, m)
     this.completionAt = Number.isFinite(secs) ? nowMs + secs * 1000 : null
   }
@@ -90,14 +99,15 @@ export class MpTimer {
   }
 
   /**
-   * MP to DISPLAY: the smooth tick-model prediction while running (matches the game's
-   * discrete recovery and ignores per-frame OCR jitter), else the raw measured value.
+   * MP to DISPLAY. While running: the measured value tracked as a per-cycle high-water
+   * mark (accurate to the game's real MP, with downward jitter filtered) — NOT the
+   * floored tick prediction, which lagged ~half a tick and read consistently low. While
+   * stopped: the raw measured value.
    */
-  displayMp(cfg: MpConfigState, nowMs: number): number {
-    if (this.running && this.anchorMp != null && this.anchorAt != null) {
-      return Math.round(this.predictedMp(cfg, nowMs))
-    }
-    return Math.max(0, Math.min(cfg.curMp, cfg.maxMp))
+  displayMp(cfg: MpConfigState, _nowMs: number): number {
+    const measured = Math.max(0, Math.min(cfg.curMp, cfg.maxMp))
+    if (this.running && this.displayedMp != null) return Math.round(this.displayedMp)
+    return measured
   }
 
   /**
@@ -145,20 +155,26 @@ export class MpTimer {
       return
     }
 
-    // Within tolerance: the reading confirms the model. Phase-lock ONLY on a clean
-    // forward tick advance (filters downward noise) so the displayed MP tracks the
-    // game's real tick, and pull the completion EARLIER if the advance proves we were
+    // Within tolerance: the reading confirms the model.
+    const measured = Math.max(0, Math.min(cfg.curMp, cfg.maxMp))
+    // Track the DISPLAYED MP up to the measured value (high-water mark): MP only rises
+    // while charging, so a reading below the displayed value is downward jitter and is
+    // ignored, while a reading above it is real recovery and is shown immediately. This
+    // keeps the number accurate to the game without the floored-prediction lag.
+    if (this.displayedMp == null || measured > this.displayedMp) this.displayedMp = measured
+    // Phase-lock the COUNTDOWN model ONLY on a clean forward tick advance (filters
+    // downward noise), pulling the completion EARLIER if the advance proves we were
     // lagging — never later (that would re-introduce the bounce).
     if (cfg.curMp >= this.anchorMp + recovery) {
       const secs = calculateFullMpTime(cfg.curMp, cfg.maxMp, toMpConfig(cfg))
       const newCompletion = Number.isFinite(secs) ? nowMs + secs * 1000 : null
-      this.anchorMp = Math.max(0, Math.min(cfg.curMp, cfg.maxMp))
+      this.anchorMp = measured
       this.anchorAt = nowMs
       if (newCompletion != null && (this.completionAt == null || newCompletion <= this.completionAt)) {
         this.completionAt = newCompletion
       }
     }
-    // else: sub-tick jitter — hold the model so the countdown stays smooth.
+    // else: sub-tick jitter — hold the countdown model so it stays smooth.
   }
 
   /** Seconds remaining; static ETA when paused. Fires onComplete on first zero. */
