@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.1.3 — 2026-06-13
+
+### MP 완충 알림 무한 반복 수정 (`mp-timer.ts` / `ipc.ts`)
+
+실사용 버그: "MP 충전 완료" 토스트+사운드가 **계속 반복**해서 울리고, MP를 써도·창을 X로 닫아도 멈추지 않음. 3방향 진단(알림재발화/측정고착/생명주기)으로 근본원인 확정.
+
+- **근본 원인 — 완료 플래그 매 틱 리셋** (`MpTimer.recompute`): `recompute()`가 호출될 때마다 `notified=false`로 리셋했는데, `app.ts`는 **모든 store 변경마다 recompute를 호출**한다. MP가 가득 차면 `calculateFullMpTime`이 0 → `completionAt=now`가 되고, 세션 트래커가 매 틱 샘플을 store에 쓰면(store는 디듀프 없음) → recompute → `notified` 리셋 → 250ms 렌더 폴링의 `remainingSeconds`가 즉시 재발화. 무한 반복.
+- **수정**: `notified`를 **`secs > 0`(MP가 full 아래인 진짜 카운트다운)일 때만** 리셋. 가득 찬 동안(secs=0)은 플래그를 유지 → 정확히 **리필 사이클당 1회** 알림(MP가 떨어지면 재무장, 다시 차면 1회 발화). "MP 사용 후에도 계속" 증상도 같이 해소(플래그가 완료 1회를 기억).
+- **X 종료 후에도 지속 — 정체 규명**: X 닫기는 실제로 앱을 종료함(검출 루프는 렌더러와 함께 파괴, 트레이는 BrowserWindow 아니라 window-all-closed→app.quit 정상). "닫아도 계속"은 종료 전까지 반복 발화된 **OS 토스트(Electron 네이티브 Notification)가 Windows 알림센터에 수십~수백 개 적재**돼 남아 보이던 것. 반복 발화를 막으면 해소.
+- **보강** (`notifyComplete`): 완료 토스트를 모듈 스코프 단일 핸들로 재사용 — 발화 시 이전 토스트를 `close()` 후 새로 표시해 알림센터 적재 방지(값이 full 근처에서 진동해도 안전).
+- 회귀망: `test/domain/mp-timer.test.ts`(5종 — 가득참 동안 1회만, 리필당 1회, 충전 중 무발화, blocked 무발화, 카운트다운 완료 1회+재발화 없음). 테스트 40파일 293개 PASS · typecheck PASS.
+
 ## v3.1.2 — 2026-06-13
 
 ### 레벨·아데나 자동 ROI 정밀화 — 실기 프레임 기반 수정 (`roi-detector.ts`)
