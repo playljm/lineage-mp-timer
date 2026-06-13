@@ -1,10 +1,28 @@
 /**
- * MP fill countdown controller. Computes the full-charge ETA from the live MP
- * config (via the pure engine) and counts down to a fixed completion timestamp,
- * so OCR/manual updates to `curMp` re-anchor the countdown cleanly. Fires
- * onComplete once when the bar reaches full while running.
+ * MP fill countdown controller — driven by a deterministic TICK MODEL.
+ *
+ * Lineage MP recovers in fixed discrete ticks (e.g. +N MP every 16/32/64s), so the
+ * countdown must NOT be re-derived from every noisy per-frame OCR/bar reading. The
+ * detector re-accepts a value ~every second and the bar-pixel measurement jitters
+ * ±a few MP; anchoring `completion = now + ETA` on each of those made the visible
+ * countdown bounce ("1초 줄었다 다시 늘고") and only net-progress when MP actually
+ * ticked up. v3.1.7's exact-ETA guard didn't help because jitter crosses the 16s
+ * tick buckets the ETA is quantised to.
+ *
+ * Instead we anchor once at (anchorMp, anchorAt) with the live recovery/tick rate
+ * and PREDICT MP forward as `anchorMp + floor(elapsed/interval)*recovery`. The
+ * completion timestamp is then fixed, so the countdown decreases a smooth 1s/s. A
+ * reading only re-anchors when it deviates from the prediction by more than one tick
+ * (a genuine event: MP used → drop, potion → jump). Clean forward ticks phase-lock
+ * the anchor so the displayed MP matches the game's real tick cadence while keeping
+ * the countdown monotone. Fires onComplete once when the bar reaches full.
  */
-import { calculateFullMpTime, type MpConfig } from '@core/domain/mp-engine'
+import {
+  calculateFullMpTime,
+  calculateTickRecovery,
+  calculateTickInterval,
+  type MpConfig
+} from '@core/domain/mp-engine'
 import type { MpConfigState } from '@core/domain/storage-schema'
 
 export function toMpConfig(s: MpConfigState): MpConfig {
@@ -20,57 +38,127 @@ export function toMpConfig(s: MpConfigState): MpConfig {
 }
 
 export class MpTimer {
+  /** Absolute ms timestamp the bar is predicted to reach full; null = no countdown. */
   private completionAt: number | null = null
-  /** ETA (seconds) the current `completionAt` was anchored to — used to avoid
-   *  re-anchoring (and thus resetting the visible countdown) when nothing changed. */
-  private anchorSecs: number | null = null
+  // ── tick-model anchor: predicted MP = anchorMp + floor((t-anchorAt)/intervalMs)*recovery ──
+  private anchorMp: number | null = null
+  private anchorAt: number | null = null
+  private anchorMax = 0
+  private anchorRecovery = 0 // MP gained per tick at the anchor's config
+  private anchorIntervalMs = 0 // ms per tick at the anchor's config
   private notified = false
   running = false
   onComplete: (() => void) | null = null
 
   start(cfg: MpConfigState, nowMs: number): void {
     this.running = true
-    // Suppress an immediate "완충" alert when starting already-full: the alert is
-    // for RECOVERING to full, not for being full at start (the user pressed start
-    // with a full bar — nothing recovered). It re-arms once MP is actually used.
+    // Suppress an immediate "완충" alert when starting already-full: the alert is for
+    // RECOVERING to full, not for being full at start. It re-arms once MP is used.
     this.notified = cfg.curMp >= cfg.maxMp
-    this.anchorSecs = null // force a fresh anchor on start
-    this.recompute(cfg, nowMs)
+    this.anchorTo(cfg, nowMs)
   }
 
   pause(): void {
     this.running = false
     this.completionAt = null
-    this.anchorSecs = null
+    this.anchorMp = null
+    this.anchorAt = null
   }
 
-  /** Re-anchor the completion time when the config or current MP changes. */
+  /** (Re)seat the tick model on the current reading and rebuild the completion time. */
+  private anchorTo(cfg: MpConfigState, nowMs: number): void {
+    const m = toMpConfig(cfg)
+    this.anchorMp = Math.max(0, Math.min(cfg.curMp, cfg.maxMp))
+    this.anchorAt = nowMs
+    this.anchorMax = cfg.maxMp
+    this.anchorRecovery = calculateTickRecovery(m)
+    this.anchorIntervalMs = calculateTickInterval(cfg.state) * 1000
+    const secs = calculateFullMpTime(this.anchorMp, cfg.maxMp, m)
+    this.completionAt = Number.isFinite(secs) ? nowMs + secs * 1000 : null
+  }
+
+  /** Tick-model predicted MP at `nowMs` (the in-between value the game actually shows). */
+  private predictedMp(cfg: MpConfigState, nowMs: number): number {
+    if (this.anchorMp == null || this.anchorAt == null) {
+      return Math.max(0, Math.min(cfg.curMp, cfg.maxMp))
+    }
+    if (this.anchorRecovery <= 0 || this.anchorIntervalMs <= 0) return this.anchorMp
+    const elapsed = nowMs - this.anchorAt
+    if (elapsed <= 0) return this.anchorMp
+    const ticks = Math.floor(elapsed / this.anchorIntervalMs)
+    return Math.min(this.anchorMax, this.anchorMp + ticks * this.anchorRecovery)
+  }
+
+  /**
+   * MP to DISPLAY: the smooth tick-model prediction while running (matches the game's
+   * discrete recovery and ignores per-frame OCR jitter), else the raw measured value.
+   */
+  displayMp(cfg: MpConfigState, nowMs: number): number {
+    if (this.running && this.anchorMp != null && this.anchorAt != null) {
+      return Math.round(this.predictedMp(cfg, nowMs))
+    }
+    return Math.max(0, Math.min(cfg.curMp, cfg.maxMp))
+  }
+
+  /**
+   * Reconcile a (possibly noisy) measured MP with the tick model. Re-anchors only on a
+   * genuine deviation; otherwise holds the smooth countdown. app.ts calls this on every
+   * store write — the deadband is what keeps the countdown from bouncing.
+   */
   recompute(cfg: MpConfigState, nowMs: number): void {
     if (!this.running) {
       this.completionAt = null
-      this.anchorSecs = null
+      this.anchorMp = null
+      this.anchorAt = null
       return
     }
-    const secs = calculateFullMpTime(cfg.curMp, cfg.maxMp, toMpConfig(cfg))
-    // Re-arm the completion alert ONLY when MP has dropped MEANINGFULLY below full —
-    // i.e. the user actually used MP. A bare `secs > 0` test re-armed on a single-unit
-    // bar-measurement flicker near full (327→326→327, where 326 is one recovery tick
-    // away): each flicker re-armed and the next 327 re-fired "완충" forever. Requiring
-    // a margin beyond pixel jitter means exactly one alert per real refill cycle, and
-    // — with start() suppressing the at-full case — no spam while resting at full MP.
+
+    // Re-arm the completion alert only when MP dropped MEANINGFULLY below full (a real
+    // use), not on a single-unit bar flicker near full — exactly one alert per refill.
     const rearmMargin = Math.max(2, Math.ceil(cfg.maxMp * 0.02))
     if (cfg.curMp <= cfg.maxMp - rearmMargin) this.notified = false
 
-    // Only RE-ANCHOR the countdown when the ETA actually changes. app.ts calls
-    // recompute() on EVERY store write (the detector re-accepts the same MP every
-    // ~1s, plus EXP/adena samples), so anchoring to `now + secs` each time pinned the
-    // visible remaining at the full ETA — it ticked down for ~1s then jumped back,
-    // only making net progress when MP actually rose a tick. Keeping the existing
-    // `completionAt` while the ETA is unchanged lets the countdown decrease smoothly;
-    // a genuine MP change (new ETA) re-anchors to the new value.
-    if (this.completionAt != null && this.anchorSecs === secs) return
-    this.anchorSecs = secs
-    this.completionAt = Number.isFinite(secs) ? nowMs + secs * 1000 : null
+    // First reading, or the recovery rate / tick interval / max changed (buff, state,
+    // location, WIS) → reseat the model.
+    const recovery = calculateTickRecovery(toMpConfig(cfg))
+    const intervalMs = calculateTickInterval(cfg.state) * 1000
+    if (
+      this.anchorMp == null ||
+      this.anchorAt == null ||
+      recovery !== this.anchorRecovery ||
+      intervalMs !== this.anchorIntervalMs ||
+      cfg.maxMp !== this.anchorMax
+    ) {
+      this.anchorTo(cfg, nowMs)
+      return
+    }
+
+    const predicted = this.predictedMp(cfg, nowMs)
+    const delta = cfg.curMp - predicted
+    // One tick of slack absorbs bar/OCR jitter AND the unknown real-tick phase (our
+    // anchor's tick boundary can be up to one interval off the game's).
+    const tol = Math.max(2, recovery)
+
+    if (delta > tol || delta < -tol) {
+      // Genuine event: MP jumped (potion / resync) or dropped (skill cast) → re-anchor.
+      this.anchorTo(cfg, nowMs)
+      return
+    }
+
+    // Within tolerance: the reading confirms the model. Phase-lock ONLY on a clean
+    // forward tick advance (filters downward noise) so the displayed MP tracks the
+    // game's real tick, and pull the completion EARLIER if the advance proves we were
+    // lagging — never later (that would re-introduce the bounce).
+    if (cfg.curMp >= this.anchorMp + recovery) {
+      const secs = calculateFullMpTime(cfg.curMp, cfg.maxMp, toMpConfig(cfg))
+      const newCompletion = Number.isFinite(secs) ? nowMs + secs * 1000 : null
+      this.anchorMp = Math.max(0, Math.min(cfg.curMp, cfg.maxMp))
+      this.anchorAt = nowMs
+      if (newCompletion != null && (this.completionAt == null || newCompletion <= this.completionAt)) {
+        this.completionAt = newCompletion
+      }
+    }
+    // else: sub-tick jitter — hold the model so the countdown stays smooth.
   }
 
   /** Seconds remaining; static ETA when paused. Fires onComplete on first zero. */

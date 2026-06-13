@@ -30,6 +30,12 @@ function cfg(curMp: number, maxMp = 327): MpConfigState {
   }
 }
 
+/** Buffed config → recovery 12/tick (base 2 + potion 5 + meditation 5), interval 16s,
+ *  so a realistic per-tick gain gives a ±jitter band wide enough to test sub-tick noise. */
+function cfgBuffed(curMp: number, maxMp = 327): MpConfigState {
+  return { ...cfg(curMp, maxMp), useBluePotion: true, useMeditation: true }
+}
+
 describe('MpTimer completion alert', () => {
   it('does NOT alert when starting already-full (no recovery happened)', () => {
     const t = new MpTimer()
@@ -176,5 +182,89 @@ describe('MpTimer completion alert', () => {
       t.remainingSeconds(cfg(327), t1 + i * 250)
     }
     expect(fires).toBe(1)
+  })
+})
+
+/**
+ * Tick-model regression (v3.1.8). The countdown is driven by a deterministic recovery
+ * model (anchorMp + floor(elapsed/interval)*recovery), not by every noisy per-frame
+ * reading — the root cause of "1초 줄었다 다시 늘고" was re-anchoring on bar/OCR jitter.
+ * The displayed MP follows the same model so it shows the game's discrete ticks
+ * instead of measurement noise.
+ */
+describe('MpTimer tick model', () => {
+  it('displayMp advances by exactly one recovery tick per interval', () => {
+    const t = new MpTimer()
+    const t0 = 7_000_000
+    const c = cfg(100) // recovery 2/tick, 16s interval
+    t.start(c, t0)
+    expect(t.displayMp(c, t0)).toBe(100)
+    expect(t.displayMp(c, t0 + 16_000 - 1)).toBe(100) // just before the first tick
+    expect(t.displayMp(c, t0 + 16_000)).toBe(102) // tick 1
+    expect(t.displayMp(c, t0 + 32_000)).toBe(104) // tick 2
+  })
+
+  it('displayMp caps at maxMp (never predicts beyond full)', () => {
+    const t = new MpTimer()
+    const t0 = 7_050_000
+    const c = cfgBuffed(320) // recovery 12 → would overshoot in 1 tick
+    t.start(c, t0)
+    expect(t.displayMp(c, t0 + 16_000 * 5)).toBe(327)
+  })
+
+  it('countdown stays smooth (monotone ~1s/s) through sub-tick OCR jitter', () => {
+    const t = new MpTimer()
+    const t0 = 7_100_000
+    const c = cfgBuffed(140) // recovery 12 → ±3 jitter is well within one tick
+    t.start(c, t0)
+    const r0 = t.remainingSeconds(c, t0)
+    expect(r0).toBeGreaterThan(20)
+    const jitter = [0, 3, -3, 2, -2, 1, -1, 3, -3, 0]
+    let prev = r0
+    for (let i = 1; i <= 10; i++) {
+      const now = t0 + i * 1000
+      const noisy = cfgBuffed(140 + jitter[i - 1]!)
+      t.recompute(noisy, now) // sub-tick noise must NOT re-anchor
+      const r = t.remainingSeconds(noisy, now)
+      expect(r).toBeLessThanOrEqual(prev) // never bounces back up
+      expect(Math.abs(r - (r0 - i))).toBeLessThan(0.5) // ~1s per second
+      prev = r
+    }
+  })
+
+  it('re-anchors (countdown jumps UP) when MP is actually used — drop beyond one tick', () => {
+    const t = new MpTimer()
+    const t0 = 7_200_000
+    const near = cfgBuffed(300)
+    t.start(near, t0)
+    const before = t.remainingSeconds(near, t0)
+    const drained = cfgBuffed(100) // −200 ≫ one tick → genuine use
+    t.recompute(drained, t0 + 1000)
+    const after = t.remainingSeconds(drained, t0 + 1000)
+    expect(after).toBeGreaterThan(before)
+  })
+
+  it('re-anchors (countdown jumps DOWN) on a potion jump — rise beyond one tick', () => {
+    const t = new MpTimer()
+    const t0 = 7_300_000
+    const low = cfgBuffed(100)
+    t.start(low, t0)
+    const before = t.remainingSeconds(low, t0)
+    const potioned = cfgBuffed(250) // +150 ≫ one tick → genuine jump
+    t.recompute(potioned, t0 + 1000)
+    const after = t.remainingSeconds(potioned, t0 + 1000)
+    expect(after).toBeLessThan(before)
+  })
+
+  it('re-anchors when the recovery rate changes (buff toggled mid-charge)', () => {
+    const t = new MpTimer()
+    const t0 = 7_400_000
+    const slow = cfg(100) // recovery 2
+    t.start(slow, t0)
+    const before = t.remainingSeconds(slow, t0)
+    const fast = cfgBuffed(100) // same MP, recovery 12 → much shorter ETA
+    t.recompute(fast, t0 + 500)
+    const after = t.remainingSeconds(fast, t0 + 500)
+    expect(after).toBeLessThan(before)
   })
 })
