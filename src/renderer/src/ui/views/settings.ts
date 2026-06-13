@@ -436,7 +436,7 @@ export function createSettingsView(ctx: ViewContext): View {
 
   const infoCard = h('section', { class: 'card' },
     h('div', { class: 'card__title' }, '정보'),
-    h('div', { class: 'stat-chip__value' }, 'Lineage MP Timer v3.1.10'),
+    h('div', { class: 'stat-chip__value' }, 'Lineage MP Timer v3.1.11'),
     h('p', { class: 'stat-chip__label' }, 'prefers-reduced-motion 설정을 존중합니다.'),
     h('div', { class: 'row' }, devtoolsBtn)
   )
