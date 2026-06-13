@@ -180,7 +180,11 @@ function report(tag: string, img: RgbaImage): ReturnType<typeof calibrateBarChec
   console.log(
     `[${tag}] detectFillColor(전체 ROI) = ${fmt(fillFull)}${fillFull ? ` (채도 ${sat(fillFull).toFixed(3)}, blueDominant=${isBlueDominant(fillFull)})` : ''}`
   )
-  const res = calibrateBarChecked(img)
+  // This suite validates the saturation/blue-dominance COLOUR gate (v3.1.1). Pin the
+  // pre-v3.1.6 column-density (0.3) so the unrelated density default change (raised to
+  // 0.5 for thin real gauges) doesn't reject these artificial full-height 24px ROIs
+  // (their gold-trim + text rows drop column density below 0.5).
+  const res = calibrateBarChecked(img, { minColumnDensity: 0.3 })
   if (res.ok) {
     console.log(
       `[${tag}] calibrateBarChecked → 성공: fullColumns=${res.calibration.fullColumns}, fillColor=${fmt(res.fillColor)}, band=${res.rowBand.y0}..${res.rowBand.y1}, selfRatio=${res.selfRatio.toFixed(3)}`

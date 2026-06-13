@@ -58,7 +58,16 @@ export interface BarFillOptions {
   emptyColor?: Rgb
   /** Max RGB euclidean distance to count a pixel as "fill". Default 70. */
   colorTolerance?: number
-  /** Fraction of a column's rows that must be fill for the column to count. Default 0.3. */
+  /**
+   * Fraction of a column's rows that must be fill for the column to count. Default 0.5.
+   *
+   * v3.1.6: raised 0.3 → 0.5. On a thin gauge band (the Lineage MP gauge's
+   * blue-dominant rows are only ~7px, and calibration shrinks the ROI to that band),
+   * 0.3 made `need = floor(6*0.3) = 1`, so a single bright sheen/highlight pixel in
+   * an EMPTY column counted the whole column as filled → the bar read full forever
+   * even as MP drained (field: MP 260/327 read as 327/327). Requiring a majority of
+   * rows ignores the 1-2px top sheen; a genuinely filled column has all rows fill.
+   */
   minColumnDensity?: number
   /**
    * Restrict measurement to this row band [y0, y1) of the image — the gauge strip
@@ -306,7 +315,7 @@ export function computeBarFill(img: RgbaImage, opts: BarFillOptions = {}): BarFi
   }
   const { width, height, data } = img
   const tolerance = opts.colorTolerance ?? 70
-  const minDensity = opts.minColumnDensity ?? 0.3
+  const minDensity = opts.minColumnDensity ?? 0.5
   const refColor = opts.refColor ?? detectFillColor(img)
 
   if (!refColor || width === 0 || height === 0) {
