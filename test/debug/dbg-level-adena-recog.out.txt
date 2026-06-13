@@ -1,0 +1,50 @@
+
+[1m[46m RUN [49m[22m [36mv3.2.6 [39m[90mC:/dev/lineage-mp-timer[39m
+
+[90mstdout[2m | test/debug/dbg-level-adena-recog.test.ts[2m > [22m[2mDBG level/adena recognition with correct ROI (fixtures in directly)[2m > [22m[2mlevel: 2-digit box
+[22m[39m
+========== LEVEL (42 fixtures, sampling 8) ==========
+  label=28       raw="28"           value={"kind":"level","level":28}        conf=0.70 src=base-template  ✓
+  label=28       raw="28"           value={"kind":"level","level":28}        conf=0.70 src=base-template  ✓
+  label=28       raw="28"           value={"kind":"level","level":28}        conf=0.70 src=base-template  ✓
+  label=28       raw="28"           value={"kind":"level","level":28}        conf=0.70 src=base-template  ✓
+  label=28       raw="28"           value={"kind":"level","level":28}        conf=0.70 src=base-template  ✓
+  label=28       raw="28"           value={"kind":"level","level":28}        conf=0.70 src=base-template  ✓
+  label=28       raw="28"           value={"kind":"level","level":28}        conf=0.70 src=base-template  ✓
+  label=28       raw="28"           value={"kind":"level","level":28}        conf=0.70 src=base-template  ✓
+  --> exact-raw accuracy 100% (8/8); empty-raw (total miss) 0/8
+
+[90mstdout[2m | test/debug/dbg-level-adena-recog.test.ts[2m > [22m[2mDBG level/adena recognition with correct ROI (fixtures in directly)[2m > [22m[2madena: comma / long digit string
+[22m[39m
+========== ADENA (81 fixtures, sampling 8) ==========
+  label=126      raw="56126"        value={"kind":"adena","amount":56126}    conf=0.75 src=base-template  ✗
+  label=23928    raw="23928"        value={"kind":"adena","amount":23928}    conf=0.76 src=base-template  ✓
+  label=24400    raw="24400"        value={"kind":"adena","amount":24400}    conf=0.82 src=base-template  ✓
+  label=25250    raw="25250"        value={"kind":"adena","amount":25250}    conf=0.81 src=base-template  ✓
+  label=28702    raw="20702"        value={"kind":"adena","amount":20702}    conf=0.77 src=base-template  ✗
+  label=31162    raw="31162"        value={"kind":"adena","amount":31162}    conf=0.80 src=base-template  ✓
+  label=32632    raw="32632"        value={"kind":"adena","amount":32632}    conf=0.78 src=base-template  ✓
+  label=33500    raw="73500"        value={"kind":"adena","amount":73500}    conf=0.80 src=base-template  ✗
+  --> exact-raw accuracy 63% (5/8); empty-raw (total miss) 0/8
+
+[90mstdout[2m | test/debug/dbg-level-adena-recog.test.ts[2m > [22m[2mDBG level/adena recognition with correct ROI (fixtures in directly)[2m > [22m[2mexp: control (known-good in the field)
+[22m[39m
+========== EXP (110 fixtures, sampling 8) ==========
+  label=24.4898  raw="24.4696"      value={"kind":"exp","pct":24.4696}       conf=0.90 src=base-template  ✗
+  label=27.0710  raw="27.0710"      value={"kind":"exp","pct":27.071}        conf=0.94 src=base-template  ✓
+  label=27.0725  raw="27.0725"      value={"kind":"exp","pct":27.0725}       conf=0.93 src=base-template  ✓
+  label=30.4015  raw="30.4015"      value={"kind":"exp","pct":30.4015}       conf=0.94 src=base-template  ✓
+  label=30.5451  raw="30.5451"      value={"kind":"exp","pct":30.5451}       conf=0.92 src=base-template  ✓
+  label=30.6936  raw="30.6936"      value={"kind":"exp","pct":30.6936}       conf=0.94 src=base-template  ✓
+  label=30.9023  raw="30.9023"      value={"kind":"exp","pct":30.9023}       conf=0.92 src=base-template  ✓
+  label=31.0331  raw="31.0331"      value={"kind":"exp","pct":31.0331}       conf=0.93 src=base-template  ✓
+  --> exact-raw accuracy 88% (7/8); empty-raw (total miss) 0/8
+
+ [32m✓[39m test/debug/dbg-level-adena-recog.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 751[2mms[22m[39m
+   [33m[2m✓[22m[39m DBG level/adena recognition with correct ROI (fixtures in directly)[2m > [22mexp: control (known-good in the field) [33m 392[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m3 passed[39m[22m[90m (3)[39m
+[2m   Start at [22m 14:26:59
+[2m   Duration [22m 1.16s[2m (transform 74ms, setup 0ms, collect 101ms, tests 751ms, environment 0ms, prepare 96ms)[22m
+
