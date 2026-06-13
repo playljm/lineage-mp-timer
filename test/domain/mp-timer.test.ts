@@ -111,6 +111,38 @@ describe('MpTimer completion alert', () => {
     expect(fires).toBe(0)
   })
 
+  it('counts down smoothly while MP is stable — recompute each tick must not reset it', () => {
+    const t = new MpTimer()
+    const t0 = 6_000_000
+    const stable = cfg(140) // below full → a real countdown
+    t.start(stable, t0)
+    const r0 = t.remainingSeconds(stable, t0)
+    expect(r0).toBeGreaterThan(10)
+    // Simulate app.ts: a store write (recompute) every ~1s with the SAME MP, plus the
+    // render poll (remainingSeconds). The remaining must keep DECREASING ~1s/s, not
+    // reset to r0 on each recompute.
+    let prev = r0
+    for (let i = 1; i <= 8; i++) {
+      const now = t0 + i * 1000
+      t.recompute(stable, now) // same MP re-accepted — must not re-anchor
+      const r = t.remainingSeconds(stable, now)
+      expect(r).toBeLessThan(prev) // strictly decreasing
+      expect(Math.abs(r - (r0 - i))).toBeLessThan(0.05) // ~1s per second
+      prev = r
+    }
+  })
+
+  it('re-anchors when MP actually changes (ETA jumps to the new value)', () => {
+    const t = new MpTimer()
+    const t0 = 6_500_000
+    t.start(cfg(140), t0)
+    const at140 = t.remainingSeconds(cfg(140), t0 + 5000)
+    // MP rises a tick → ETA shorter → countdown drops to the new (smaller) value.
+    t.recompute(cfg(160), t0 + 6000)
+    const at160 = t.remainingSeconds(cfg(160), t0 + 6000)
+    expect(at160).toBeLessThan(at140)
+  })
+
   it('never fires when recovery is blocked (ETA infinite)', () => {
     const t = new MpTimer()
     let fires = 0
