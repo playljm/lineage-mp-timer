@@ -144,6 +144,24 @@ const MIN_BAND_HEIGHT = 2
  * (blocked by the luma gate).
  */
 const FILL_SATURATION_GATE = 0.12
+/**
+ * Per-pixel blue-dominance margin for the fill classifier in {@link computeBarFill}.
+ *
+ * v3.1.10: the Lineage MP gauge is rendered as bright-highlighted, dark-divided
+ * SEGMENTS — a column's pixels span the average fill blue rgb(121,124,150) PLUS bright
+ * highlights rgb(200,206,255) and near-black dividers rgb(16,26,41). All three are far
+ * (>70) from the calibrated average colour, so the distance gate alone counted only
+ * ~60% of a filled column's pixels. That still resolved the front at high MP, but at
+ * low MP the white "cur/max" text overlay punched additional holes right where the
+ * fill front sits, dropping local density below the boundary threshold so the scan
+ * truncated BEFORE the text (field: actual 30→17, 50→31; high MP 263→257 was fine).
+ * Every genuine gauge pixel (main/highlight/divider) is blue-dominant while the gray
+ * empty track and the white text are NOT, so classifying a blue fill by blue-dominance
+ * (instead of distance to the average colour) gives a clean, sharp front at every MP
+ * level. Matches {@link BAND_PIXEL_VOTE_MARGIN} (8) and is small enough to admit the
+ * dark divider rgb(16,26,41) (b 41 > max 26 + 8) while still rejecting track/white text.
+ */
+const GAUGE_PIXEL_BLUE_MARGIN = 8
 
 /** Row band [y0, y1) within a bar ROI. */
 export interface RowBand {
@@ -325,6 +343,9 @@ export function computeBarFill(img: RgbaImage, opts: BarFillOptions = {}): BarFi
   const emptyColor = opts.emptyColor ?? detectEmptyColor(img, refColor)
   const tol2 = tolerance * tolerance
   const need = Math.max(1, Math.floor(height * minDensity))
+  // The Lineage MP gauge is always blue; classify those by blue-dominance (clean across
+  // the segmented texture + cur/max text). Non-blue fills keep the legacy distance path.
+  const refIsBlue = isBlueDominant(refColor)
 
   // 1) Classify each column as fill / not-fill. With an empty-track reference we use
   //    relative distance (closer to fill than to track) so a similar-coloured track
@@ -337,13 +358,25 @@ export function computeBarFill(img: RgbaImage, opts: BarFillOptions = {}): BarFi
       const r = data[p]!
       const g = data[p + 1]!
       const b = data[p + 2]!
-      const dFill = dist2(refColor, r, g, b)
       let isFill: boolean
-      if (emptyColor) {
+      if (refIsBlue) {
+        // Blue MP gauge: classify by BLUE-DOMINANCE, not distance-to-average. The gauge
+        // is rendered as segments — average fill rgb(121,124,150) + bright highlights
+        // rgb(200,206,255) + near-black dividers rgb(16,26,41); the distance gate (≤70
+        // from the average) dropped the highlights/dividers AND falsely accepted noisy
+        // mid-tones in the empty track/anti-aliased "cur/max" text, so the boundary both
+        // under-read (low MP, text holes) and over-read (track noise). Every genuine
+        // gauge pixel is blue-dominant while the gray track and white text are not, which
+        // gives a clean, sharp fill front at every MP level. (See GAUGE_PIXEL_BLUE_MARGIN.)
+        isFill = b > Math.max(r, g) + GAUGE_PIXEL_BLUE_MARGIN
+      } else if (emptyColor) {
+        // Non-blue fill (legacy/other gauges): relative classification defeats a
+        // similar-coloured track (the v3.0.1 saturation defence).
+        const dFill = dist2(refColor, r, g, b)
         const dEmpty = dist2(emptyColor, r, g, b)
         isFill = dFill < dEmpty && dFill <= tol2
       } else {
-        isFill = dFill <= tol2
+        isFill = dist2(refColor, r, g, b) <= tol2
       }
       if (isFill) cnt++
     }
