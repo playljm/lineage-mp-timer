@@ -1,6 +1,6 @@
 {
   "name": "lineage-mp-timer",
-  "version": "3.1.6",
+  "version": "3.1.7",
   "description": "리니지 클래식 MP 자연회복 완충 타이머 + EXP/아데나 트래커 (TS/Vite 리뉴얼, 바-픽셀 + 유저 디지트 템플릿 OCR)",
   "type": "module",
   "main": "out/main/index.js",

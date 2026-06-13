@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.1.7 — 2026-06-13
+
+### 완충 카운트다운이 매 틱 리셋되던 문제 수정 (`mp-timer.ts`)
+
+실사용: 카운트다운이 1초씩 줄지 않고 "1 줄었다 다시 늘었다" 반복하다가 MP가 한 틱 차야 진행. 원인: `app.ts`가 **모든 store 변경마다 `timer.recompute()`를 호출**하는데, recompute가 매번 `completionAt = now + ETA`로 **재앵커**했음. 검출기가 안정적인 MP를 매 ~1초마다 재수용(+EXP/아데나 샘플 기록)해 store가 계속 바뀌므로, 카운트다운이 250ms 렌더 사이에만 줄다가 재검출 때 ETA로 되돌아가고, MP가 실제로 회복돼 ETA가 줄 때만 순(net) 진행했음.
+
+- **ETA가 실제로 바뀔 때만 재앵커**: `anchorSecs`로 직전 ETA를 기억해, 동일하면 기존 `completionAt`을 유지(매끄럽게 카운트다운) → 실제 MP 변화로 ETA가 달라질 때만 새 값으로 재앵커. start/pause 시 앵커 리셋.
+- 회귀: `test/domain/mp-timer.test.ts`에 2종 추가(안정 MP에서 매 틱 recompute해도 1초/초로 감소·리셋 안 됨, MP 변화 시 새 ETA로 재앵커). 8종 전체 + 테스트 40파일 298개 PASS · typecheck PASS.
+
+> MP 값 자체는 정확히 추적 중(로그: 98→140→161, 회복률 config 19/16s와 일치, 이전 실측 260→261). 큰 변화 시 1~2초 지연은 트래커의 오인식 방어(`low_posterior`)이며 측정 오류가 아님.
+
 ## v3.1.6 — 2026-06-13
 
 ### MP 바 측정 가득참 고착 수정 — 얇은 밴드 컬럼 밀도 (`bar-fill.ts`)
