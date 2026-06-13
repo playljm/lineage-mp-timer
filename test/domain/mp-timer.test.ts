@@ -1,12 +1,15 @@
 /**
- * MpTimer completion-alert regression (v3.1.3).
+ * MpTimer completion-alert regression (v3.1.3 / v3.1.5).
  *
- * Field bug: the "MP 완충" toast fired continuously (every ~250ms) and kept firing
- * after MP was used / after the window was closed. Root cause: recompute() cleared
- * `notified` on EVERY call, and app.ts calls recompute on every store change — while
- * MP is full (ETA 0) the session tracker writes a sample each tick, re-arming the
- * alert so the render loop re-fired it forever. Fix: only re-arm for a genuine
- * countdown (secs > 0), preserving exactly one alert per refill cycle.
+ * v3.1.3: the "MP 완충" toast fired continuously while MP sat at full, because
+ *   recompute() cleared `notified` on every call and app.ts calls it on every store
+ *   change. Fixed by only re-arming for a real countdown.
+ * v3.1.5: two residual field cases —
+ *   (a) pressing Start while ALREADY full fired an immediate (useless) 완충 alert;
+ *   (b) a 1-unit bar-measurement flicker near full (327→326→327) re-armed the alert
+ *       and re-fired it every cycle. Fixed by suppressing the at-full start alert and
+ *       re-arming only when MP drops MEANINGFULLY below full (beyond pixel jitter).
+ * The invariant preserved throughout: exactly one alert per genuine refill cycle.
  */
 import { describe, it, expect } from 'vitest'
 import { MpTimer } from '../../src/renderer/src/timer/mp-timer'
@@ -28,46 +31,69 @@ function cfg(curMp: number, maxMp = 327): MpConfigState {
 }
 
 describe('MpTimer completion alert', () => {
-  it('fires exactly once while MP stays full, even as recompute is hammered each tick', () => {
+  it('does NOT alert when starting already-full (no recovery happened)', () => {
     const t = new MpTimer()
     let fires = 0
     t.onComplete = () => fires++
     const full = cfg(327)
     const t0 = 1_000_000
     t.start(full, t0)
-    // Simulate the per-tick store writes (tracker samples) → recompute, plus the
-    // 250ms render poll → remainingSeconds, for 20 ticks.
+    // Tracker writes (recompute) + 250ms render poll (remainingSeconds), 20 ticks.
     for (let i = 0; i < 20; i++) {
       t.recompute(full, t0 + i * 250)
       t.remainingSeconds(full, t0 + i * 250)
     }
-    expect(fires).toBe(1)
+    expect(fires).toBe(0)
   })
 
-  it('re-arms and fires again after MP is used and refills (one alert per refill)', () => {
+  it('ignores a 1-unit bar flicker near full (327→326→327) — no repeat alert', () => {
+    const t = new MpTimer()
+    let fires = 0
+    t.onComplete = () => fires++
+    const t0 = 1_500_000
+    // Start below full so a genuine recovery fires once.
+    t.start(cfg(300), t0)
+    let now = t0
+    // MP rises to full → one alert.
+    now += 1000
+    t.recompute(cfg(327), now)
+    t.remainingSeconds(cfg(327), now)
+    expect(fires).toBe(1)
+    // Now flicker 327↔326↔327 for many ticks (326 is within the jitter margin).
+    for (let i = 0; i < 30; i++) {
+      now += 250
+      const v = i % 2 === 0 ? 326 : 327
+      t.recompute(cfg(v), now)
+      t.remainingSeconds(cfg(v), now)
+    }
+    expect(fires).toBe(1) // no re-fire from jitter
+  })
+
+  it('re-arms and fires again after MP is actually used and refills', () => {
     const t = new MpTimer()
     let fires = 0
     t.onComplete = () => fires++
     const t0 = 2_000_000
-    t.start(cfg(327), t0)
-    t.remainingSeconds(cfg(327), t0) // full → fire #1
-    expect(fires).toBe(1)
+    t.start(cfg(300), t0)
+    let now = t0 + 1000
+    t.recompute(cfg(327), now)
+    t.remainingSeconds(cfg(327), now)
+    expect(fires).toBe(1) // recovered to full → alert #1
 
-    // MP used → drops below full. Genuine countdown re-arms the alert.
-    const drained = cfg(100)
-    t.recompute(drained, t0 + 1000)
-    // Several ticks while still charging must NOT fire.
-    for (let i = 1; i <= 5; i++) {
-      t.recompute(drained, t0 + 1000 + i * 250)
-      t.remainingSeconds(drained, t0 + 1000 + i * 250)
+    // Real MP use: drops well below full (beyond jitter margin) → re-arms.
+    now += 1000
+    const drained = cfg(120)
+    for (let i = 0; i < 4; i++) {
+      now += 250
+      t.recompute(drained, now)
+      t.remainingSeconds(drained, now)
     }
-    expect(fires).toBe(1)
+    expect(fires).toBe(1) // still charging, no fire
 
-    // Refilled to full → fires once more.
-    const refilled = cfg(327)
-    const t2 = t0 + 100_000
-    t.recompute(refilled, t2)
-    t.remainingSeconds(refilled, t2)
+    // Refilled to full → alert #2.
+    now += 100_000
+    t.recompute(cfg(327), now)
+    t.remainingSeconds(cfg(327), now)
     expect(fires).toBe(2)
   })
 
@@ -104,19 +130,18 @@ describe('MpTimer completion alert', () => {
     let fires = 0
     t.onComplete = () => fires++
     const t0 = 5_000_000
-    const charging = cfg(320) // close to full → short ETA
-    t.start(charging, t0)
-    // Before completion.
-    expect(t.remainingSeconds(charging, t0)).toBeGreaterThan(0)
+    t.start(cfg(300), t0) // below full → armed
+    expect(t.remainingSeconds(cfg(300), t0)).toBeGreaterThan(0)
     expect(fires).toBe(0)
-    // Far past completion — fires once.
-    const late = t0 + 10_000_000
-    t.remainingSeconds(charging, late)
+    // MP reaches full → fires once.
+    const t1 = t0 + 1000
+    t.recompute(cfg(327), t1)
+    t.remainingSeconds(cfg(327), t1)
     expect(fires).toBe(1)
-    // Subsequent ticks (with tracker recomputes) do not re-fire.
+    // Subsequent full-state ticks do not re-fire.
     for (let i = 1; i <= 5; i++) {
-      t.recompute(charging, late + i * 250)
-      t.remainingSeconds(charging, late + i * 250)
+      t.recompute(cfg(327), t1 + i * 250)
+      t.remainingSeconds(cfg(327), t1 + i * 250)
     }
     expect(fires).toBe(1)
   })

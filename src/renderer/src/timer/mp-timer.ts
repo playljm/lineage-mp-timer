@@ -27,6 +27,10 @@ export class MpTimer {
 
   start(cfg: MpConfigState, nowMs: number): void {
     this.running = true
+    // Suppress an immediate "완충" alert when starting already-full: the alert is
+    // for RECOVERING to full, not for being full at start (the user pressed start
+    // with a full bar — nothing recovered). It re-arms once MP is actually used.
+    this.notified = cfg.curMp >= cfg.maxMp
     this.recompute(cfg, nowMs)
   }
 
@@ -43,13 +47,14 @@ export class MpTimer {
     }
     const secs = calculateFullMpTime(cfg.curMp, cfg.maxMp, toMpConfig(cfg))
     this.completionAt = Number.isFinite(secs) ? nowMs + secs * 1000 : null
-    // Re-arm the completion alert ONLY for a genuine countdown (MP below full →
-    // secs > 0). When already full (secs === 0) we must NOT clear `notified`, or
-    // every store write while full (the session tracker ingests a sample each tick,
-    // and the store has no dedup) re-arms it and the 250ms render re-fires the toast
-    // forever. Keeping it set means exactly one alert per refill cycle: it clears
-    // when MP drops (secs > 0) and fires once when it next reaches full.
-    if (secs > 0) this.notified = false
+    // Re-arm the completion alert ONLY when MP has dropped MEANINGFULLY below full —
+    // i.e. the user actually used MP. A bare `secs > 0` test re-armed on a single-unit
+    // bar-measurement flicker near full (327→326→327, where 326 is one recovery tick
+    // away): each flicker re-armed and the next 327 re-fired "완충" forever. Requiring
+    // a margin beyond pixel jitter means exactly one alert per real refill cycle, and
+    // — with start() suppressing the at-full case — no spam while resting at full MP.
+    const rearmMargin = Math.max(2, Math.ceil(cfg.maxMp * 0.02))
+    if (cfg.curMp <= cfg.maxMp - rearmMargin) this.notified = false
   }
 
   /** Seconds remaining; static ETA when paused. Fires onComplete on first zero. */
