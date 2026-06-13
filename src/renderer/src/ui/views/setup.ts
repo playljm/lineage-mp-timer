@@ -26,6 +26,7 @@ import type { DetectionEvent } from '../../ocr/detection'
 import { logger } from '../../util/logger'
 import { parseRegionString, formatParsed } from '@core/ocr/parser'
 import type { ParsedValue } from '@core/ocr/types'
+import { isBlueDominant } from '@core/ocr/bar-fill'
 
 /** The `autoDetect` fields that hold a pickable capture region. */
 type RegionKey = keyof Pick<
@@ -230,19 +231,38 @@ export function createSetupView(ctx: ViewContext): View {
     state: c.state
   })
 
+  // v3.1.1: window.prompt()는 Electron 렌더러에서 지원되지 않아(undefined 반환)
+  // 프리셋 저장이 통째로 죽어 있었다 — 인라인 입력칸으로 교체.
+  const presetNameInput = h('input', {
+    type: 'text',
+    placeholder: '프리셋 이름',
+    'aria-label': '프리셋 이름',
+    style: { flex: '1', minWidth: '120px', maxWidth: '220px' },
+    onkeydown: (e: KeyboardEvent) => {
+      if (e.key === 'Enter') savePreset()
+    }
+  }) as HTMLInputElement
+
   const savePreset = (): void => {
-    const name = window.prompt('프리셋 이름')?.trim()
-    if (!name) return
+    const name = presetNameInput.value.trim()
+    if (!name) {
+      presetNameInput.focus()
+      return
+    }
     const config = presetSubset(app.get().persisted.mpConfig)
     app.store.set((prev) => ({
       persisted: { ...prev.persisted, presets: [...prev.persisted.presets, { name, config }] }
     }))
+    // Raw store.set does not schedule a persistence write — flush like saveRoi/calibrate.
+    app.flush()
+    presetNameInput.value = ''
   }
 
   const presetList = h('div', { class: 'row' })
   const presetCard = h('section', { class: 'card' },
     h('div', { class: 'card__title' }, '프리셋'),
     h('div', { class: 'row' },
+      presetNameInput,
       h('button', { class: 'btn btn--primary btn--sm', onclick: savePreset }, '현재 설정 저장')
     ),
     presetList
@@ -274,6 +294,7 @@ export function createSetupView(ctx: ViewContext): View {
               presets: prev.persisted.presets.filter((_, i) => i !== index)
             }
           }))
+          app.flush()
         }
       }, '✕')
       presetList.appendChild(h('span', { class: 'row' }, apply, remove))
@@ -460,6 +481,23 @@ export function createSetupView(ctx: ViewContext): View {
   const roiOverrideStatus = h('span', { class: 'tick-info' }, '')
   const btnLoadFrame = h('button', { class: 'btn btn--sm btn--primary', onclick: () => void loadRoiFrame() }, '📷 게임 화면 불러오기')
   const btnClearRoi = h('button', { class: 'btn btn--sm btn--ghost', onclick: () => clearRoi() }, '선택 영역 자동으로')
+  // v3.1.1: 네이티브 1:1 스냅샷의 가로 스크롤이 오인 드래그를 유발하던 함정(6/7 실측) —
+  // fit-to-width 줌으로 전체 화면을 한눈에 보고 고른 뒤, 필요하면 100%로 정밀 드래그.
+  let roiScale = 1
+  const btnFitZoom = h('button', { class: 'btn btn--sm', title: '전체 폭에 맞춰 축소 — 화면 전체를 보고 위치를 고르세요', onclick: () => fitToWidth() }, '↔ 맞춤')
+  const btnZoom100 = h('button', { class: 'btn btn--sm', title: '원본 1:1 — 정밀 드래그', onclick: () => setRoiScale(1) }, '100%')
+  // v3.1.1: 저장 직후 크롭 미리보기 — 오인 드래그를 "한참 뒤 보정 실패"가 아니라 즉시 발견.
+  const roiPreview = h('canvas', {
+    style: {
+      display: 'none',
+      height: '32px',
+      imageRendering: 'pixelated',
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius-sm)',
+      verticalAlign: 'middle'
+    }
+  }) as HTMLCanvasElement
+  const roiPreviewHint = h('span', { class: 'tick-info' }, '')
   fRoiRegion.select.value = roiActiveRegion
 
   const roiImg = h('img', { alt: '게임 화면', draggable: false, style: { display: 'block', maxWidth: 'none', userSelect: 'none' } })
@@ -480,9 +518,9 @@ export function createSetupView(ctx: ViewContext): View {
     h('summary', {}, '🎯 영역 직접 지정 (정밀)'),
     h('div', { class: 'stack' },
       h('div', { class: 'tick-info' }, '게임 화면을 불러온 뒤, 항목을 고르고 이미지 위에서 영역을 드래그하세요. 지정한 영역은 자동 검출 대신 그대로 사용됩니다 (숫자에 딱 맞게, %·여백 제외). 이후 「보정·학습」에서 글자를 가르치면 더 정확해집니다.'),
-      h('div', { class: 'row' }, fRoiRegion.root, btnLoadFrame, btnClearRoi),
+      h('div', { class: 'row' }, fRoiRegion.root, btnLoadFrame, btnClearRoi, btnFitZoom, btnZoom100),
       h('div', { class: 'row' }, roiOverrideStatus),
-      h('div', { class: 'row' }, roiStatus),
+      h('div', { class: 'row' }, roiStatus, roiPreview, roiPreviewHint),
       roiViewport
     )
   )
@@ -507,9 +545,11 @@ export function createSetupView(ctx: ViewContext): View {
       return
     }
     roiFrame = { width: frame.width, height: frame.height }
+    hideRoiPreview()
     roiImg.onload = (): void => drawRoiBoxes()
     roiImg.src = frame.dataUrl
-    roiStatus.textContent = `불러옴 (${frame.width}×${frame.height}). 항목 선택 후 드래그하세요`
+    fitToWidth() // 기본은 전체 폭 맞춤 — 가로 스크롤 오인 드래그 함정 차단
+    roiStatus.textContent = `불러옴 (${frame.width}×${frame.height}) · 배율 ${Math.round(roiScale * 100)}% — 항목 선택 후 드래그하세요`
     drawRoiBoxes()
   }
 
@@ -523,6 +563,10 @@ export function createSetupView(ctx: ViewContext): View {
         }
       }
     }))
+    // Raw store.set does NOT schedule a persistence write (only patchPersisted/
+    // ingestSample do) — flush now so an ROI drawn right before closing the app
+    // cannot silently evaporate (same rule as calibrateMpBar/openWindowSource).
+    app.flush()
     detection.forceRoiRefresh()
     drawRoiBoxes()
     updateRoiOverrideStatus()
@@ -530,7 +574,67 @@ export function createSetupView(ctx: ViewContext): View {
 
   function clearRoi(): void {
     saveRoi(roiActiveRegion, null)
+    hideRoiPreview()
     roiStatus.textContent = `${labelForRoi(roiActiveRegion)} 자동 검출로 되돌림`
+  }
+
+  /** Scale the snapshot stage. Coords stay in frame px — only the visual size and
+   *  the scroll extent change (the stage layout box is resized to the scaled size
+   *  because CSS transform does not affect layout/scrollbars). */
+  function setRoiScale(s: number): void {
+    roiScale = s
+    roiStage.style.transform = s === 1 ? '' : `scale(${s})`
+    roiStage.style.transformOrigin = '0 0'
+    if (roiFrame && s !== 1) {
+      roiStage.style.width = `${Math.round(roiFrame.width * s)}px`
+      roiStage.style.height = `${Math.round(roiFrame.height * s)}px`
+    } else {
+      roiStage.style.width = 'max-content'
+      roiStage.style.height = ''
+    }
+    btnFitZoom.classList.toggle('btn--primary', s !== 1)
+    btnZoom100.classList.toggle('btn--primary', s === 1)
+    drawRoiBoxes() // 라벨 역보정 반영
+  }
+
+  function fitToWidth(): void {
+    if (!roiFrame) return
+    const vw = roiViewport.clientWidth
+    setRoiScale(vw > 0 && roiFrame.width > 0 ? Math.min(1, vw / roiFrame.width) : 1)
+  }
+
+  /** 저장된 ROI 의 실제 크롭을 즉시 보여주고, MP 바면 파랑-우세 비율 힌트를 덧붙인다.
+   *  (보조 신호 — 저장을 막지 않으며, 판정 권위는 calibrateBarChecked) */
+  function renderRoiPreview(region: keyof WindowRoiOverrides, box: WindowRoiBox): void {
+    if (!roiImg.naturalWidth || box.width <= 0 || box.height <= 0) return
+    roiPreview.width = box.width
+    roiPreview.height = box.height
+    const cx = roiPreview.getContext('2d')
+    if (!cx) return
+    cx.imageSmoothingEnabled = false
+    cx.drawImage(roiImg, box.x, box.y, box.width, box.height, 0, 0, box.width, box.height)
+    roiPreview.style.display = 'inline-block'
+    roiPreview.style.width = `${Math.min(220, Math.max(24, Math.round((box.width / box.height) * 32)))}px`
+    roiPreviewHint.textContent = ''
+    if (region === 'mpBar') {
+      const d = cx.getImageData(0, 0, box.width, box.height).data
+      let blue = 0
+      const total = box.width * box.height
+      for (let i = 0; i < d.length; i += 4) {
+        if (isBlueDominant({ r: d[i]!, g: d[i + 1]!, b: d[i + 2]! })) blue++
+      }
+      const pct = total ? Math.round((blue / total) * 100) : 0
+      const ok = pct >= 30 // 느슨한 안내용 임계 — 게이지에 금장식·텍스트가 섞여도 본체가 다수
+      roiPreviewHint.textContent = ok
+        ? `파랑 ${pct}% ✓`
+        : `파란 픽셀 ${pct}% — MP 게이지(파란 바)가 맞는지 확인하세요`
+      roiPreviewHint.style.color = ok ? 'var(--color-success)' : 'var(--color-warn)'
+    }
+  }
+
+  function hideRoiPreview(): void {
+    roiPreview.style.display = 'none'
+    roiPreviewHint.textContent = ''
   }
 
   function drawRoiBoxes(): void {
@@ -557,9 +661,10 @@ export function createSetupView(ctx: ViewContext): View {
       }, h('span', {
         style: {
           position: 'absolute',
-          top: '-15px',
+          // 라벨은 frame px 좌표계에 그려져 stage 와 함께 축소되므로 역보정해 가독성 유지
+          top: `${-15 / roiScale}px`,
           left: '0',
-          fontSize: '10px',
+          fontSize: `${10 / roiScale}px`,
           lineHeight: '1',
           color,
           whiteSpace: 'nowrap',
@@ -577,12 +682,16 @@ export function createSetupView(ctx: ViewContext): View {
   let roiRubber: HTMLElement | null = null
 
   function roiImgPoint(e: MouseEvent): { x: number; y: number } {
+    // getBoundingClientRect 는 transform(줌)이 반영된 시각 크기 — rect 에서 역산하면
+    // 줌 배율과 무관하게 frame px 로 변환된다 (1:1 에서는 기존과 동일).
     const r = roiImg.getBoundingClientRect()
     const fw = roiFrame?.width ?? r.width
     const fh = roiFrame?.height ?? r.height
+    const sx = r.width > 0 && fw > 0 ? r.width / fw : 1
+    const sy = r.height > 0 && fh > 0 ? r.height / fh : 1
     return {
-      x: Math.round(Math.max(0, Math.min(fw, e.clientX - r.left))),
-      y: Math.round(Math.max(0, Math.min(fh, e.clientY - r.top)))
+      x: Math.round(Math.max(0, Math.min(fw, (e.clientX - r.left) / sx))),
+      y: Math.round(Math.max(0, Math.min(fh, (e.clientY - r.top) / sy)))
     }
   }
 
@@ -633,11 +742,23 @@ export function createSetupView(ctx: ViewContext): View {
     if (w >= 4 && hgt >= 4) {
       saveRoi(roiActiveRegion, { x, y, width: w, height: hgt })
       roiStatus.textContent = `${labelForRoi(roiActiveRegion)} 지정됨: ${w}×${hgt} @ (${x}, ${y})`
+      renderRoiPreview(roiActiveRegion, { x, y, width: w, height: hgt })
+    } else if (w > 0 || hgt > 0) {
+      // 단순 클릭(0×0)은 침묵 — 의도가 있던 작은 드래그만 피드백
+      roiStatus.textContent = '선택이 너무 작습니다 (4×4px 이상) — 다시 드래그하세요'
     }
+  }
+  const onRoiKey = (e: KeyboardEvent): void => {
+    if (e.key !== 'Escape' || !roiDrawing) return
+    roiDrawing = false
+    roiRubber?.remove()
+    roiRubber = null
+    roiStatus.textContent = '드래그 취소됨'
   }
   roiStage.addEventListener('mousedown', onRoiDown)
   window.addEventListener('mousemove', onRoiMove)
   window.addEventListener('mouseup', onRoiUp)
+  window.addEventListener('keydown', onRoiKey)
 
   const tUseMpBar = toggleField('MP 바 픽셀 모드', (on) => {
     app.store.set((prev) => ({
@@ -910,7 +1031,23 @@ export function createSetupView(ctx: ViewContext): View {
   // 보정 · 학습 (MP bar calibration + per-region manual entry that teaches the font)
   // -------------------------------------------------------------------------
   const calibStatus = h('span', { class: 'tick-info' }, '')
+  /** v3.1.1: 보정 결과 reason 별 "다음 행동" 버튼/안내 컨테이너 (매 보정마다 clear). */
+  const calibAction = h('div', { class: 'row' })
   const calibBtn = h('button', { class: 'btn btn--sm', onclick: doCalibrate }, '📊 MP 바 100% 보정')
+
+  /** 보정 실패 시 원클릭으로 MP 바 영역 재지정 흐름으로 이동. */
+  function goToMpBarRoi(): void {
+    if (app.get().persisted.autoDetect.captureMode === 'window') {
+      ;(roiEditor as HTMLDetailsElement).open = true
+      roiActiveRegion = 'mpBar'
+      fRoiRegion.select.value = 'mpBar'
+      drawRoiBoxes()
+      void loadRoiFrame()
+      roiEditor.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    } else {
+      void actions.pickRegion('mpBar').catch((err) => console.error('[setup.pickRegion]', err))
+    }
+  }
 
   function rgbLabel(c: { r: number; g: number; b: number }): string {
     return `rgb(${Math.round(c.r)},${Math.round(c.g)},${Math.round(c.b)})`
@@ -936,12 +1073,25 @@ export function createSetupView(ctx: ViewContext): View {
 
   async function doCalibrate(): Promise<void> {
     calibStatus.textContent = '보정 중…'
+    clear(calibAction)
     const res = await detection.calibrateMpBar()
     calibStatus.textContent = ''
     if (res.ok) {
       calibStatus.append(`보정 완료 (${res.fullColumns} cols`)
       if (res.fillColor) calibStatus.append(', ', colorSwatch(res.fillColor), ` ${rgbLabel(res.fillColor)}`)
       calibStatus.append(')')
+      // 자기검증(같은 ROI 재측정, 기대 0.95~1.0) 결과를 사용자에게 노출 — 비정상이면
+      // 영역 과대(밴드 희석) 가능성이 크므로 재지정을 권고 (로그에만 있던 ⚠ 의 표면화).
+      if (res.selfOk === false) {
+        calibStatus.append(
+          ' ',
+          h('span', { style: { color: 'var(--color-warn)' } },
+            `⚠ 자기검증 ${Math.round((res.selfRatio ?? 0) * 100)}% — 영역이 게이지보다 큰지 확인 후 재보정 권장`)
+        )
+        calibAction.append(h('button', { class: 'btn btn--sm', onclick: () => goToMpBarRoi() }, '🎯 MP 바 영역 다시 지정'))
+      } else if (res.selfRatio != null) {
+        calibStatus.append(` · 자기검증 ${Math.round(res.selfRatio * 100)}% ✓`)
+      }
       // A valid calibration now exists — drop a stale '보정 필요' hint immediately
       // (the loop may be stopped, so no fresh detection event will clear it).
       if (lastReason['mp'] === 'calibration_required') {
@@ -951,6 +1101,25 @@ export function createSetupView(ctx: ViewContext): View {
     } else {
       calibStatus.append(`실패: ${res.note ?? ''}`)
       if (res.fillColor) calibStatus.append(' ', colorSwatch(res.fillColor))
+      switch (res.reason) {
+        case 'not_blue':
+        case 'no_fill_color':
+        case 'empty_roi':
+        case 'no_region':
+          calibAction.append(
+            h('button', { class: 'btn btn--sm btn--primary', onclick: () => goToMpBarRoi() }, '🎯 MP 바 영역 다시 지정'),
+            h('span', { class: 'tick-info' }, '지정한 영역이 게이지가 아닌 다른 UI를 보고 있을 가능성이 큽니다')
+          )
+          break
+        case 'not_full':
+          calibAction.append(
+            h('span', { class: 'tick-info' }, '물약·휴식으로 MP를 100% 채운 뒤 다시 누르세요'),
+            h('button', { class: 'btn btn--sm', onclick: () => void doCalibrate() }, '다시 보정')
+          )
+          break
+        default: // 'capture_fail' 등 일시 오류
+          calibAction.append(h('button', { class: 'btn btn--sm', onclick: () => void doCalibrate() }, '다시 보정'))
+      }
     }
   }
 
@@ -1042,6 +1211,7 @@ export function createSetupView(ctx: ViewContext): View {
     h('div', { class: 'card__title' }, '보정 · 학습 (정확도 ↑)'),
     h('div', { class: 'stack' },
       h('div', { class: 'row' }, calibBtn, calibStatus),
+      calibAction,
       h('div', { class: 'tick-info' }, 'MP가 가득 찼을 때 「MP 바 100% 보정」을 누르면 MP가 100% 정확해집니다.'),
       h('div', { class: 'tick-info' }, '학습: 「인식값↩」로 현재 인식값을 불러와 화면과 비교 → 틀린 자리만 고치고 「적용 & 학습」.'),
       learnRow('mp', 'MP', '예: 0/320'),
@@ -1137,6 +1307,7 @@ export function createSetupView(ctx: ViewContext): View {
       offDetect()
       window.removeEventListener('mousemove', onRoiMove)
       window.removeEventListener('mouseup', onRoiUp)
+      window.removeEventListener('keydown', onRoiKey)
     }
   }
 }

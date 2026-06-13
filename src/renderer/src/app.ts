@@ -169,7 +169,9 @@ export function bootApp(rootEl: HTMLElement): void {
   // --- global hotkeys (window scope) ---
   window.addEventListener('keydown', (e) => {
     const target = e.target as HTMLElement | null
-    if (target && (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.isContentEditable)) return
+    // v3.1.1: textarea(템플릿 JSON 편집 중 R=세션 리셋 사고)와 button(포커스 시 Space는
+    // 표준 활성화 동작이어야 함)도 제외 — 플랫폼 관례와 일치.
+    if (target && (target.isContentEditable || target.closest('input, select, textarea, button'))) return
     const hk = app.get().persisted.hotkeys
     if (e.key === ' ' && hk.startPause.enabled) {
       e.preventDefault()

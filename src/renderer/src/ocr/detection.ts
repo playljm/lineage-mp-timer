@@ -23,6 +23,7 @@ import {
   calibrateBarChecked,
   isBlueDominant,
   type BarCalibration,
+  type BarCalibrationFailure,
   type Rgb,
   type RowBand
 } from '@core/ocr/bar-fill'
@@ -213,25 +214,69 @@ export class DetectionController {
    * pins MP at max, and the result is flushed immediately (an off-loop calibrate →
    * app close used to silently lose the calibration).
    */
-  async calibrateMpBar(): Promise<{ ok: boolean; fullColumns?: number; fillColor?: Rgb; note?: string }> {
+  async calibrateMpBar(): Promise<{
+    ok: boolean
+    fullColumns?: number
+    fillColor?: Rgb
+    note?: string
+    /** v3.1.1: 실패 사유 — UI 가 reason 별 다음 행동(영역 재지정/재보정)을 안내한다. */
+    reason?: BarCalibrationFailure | 'no_region' | 'capture_fail'
+    /** v3.1.1: 자기검증 비율(성공 시) — 0.95~1.0 밖이면 selfOk=false 로 재보정 권고. */
+    selfRatio?: number
+    selfOk?: boolean
+  }> {
     const ad = this.app.get().persisted.autoDetect
-    const barRegion = ad.captureMode === 'window' ? this.windowRois?.mpBar ?? null : ad.mpBarRegion
+    let barRegion: CaptureRegion | null
+    if (ad.captureMode === 'window') {
+      // v3.1.1: bind a window source on demand so calibration works with the loop
+      // stopped (a valid manual override used to fail with "start auto-detection").
+      if (!this.windowSourceId && ad.windowTitle) {
+        await this.openWindowSource(ad.windowTitle)
+      }
+      const sid = this.windowSourceId
+      const ov = ad.windowRoi.mpBar
+      if (sid && ov) {
+        // Prefer the PERSISTED manual override over the in-memory cache.
+        // forceRoiRefresh() after an ROI save only marks the cache stale — the
+        // rebuild happens on the NEXT tick — so calibrating right after drawing the
+        // box used to capture the OLD region (the 6/7 field pattern: correct ROI
+        // saved, gold trim measured). Mirror the fresh region into the cache so the
+        // shrink-to-band update below operates on the same geometry we captured.
+        barRegion = { x: ov.x, y: ov.y, width: ov.width, height: ov.height, sourceId: sid, scaleFactor: 1 }
+        if (this.windowRois) this.windowRois = { ...this.windowRois, mpBar: barRegion }
+      } else {
+        barRegion = this.windowRois?.mpBar ?? null
+      }
+    } else {
+      barRegion = ad.mpBarRegion
+    }
     if (!barRegion) {
       logger.warn('calib', 'MP 바 영역이 지정되지 않았습니다')
       return {
         ok: false,
-        note: ad.captureMode === 'window' ? '자동 인식을 먼저 시작해 MP 바를 검출하세요' : 'MP 바 영역을 먼저 지정하세요'
+        reason: 'no_region',
+        note:
+          ad.captureMode === 'window'
+            ? '자동 인식을 시작하거나 「영역 직접 지정」으로 MP 바를 지정하세요'
+            : 'MP 바 영역을 먼저 지정하세요'
       }
     }
-    const img = await this.captureRegion(barRegion)
+    let img = await this.captureRegion(barRegion)
+    // Cold-open first-frame race: right after an on-demand openWindowSource the
+    // <video> may not have painted yet (videoWidth 0 → null, or an unpainted black
+    // frame). Mirror captureWindowFrame's short retry instead of failing the click.
+    for (let i = 0; i < 8 && (!img || frameMeanLuma(img) < 6); i++) {
+      await new Promise((r) => setTimeout(r, 150))
+      img = await this.captureRegion(barRegion)
+    }
     if (!img) {
       logger.warn('calib', 'MP 바 캡처 실패')
-      return { ok: false, note: 'MP 바 캡처 실패' }
+      return { ok: false, reason: 'capture_fail', note: 'MP 바 캡처 실패' }
     }
     const check = calibrateBarChecked(img)
     if (!check.ok) {
       logger.warn('calib', `MP 바 보정 거부(${check.reason}): ${check.note}`)
-      return { ok: false, note: check.note, fillColor: check.fillColor ?? undefined }
+      return { ok: false, reason: check.reason, note: check.note, fillColor: check.fillColor ?? undefined }
     }
     const cal = check.calibration
 
@@ -264,7 +309,7 @@ export class DetectionController {
       `MP 바 보정 완료: ${cal.fullColumns} cols · rgb(${Math.round(cal.fillColor.r)},${Math.round(cal.fillColor.g)},${Math.round(cal.fillColor.b)})` +
         ` · 자기검증 ratio=${check.selfRatio.toFixed(3)} (기대 0.95~1.0 → ${selfOk ? 'OK' : '⚠ 비정상'})`
     )
-    return { ok: true, fullColumns: cal.fullColumns, fillColor: cal.fillColor }
+    return { ok: true, fullColumns: cal.fullColumns, fillColor: cal.fillColor, selfRatio: check.selfRatio, selfOk }
   }
 
   /** Narrow every stored MP-bar ROI variant to the calibrated gauge row band. */
@@ -499,7 +544,17 @@ export class DetectionController {
     // freeze the geometry so it stays matched to the calibrated columns.
     const mpAnchor = result.anchors.mp
     const hpAnchor = result.anchors.hp
-    const calibrated = ad.mpBarMaxX > 0 && !!this.windowRois?.mpBar
+    // v3.1.1: only a VALID calibration freezes the geometry. The old `mpBarMaxX > 0`
+    // check was asymmetric with barCalibration() (which invalidates non-blue
+    // reference colours): a legacy/garbage calibration the system itself treats as
+    // "no calibration" still froze the first auto-derived ROI, and every
+    // recalibration then re-captured that frozen wrong ROI — a self-reinforcing
+    // deadlock only a manual override or storage reset could escape.
+    const calibrated =
+      ad.mpBarMaxX > 0 &&
+      !!ad.mpBarRefColor &&
+      isBlueDominant(ad.mpBarRefColor) &&
+      !!this.windowRois?.mpBar
     const autoMpBar: CaptureRegion | null = calibrated
       ? this.windowRois!.mpBar
       : mpAnchor
